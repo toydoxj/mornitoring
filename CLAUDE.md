@@ -24,6 +24,12 @@ npm run build     # 프로덕션 빌드
 npm run lint      # ESLint 실행
 ```
 
+### 인프라
+```bash
+docker start monitoring-db    # PostgreSQL 시작 (Docker Desktop 실행 필요)
+docker stop monitoring-db     # PostgreSQL 중지
+```
+
 ### 백엔드 (`backend/`)
 ```bash
 source .venv/bin/activate                    # 가상환경 활성화
