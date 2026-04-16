@@ -133,7 +133,7 @@ def _parse_result(val) -> ResultType | None:
 
 
 def import_ledger_unified(file_path: str | Path, db: Session) -> dict:
-    """통합 관리대장 시트를 DB에 import"""
+    """통합 관리대장 시트를 DB에 import (일괄 처리 최적화)"""
     wb = load_workbook(str(file_path), data_only=True, read_only=True)
 
     if SHEET_NAME not in wb.sheetnames:
@@ -141,20 +141,37 @@ def import_ledger_unified(file_path: str | Path, db: Session) -> dict:
         return {"imported": 0, "skipped": 0, "errors": [f"시트 '{SHEET_NAME}'을 찾을 수 없습니다"]}
 
     ws = wb[SHEET_NAME]
-    result = {"imported": 0, "skipped": 0, "errors": []}
 
+    # 1단계: 엑셀 데이터를 메모리에 수집
+    rows_parsed = []
     for row in ws.iter_rows(min_row=DATA_START_ROW):
         mgmt_no = _cell_value(row, "A")
         if not mgmt_no:
             continue
-
         mgmt_no = str(mgmt_no).strip()
         if not (len(mgmt_no) >= 9 and "-" in mgmt_no):
             continue
+        rows_parsed.append((mgmt_no, row))
+    wb.close()
 
-        # 중복 체크
-        existing = db.query(Building).filter(Building.mgmt_no == mgmt_no).first()
-        if existing:
+    if not rows_parsed:
+        return {"imported": 0, "skipped": 0, "errors": []}
+
+    # 2단계: 기존 관리번호 일괄 조회
+    all_mgmt_nos = [r[0] for r in rows_parsed]
+    # 1000개씩 분할 조회 (IN 절 제한 대응)
+    existing_set: set[str] = set()
+    for i in range(0, len(all_mgmt_nos), 1000):
+        chunk = all_mgmt_nos[i:i+1000]
+        existing = db.query(Building.mgmt_no).filter(Building.mgmt_no.in_(chunk)).all()
+        existing_set.update(r[0] for r in existing)
+
+    result = {"imported": 0, "skipped": 0, "errors": []}
+
+    # 3단계: 일괄 생성 (배치 커밋)
+    batch_count = 0
+    for mgmt_no, row in rows_parsed:
+        if mgmt_no in existing_set:
             result["skipped"] += 1
             continue
 
@@ -170,12 +187,10 @@ def import_ledger_unified(file_path: str | Path, db: Session) -> dict:
                 val = _to_bool(val)
             building_data[field_name] = val
 
-        # 검토위원 이름 (DL열)
         reviewer_name = _cell_value(row, REVIEWER_COLUMN)
         if reviewer_name:
             building_data["assigned_reviewer_name"] = str(reviewer_name).strip()
 
-        # 최종 판정
         final = _cell_value(row, FINAL_RESULT_COLUMN)
         if final:
             building_data["final_result"] = str(final)
@@ -184,7 +199,7 @@ def import_ledger_unified(file_path: str | Path, db: Session) -> dict:
         db.add(building)
         db.flush()
 
-        # 예비검토 단계
+        # 예비검토
         prelim_data = {}
         for col_letter, field_name in PRELIMINARY_MAP.items():
             val = _cell_value(row, col_letter)
@@ -193,16 +208,10 @@ def import_ledger_unified(file_path: str | Path, db: Session) -> dict:
             prelim_data[field_name] = val
 
         if any(v is not None for v in prelim_data.values()):
-            stage = ReviewStage(
-                building_id=building.id,
-                phase=PhaseType.PRELIMINARY,
-                phase_order=0,
-                **prelim_data,
-            )
-            db.add(stage)
+            db.add(ReviewStage(building_id=building.id, phase=PhaseType.PRELIMINARY, phase_order=0, **prelim_data))
             building.current_phase = "preliminary"
 
-        # 1차 보완 검토
+        # 1차 보완
         supp1_data = {}
         for col_letter, field_name in SUPPLEMENT_1_MAP.items():
             val = _cell_value(row, col_letter)
@@ -211,17 +220,15 @@ def import_ledger_unified(file_path: str | Path, db: Session) -> dict:
             supp1_data[field_name] = val
 
         if any(v is not None for v in supp1_data.values()):
-            stage = ReviewStage(
-                building_id=building.id,
-                phase=PhaseType.SUPPLEMENT_1,
-                phase_order=1,
-                **supp1_data,
-            )
-            db.add(stage)
+            db.add(ReviewStage(building_id=building.id, phase=PhaseType.SUPPLEMENT_1, phase_order=1, **supp1_data))
             building.current_phase = "supplement_1"
 
         result["imported"] += 1
+        batch_count += 1
+
+        # 500건마다 중간 커밋 (메모리 관리)
+        if batch_count % 500 == 0:
+            db.commit()
 
     db.commit()
-    wb.close()
     return result
