@@ -14,7 +14,11 @@ app = FastAPI(
 # CORS 설정 (프론트엔드 연동)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=[
+        "http://localhost:3000",
+        "https://frontend-fsjh35-8127s-projects.vercel.app",
+        "https://frontend-lje1wdxfp-fsjh35-8127s-projects.vercel.app",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
