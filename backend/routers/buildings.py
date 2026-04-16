@@ -11,6 +11,9 @@ from models.user import User, UserRole
 from routers.auth import get_current_user, require_roles
 from services.audit import log_action
 
+# 등록된 사용자 이름 캐시 (요청마다 갱신)
+_registered_names_cache: set[str] | None = None
+
 router = APIRouter()
 
 
@@ -83,7 +86,13 @@ class BuildingResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
-def _to_response(building: Building) -> dict:
+def _get_registered_names(db: Session) -> set[str]:
+    """등록된 사용자 이름 목록 조회"""
+    users = db.query(User.name).all()
+    return {u[0] for u in users}
+
+
+def _to_response(building: Building, registered_names: set[str]) -> dict:
     """Building 모델을 응답 dict로 변환 (검토위원 이름 + 등록 여부 포함)"""
     data = {c.name: getattr(building, c.name) for c in Building.__table__.columns}
     data["reviewer_name"] = None
@@ -93,7 +102,7 @@ def _to_response(building: Building) -> dict:
         data["reviewer_registered"] = True
     elif building.assigned_reviewer_name:
         data["reviewer_name"] = building.assigned_reviewer_name
-        data["reviewer_registered"] = False
+        data["reviewer_registered"] = building.assigned_reviewer_name in registered_names
     return data
 
 
@@ -129,7 +138,8 @@ def list_buildings(
 
     total = query.count()
     buildings = query.order_by(Building.mgmt_no).offset((page - 1) * size).limit(size).all()
-    items = [_to_response(b) for b in buildings]
+    registered_names = _get_registered_names(db)
+    items = [_to_response(b, registered_names) for b in buildings]
     return BuildingListResponse(items=items, total=total)
 
 
@@ -174,7 +184,8 @@ def my_review_buildings(
         query = db.query(Building).filter(Building.assigned_reviewer_name == current_user.name)
     total = query.count()
     buildings = query.order_by(Building.mgmt_no).offset((page - 1) * size).limit(size).all()
-    items = [_to_response(b) for b in buildings]
+    registered_names = _get_registered_names(db)
+    items = [_to_response(b, registered_names) for b in buildings]
     return BuildingListResponse(items=items, total=total)
 
 
