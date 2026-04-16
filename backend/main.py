@@ -16,8 +16,8 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:3000",
+        "https://ksea-m.vercel.app",
         "https://frontend-fsjh35-8127s-projects.vercel.app",
-        "https://frontend-lje1wdxfp-fsjh35-8127s-projects.vercel.app",
     ],
     allow_credentials=True,
     allow_methods=["*"],
