@@ -160,6 +160,9 @@ def get_stats(
             sa_func.count(Building.id).label("total"),
             sa_func.count(Building.id).filter(Building.current_phase == "doc_received").label("doc_received"),
             sa_func.count(Building.id).filter(Building.final_result.isnot(None)).label("completed"),
+            sa_func.sum(sa_func.coalesce(Building.gross_area, 0)).label("total_area"),
+            sa_func.count(Building.id).filter(Building.gross_area >= 1000).label("area_over_1000"),
+            sa_func.count(Building.id).filter(Building.high_risk_type.isnot(None)).label("high_risk"),
         )
         .filter(Building.assigned_reviewer_name.isnot(None))
         .group_by(Building.assigned_reviewer_name)
@@ -180,7 +183,7 @@ def get_stats(
     submitted_building_ids = {r[0] for r in submitted_rows}
 
     reviewer_stats = []
-    for name, total_count, doc_count, comp_count in reviewer_stats_raw:
+    for name, total_count, doc_count, comp_count, total_area, area_over_1000, high_risk in reviewer_stats_raw:
         # 해당 위원의 building id 조회
         reviewer_building_ids = [
             b.id for b in db.query(Building.id)
@@ -193,6 +196,9 @@ def get_stats(
         reviewer_stats.append({
             "name": name,
             "total": total_count,
+            "total_area": float(total_area or 0),
+            "area_over_1000": area_over_1000 or 0,
+            "high_risk": high_risk or 0,
             "doc_received": doc_count,
             "submitted": submitted_count,
             "not_submitted": not_submitted_count,

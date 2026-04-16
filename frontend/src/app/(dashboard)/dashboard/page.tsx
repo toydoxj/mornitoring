@@ -17,6 +17,9 @@ import { useAuthStore } from "@/stores/authStore"
 interface ReviewerStat {
   name: string
   total: number
+  total_area: number
+  area_over_1000: number
+  high_risk: number
   doc_received: number
   submitted: number
   not_submitted: number
@@ -86,11 +89,14 @@ export default function DashboardPage() {
                 <TableHeader>
                   <TableRow>
                     <TableHead>검토위원</TableHead>
-                    <TableHead className="w-[80px] text-center">배정</TableHead>
-                    <TableHead className="w-[80px] text-center">배포</TableHead>
-                    <TableHead className="w-[80px] text-center">제출</TableHead>
-                    <TableHead className="w-[80px] text-center">미제출</TableHead>
-                    <TableHead className="w-[80px] text-center">완료</TableHead>
+                    <TableHead className="w-[70px] text-center">배정</TableHead>
+                    <TableHead className="w-[100px] text-right">연면적합</TableHead>
+                    <TableHead className="w-[70px] text-center">1000↑</TableHead>
+                    <TableHead className="w-[70px] text-center">고위험</TableHead>
+                    <TableHead className="w-[70px] text-center">배포</TableHead>
+                    <TableHead className="w-[70px] text-center">제출</TableHead>
+                    <TableHead className="w-[70px] text-center">미제출</TableHead>
+                    <TableHead className="w-[70px] text-center">완료</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -98,6 +104,19 @@ export default function DashboardPage() {
                     <TableRow key={r.name}>
                       <TableCell className="font-medium">{r.name}</TableCell>
                       <TableCell className="text-center">{r.total}</TableCell>
+                      <TableCell className="text-right font-mono text-sm">
+                        {r.total_area.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                      </TableCell>
+                      <TableCell className="text-center">
+                        {r.area_over_1000 > 0 ? (
+                          <Badge variant="secondary">{r.area_over_1000}</Badge>
+                        ) : "0"}
+                      </TableCell>
+                      <TableCell className="text-center">
+                        {r.high_risk > 0 ? (
+                          <Badge variant="destructive">{r.high_risk}</Badge>
+                        ) : "0"}
+                      </TableCell>
                       <TableCell className="text-center">{r.doc_received}</TableCell>
                       <TableCell className="text-center">
                         {r.submitted > 0 ? (
