@@ -17,7 +17,7 @@ def get_authorize_url() -> str:
         f"?client_id={settings.kakao_rest_api_key}"
         f"&redirect_uri={settings.kakao_redirect_uri}"
         f"&response_type=code"
-        f"&scope=friends,talk_message"
+        f"&scope=profile_nickname,friends,talk_message"
     )
 
 

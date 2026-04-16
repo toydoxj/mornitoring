@@ -148,7 +148,11 @@ async def kakao_callback(code: str, db: Session = Depends(get_db)):
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"카카오 사용자 정보 조회 실패: {str(e)}")
     kakao_id = str(kakao_user["id"])
-    kakao_name = kakao_user.get("properties", {}).get("nickname", "")
+    # 닉네임: properties.nickname 또는 kakao_account.profile.nickname
+    kakao_name = (
+        kakao_user.get("properties", {}).get("nickname", "")
+        or kakao_user.get("kakao_account", {}).get("profile", {}).get("nickname", "")
+    )
 
     # DB에서 사용자 조회 (kakao_id 기준)
     user = db.query(User).filter(User.kakao_id == kakao_id).first()
