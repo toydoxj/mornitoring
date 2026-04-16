@@ -27,7 +27,7 @@ class Building(Base):
     land_type: Mapped[str | None] = mapped_column(String(20))           # 대지구분
     main_lot_no: Mapped[str | None] = mapped_column(String(10))         # 본번
     sub_lot_no: Mapped[str | None] = mapped_column(String(10))          # 부번
-    special_lot_no: Mapped[str | None] = mapped_column(String(20))      # 특수지번
+    special_lot_no: Mapped[str | None] = mapped_column(String(200))     # 특수지번
     building_name: Mapped[str | None] = mapped_column(String(200))      # 건물명
     main_structure: Mapped[str | None] = mapped_column(String(100))     # 주구조
     other_structure: Mapped[str | None] = mapped_column(String(200))    # 기타구조
