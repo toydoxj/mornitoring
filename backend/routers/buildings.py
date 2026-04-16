@@ -64,6 +64,9 @@ class BuildingResponse(BaseModel):
     sido: str | None = None
     sigungu: str | None = None
     beopjeongdong: str | None = None
+    main_lot_no: str | None = None
+    sub_lot_no: str | None = None
+    special_lot_no: str | None = None
     main_structure: str | None = None
     main_usage: str | None = None
     gross_area: float | None = None

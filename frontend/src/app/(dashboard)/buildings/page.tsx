@@ -135,10 +135,17 @@ export default function BuildingsPage() {
       {
         id: "address",
         header: "주소",
-        size: 250,
+        size: 350,
         cell: ({ row }) => {
           const b = row.original
-          return [b.sido, b.sigungu, b.beopjeongdong].filter(Boolean).join(" ") || "-"
+          const base = [b.sido, b.sigungu, b.beopjeongdong].filter(Boolean).join(" ")
+          const lotParts = []
+          if (b.main_lot_no) {
+            lotParts.push(b.sub_lot_no ? `${b.main_lot_no}-${b.sub_lot_no}` : b.main_lot_no)
+          }
+          if (b.special_lot_no) lotParts.push(b.special_lot_no)
+          const lot = lotParts.join(" ")
+          return [base, lot].filter(Boolean).join(" ") || "-"
         },
       },
       {

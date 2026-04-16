@@ -19,6 +19,9 @@ export interface Building {
   sido: string | null
   sigungu: string | null
   beopjeongdong: string | null
+  main_lot_no: string | null
+  sub_lot_no: string | null
+  special_lot_no: string | null
   main_structure: string | null
   main_usage: string | null
   gross_area: number | null
