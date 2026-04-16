@@ -39,7 +39,7 @@ def preview_assignment(file_path: str | Path, db: Session) -> dict:
     building_map: dict[str, Building] = {b.mgmt_no: b for b in buildings}
 
     reviewer_names = list(set(r[1] for r in rows_data))
-    reviewers = db.query(User).filter(User.name.in_(reviewer_names), User.role == UserRole.REVIEWER).all()
+    reviewers = db.query(User).filter(User.name.in_(reviewer_names)).all()
     reviewer_map: dict[str, User] = {u.name: u for u in reviewers}
 
     changes = []
