@@ -85,15 +85,27 @@ export default function DistributionPage() {
     }
   }
 
+  const [notifSending, setNotifSending] = useState(false)
+  const [notifResult, setNotifResult] = useState<{ sent: number; failed: number; error?: string } | null>(null)
+
   const handleSendNotifications = async () => {
     if (!result) return
+    setNotifSending(true)
+    setNotifResult(null)
 
     try {
-      await apiClient.post("/api/distribution/notify", result.notifications)
+      const { data } = await apiClient.post("/api/distribution/notify", result.notifications)
       setNotifSent(true)
-      alert("알림 발송 요청이 완료되었습니다")
-    } catch (err) {
-      console.error("알림 발송 실패:", err)
+      setNotifResult(data)
+    } catch (err: unknown) {
+      const axiosErr = err as { response?: { data?: { error?: string } } }
+      setNotifResult({
+        sent: 0,
+        failed: result.notifications.length,
+        error: axiosErr.response?.data?.error || "발송 요청 실패",
+      })
+    } finally {
+      setNotifSending(false)
     }
   }
 
@@ -180,12 +192,23 @@ export default function DistributionPage() {
             <CardTitle>3단계: 검토위원 알림 발송</CardTitle>
             <Button
               onClick={handleSendNotifications}
-              disabled={notifSent}
+              disabled={notifSent || notifSending}
             >
-              {notifSent ? "발송 완료" : "카카오톡 알림 발송"}
+              {notifSending ? "발송 중..." : notifSent ? "발송 완료" : "카카오톡 알림 발송"}
             </Button>
           </CardHeader>
           <CardContent>
+            {notifResult && (
+              <div className={`rounded-md p-3 text-sm mb-4 ${
+                notifResult.sent > 0 ? "bg-green-50 text-green-800" : "bg-yellow-50 text-yellow-800"
+              }`}>
+                <p>발송 성공: <strong>{notifResult.sent}건</strong> / 실패: {notifResult.failed}건</p>
+                {notifResult.error && <p className="text-red-600 mt-1">{notifResult.error}</p>}
+                {notifResult.failed > 0 && !notifResult.error && (
+                  <p className="mt-1 text-muted-foreground">실패 상세는 알림 현황 페이지에서 확인하세요</p>
+                )}
+              </div>
+            )}
             <div className="rounded-md border max-h-96 overflow-y-auto">
               <Table>
                 <TableHeader>
