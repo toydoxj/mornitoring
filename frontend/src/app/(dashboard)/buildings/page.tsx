@@ -45,6 +45,11 @@ export default function BuildingsPage() {
   const [page, setPage] = useState(1)
   const [search, setSearch] = useState("")
   const [searchInput, setSearchInput] = useState("")
+  const [filterPhase, setFilterPhase] = useState("")
+  const [filterReviewer, setFilterReviewer] = useState("")
+  const [sortBy, setSortBy] = useState("")
+  const [sortOrder, setSortOrder] = useState("asc")
+  const [reviewerNames, setReviewerNames] = useState<string[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [uploadOpen, setUploadOpen] = useState(false)
   const [uploading, setUploading] = useState(false)
@@ -83,6 +88,12 @@ export default function BuildingsPage() {
     try {
       const params: Record<string, string | number> = { page, size: pageSize }
       if (search) params.search = search
+      if (filterPhase) params.phase = filterPhase
+      if (filterReviewer) params.reviewer = filterReviewer
+      if (sortBy) {
+        params.sort_by = sortBy
+        params.sort_order = sortOrder
+      }
       const { data: res } = await apiClient.get<BuildingListResponse>("/api/buildings", { params })
       setData(res.items)
       setTotal(res.total)
@@ -95,7 +106,13 @@ export default function BuildingsPage() {
 
   useEffect(() => {
     fetchBuildings()
-  }, [page, search])
+  }, [page, search, filterPhase, filterReviewer, sortBy, sortOrder])
+
+  useEffect(() => {
+    apiClient.get<string[]>("/api/buildings/reviewer-names")
+      .then(({ data }) => setReviewerNames(data))
+      .catch(() => {})
+  }, [])
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -320,6 +337,67 @@ export default function BuildingsPage() {
             </Dialog>
           )}
         </div>
+      </div>
+
+      {/* 필터 */}
+      <div className="flex flex-wrap gap-2 items-center">
+        <select
+          className="rounded-md border px-3 py-2 text-sm"
+          value={filterPhase}
+          onChange={(e) => { setFilterPhase(e.target.value); setPage(1) }}
+        >
+          <option value="">전체 단계</option>
+          <option value="none">미접수</option>
+          <option value="doc_received">예비도서 접수</option>
+          <option value="preliminary">예비검토</option>
+          <option value="supplement_1">1차 보완</option>
+          <option value="supplement_2">2차 보완</option>
+          <option value="supplement_3">3차 보완</option>
+        </select>
+
+        <select
+          className="rounded-md border px-3 py-2 text-sm"
+          value={filterReviewer}
+          onChange={(e) => { setFilterReviewer(e.target.value); setPage(1) }}
+        >
+          <option value="">전체 검토위원</option>
+          {reviewerNames.map((name) => (
+            <option key={name} value={name}>{name}</option>
+          ))}
+        </select>
+
+        <select
+          className="rounded-md border px-3 py-2 text-sm"
+          value={sortBy ? `${sortBy}_${sortOrder}` : ""}
+          onChange={(e) => {
+            const val = e.target.value
+            if (!val) { setSortBy(""); setSortOrder("asc") }
+            else {
+              const [field, order] = val.split("_")
+              setSortBy(field)
+              setSortOrder(order)
+            }
+            setPage(1)
+          }}
+        >
+          <option value="">기본 정렬</option>
+          <option value="mgmt_no_asc">관리번호 ↑</option>
+          <option value="mgmt_no_desc">관리번호 ↓</option>
+          <option value="assigned_reviewer_name_asc">검토위원 ↑</option>
+          <option value="assigned_reviewer_name_desc">검토위원 ↓</option>
+          <option value="current_phase_asc">현재단계 ↑</option>
+          <option value="current_phase_desc">현재단계 ↓</option>
+        </select>
+
+        {(filterPhase || filterReviewer || sortBy) && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => { setFilterPhase(""); setFilterReviewer(""); setSortBy(""); setSortOrder("asc"); setPage(1) }}
+          >
+            필터 초기화
+          </Button>
+        )}
       </div>
 
       {/* 테이블 */}

@@ -215,12 +215,15 @@ def list_buildings(
     search: str | None = None,
     sido: str | None = None,
     phase: str | None = None,
+    reviewer: str | None = None,
+    sort_by: str | None = None,
+    sort_order: str = "asc",
     page: int = Query(1, ge=1),
     size: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """건축물 목록 조회 (검색/필터/페이지네이션)"""
+    """건축물 목록 조회 (검색/필터/정렬/페이지네이션)"""
     query = db.query(Building)
 
     if search:
@@ -231,13 +234,42 @@ def list_buildings(
     if sido:
         query = query.filter(Building.sido == sido)
     if phase:
-        query = query.filter(Building.current_phase == phase)
+        if phase == "none":
+            query = query.filter(Building.current_phase.is_(None))
+        else:
+            query = query.filter(Building.current_phase == phase)
+    if reviewer:
+        query = query.filter(Building.assigned_reviewer_name == reviewer)
 
     total = query.count()
-    buildings = query.order_by(Building.mgmt_no).offset((page - 1) * size).limit(size).all()
+
+    # 정렬
+    sort_col = getattr(Building, sort_by, None) if sort_by else Building.mgmt_no
+    if sort_col is None:
+        sort_col = Building.mgmt_no
+    if sort_order == "desc":
+        sort_col = sort_col.desc()
+
+    buildings = query.order_by(sort_col).offset((page - 1) * size).limit(size).all()
     registered_names = _get_registered_names(db)
     items = [_to_response(b, registered_names) for b in buildings]
     return BuildingListResponse(items=items, total=total)
+
+
+@router.get("/reviewer-names")
+def get_reviewer_names(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """배정된 검토위원 이름 목록 (필터용)"""
+    names = (
+        db.query(Building.assigned_reviewer_name)
+        .filter(Building.assigned_reviewer_name.isnot(None))
+        .distinct()
+        .order_by(Building.assigned_reviewer_name)
+        .all()
+    )
+    return [n[0] for n in names]
 
 
 @router.post("", response_model=BuildingResponse, status_code=201)
