@@ -1,6 +1,7 @@
 "use client"
 
 import { useEffect, useState } from "react"
+import { useRouter } from "next/navigation"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -36,6 +37,7 @@ interface UploadResult {
 }
 
 export default function MyReviewsPage() {
+  const router = useRouter()
   const [data, setData] = useState<Building[]>([])
   const [total, setTotal] = useState(0)
   const [isLoading, setIsLoading] = useState(true)
@@ -135,7 +137,12 @@ export default function MyReviewsPage() {
             ) : (
               data.map((b) => (
                 <TableRow key={b.id}>
-                  <TableCell className="font-mono font-medium">{b.mgmt_no}</TableCell>
+                  <TableCell
+                    className="font-mono font-medium text-blue-600 cursor-pointer hover:underline"
+                    onClick={() => router.push(`/buildings/${b.id}`)}
+                  >
+                    {b.mgmt_no}
+                  </TableCell>
                   <TableCell>{b.building_name || "-"}</TableCell>
                   <TableCell>
                     {[b.sido, b.sigungu, b.beopjeongdong].filter(Boolean).join(" ") || "-"}
