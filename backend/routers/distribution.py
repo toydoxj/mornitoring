@@ -135,6 +135,19 @@ async def send_notifications(
 
     # 발신자 카카오 토큰 확인
     if not current_user.kakao_access_token:
+        # 카카오 미연동 → 로그만 저장
+        for notif in body:
+            log = NotificationLog(
+                recipient_id=None,
+                channel="kakao",
+                template_type="doc_received",
+                title="예비검토서 접수 알림",
+                message=notif.get("message", ""),
+                is_sent=False,
+                error_message="발신자 카카오 미연동",
+            )
+            db.add(log)
+        db.commit()
         return {
             "sent": 0,
             "failed": len(body),
@@ -143,8 +156,11 @@ async def send_notifications(
         }
 
     # 카카오 친구 목록 조회
-    friends = await get_friends(current_user.kakao_access_token)
-    # 닉네임 → UUID 매핑
+    try:
+        friends = await get_friends(current_user.kakao_access_token)
+    except Exception:
+        friends = []
+
     friend_map: dict[str, str] = {}
     for f in friends:
         nickname = f.get("profile_nickname", "")
@@ -176,13 +192,27 @@ async def send_notifications(
             failed += 1
             continue
 
-        # 카카오 메시지 발송 (5명씩 분할)
-        result = await send_message_to_friends(
-            access_token=current_user.kakao_access_token,
-            receiver_uuids=[friend_uuid],
-            title="예비검토서 접수 알림",
-            description=message,
-        )
+        # 카카오 메시지 발송
+        try:
+            result = await send_message_to_friends(
+                access_token=current_user.kakao_access_token,
+                receiver_uuids=[friend_uuid],
+                title="예비검토서 접수 알림",
+                description=message,
+            )
+        except Exception as e:
+            log = NotificationLog(
+                recipient_id=None,
+                channel="kakao",
+                template_type="doc_received",
+                title="예비검토서 접수 알림",
+                message=message,
+                is_sent=False,
+                error_message=f"발송 오류: {str(e)}",
+            )
+            db.add(log)
+            failed += 1
+            continue
 
         if "error" not in result:
             log = NotificationLog(
