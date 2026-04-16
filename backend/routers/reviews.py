@@ -16,6 +16,8 @@ from routers.auth import get_current_user, require_roles
 from engines.review_validator import validate_review_file
 from engines.review_extractor import extract_review_data
 from engines.phase_machine import get_next_phase, can_advance, is_completed
+from services.s3_storage import upload_review_file, get_download_url
+from services.audit import log_action
 
 router = APIRouter()
 
@@ -130,7 +132,7 @@ async def upload_review(
                 stage.defect_type_3 = extracted["defect_type_3"]
             if extracted["review_opinion"]:
                 stage.review_opinion = extracted["review_opinion"]
-            # TODO: S3 업로드 후 s3_file_key 저장
+            stage.s3_file_key = upload_review_file(tmp_path, mgmt_no, phase, file.filename)
         else:
             # 새 단계 생성
             stage = ReviewStage(
@@ -144,12 +146,15 @@ async def upload_review(
                 defect_type_2=extracted["defect_type_2"],
                 defect_type_3=extracted["defect_type_3"],
                 review_opinion=extracted["review_opinion"],
+                s3_file_key=upload_review_file(tmp_path, mgmt_no, phase, file.filename),
             )
             db.add(stage)
 
         # 5. 건축물 현재 단계 업데이트
         building.current_phase = phase
 
+        log_action(db, current_user.id, "upload", "review_stage", stage.id,
+                   after_data={"mgmt_no": mgmt_no, "phase": phase})
         db.commit()
         db.refresh(stage)
 
@@ -177,6 +182,25 @@ def get_review_stages(
         .all()
     )
     return stages
+
+
+@router.get("/download/{stage_id}")
+def download_review(
+    stage_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """검토서 파일 다운로드 (S3 presigned URL 반환)"""
+    stage = db.query(ReviewStage).filter(ReviewStage.id == stage_id).first()
+    if not stage:
+        raise HTTPException(status_code=404, detail="검토 단계를 찾을 수 없습니다")
+    if not stage.s3_file_key:
+        raise HTTPException(status_code=404, detail="업로드된 검토서가 없습니다")
+
+    url = get_download_url(stage.s3_file_key)
+    if not url:
+        return {"download_url": None, "message": "S3가 설정되지 않았습니다 (로컬 모드)"}
+    return {"download_url": url}
 
 
 @router.post("/advance/{building_id}")

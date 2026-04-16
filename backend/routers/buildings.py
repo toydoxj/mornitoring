@@ -9,6 +9,7 @@ from models.building import Building
 from models.reviewer import Reviewer
 from models.user import User, UserRole
 from routers.auth import get_current_user, require_roles
+from services.audit import log_action
 
 router = APIRouter()
 
@@ -125,6 +126,9 @@ def create_building(
 
     building = Building(**body.model_dump())
     db.add(building)
+    db.flush()
+    log_action(db, current_user.id, "create", "building", building.id,
+               after_data={"mgmt_no": building.mgmt_no})
     db.commit()
     db.refresh(building)
     return building

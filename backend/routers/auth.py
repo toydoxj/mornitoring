@@ -109,6 +109,56 @@ def login(
     return TokenResponse(access_token=access_token)
 
 
+@router.get("/kakao/login")
+def kakao_login():
+    """카카오 로그인 URL 반환"""
+    from services.kakao import get_authorize_url
+    return {"url": get_authorize_url()}
+
+
+@router.get("/kakao/callback")
+async def kakao_callback(code: str, db: Session = Depends(get_db)):
+    """카카오 인가 코드 → 토큰 교환 → 사용자 조회/생성 → JWT 발급"""
+    from services.kakao import exchange_code, get_user_info
+
+    # 카카오 토큰 교환
+    kakao_tokens = await exchange_code(code)
+    kakao_access = kakao_tokens["access_token"]
+    kakao_refresh = kakao_tokens.get("refresh_token", "")
+
+    # 카카오 사용자 정보
+    kakao_user = await get_user_info(kakao_access)
+    kakao_id = str(kakao_user["id"])
+    kakao_name = kakao_user.get("properties", {}).get("nickname", "")
+
+    # DB에서 사용자 조회 (kakao_id 기준)
+    user = db.query(User).filter(User.kakao_id == kakao_id).first()
+    if not user:
+        # 이름으로 매칭 시도 (기존 사용자 연결)
+        user = db.query(User).filter(User.name == kakao_name).first()
+        if user:
+            user.kakao_id = kakao_id
+        else:
+            # 신규 사용자 (기본 검토위원)
+            user = User(
+                name=kakao_name,
+                email=f"kakao_{kakao_id}@kakao.com",
+                role=UserRole.REVIEWER,
+                kakao_id=kakao_id,
+            )
+            db.add(user)
+
+    # 카카오 토큰 저장
+    user.kakao_access_token = kakao_access
+    user.kakao_refresh_token = kakao_refresh
+    db.commit()
+    db.refresh(user)
+
+    # JWT 발급
+    access_token = create_access_token({"sub": str(user.id), "role": user.role.value})
+    return TokenResponse(access_token=access_token)
+
+
 @router.get("/me", response_model=UserResponse)
 async def get_me(current_user: User = Depends(get_current_user)):
     """현재 로그인 사용자 정보"""
