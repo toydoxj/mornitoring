@@ -24,7 +24,6 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from "@/components/ui/dialog"
 import apiClient from "@/lib/api/client"
 import type { Building, BuildingListResponse } from "@/types"
@@ -230,9 +229,7 @@ export default function BuildingsPage() {
           </form>
           {canManage && (
             <Dialog open={uploadOpen} onOpenChange={setUploadOpen}>
-              <DialogTrigger>
-                <Button>엑셀 업로드</Button>
-              </DialogTrigger>
+              <Button onClick={() => setUploadOpen(true)}>엑셀 업로드</Button>
               <DialogContent>
                 <DialogHeader>
                   <DialogTitle>통합관리대장 엑셀 업로드</DialogTitle>

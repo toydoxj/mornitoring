@@ -15,7 +15,8 @@ from config import settings
 import models  # 모든 모델 import
 
 config = context.config
-config.set_main_option("sqlalchemy.url", settings.database_url)
+# %를 %%로 이스케이프하여 configparser 호환
+config.set_main_option("sqlalchemy.url", settings.database_url.replace("%", "%%"))
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
