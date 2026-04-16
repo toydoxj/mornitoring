@@ -20,6 +20,7 @@ class Settings(BaseSettings):
 
     # 카카오 API
     kakao_rest_api_key: str = ""
+    kakao_client_secret: str = ""
     kakao_redirect_uri: str = "http://localhost:3000/kakao-callback"
 
     model_config = {"env_file": ".env", "extra": "ignore"}

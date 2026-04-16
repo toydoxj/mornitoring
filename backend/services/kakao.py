@@ -23,16 +23,17 @@ def get_authorize_url() -> str:
 
 async def exchange_code(code: str) -> dict:
     """인가 코드로 토큰 교환"""
+    data = {
+        "grant_type": "authorization_code",
+        "client_id": settings.kakao_rest_api_key,
+        "redirect_uri": settings.kakao_redirect_uri,
+        "code": code,
+    }
+    if settings.kakao_client_secret:
+        data["client_secret"] = settings.kakao_client_secret
+
     async with httpx.AsyncClient() as client:
-        response = await client.post(
-            f"{KAKAO_AUTH_URL}/oauth/token",
-            data={
-                "grant_type": "authorization_code",
-                "client_id": settings.kakao_rest_api_key,
-                "redirect_uri": settings.kakao_redirect_uri,
-                "code": code,
-            },
-        )
+        response = await client.post(f"{KAKAO_AUTH_URL}/oauth/token", data=data)
         response.raise_for_status()
         return response.json()
 
