@@ -33,8 +33,22 @@ class UserResponse(BaseModel):
     phone: str | None = None
     is_active: bool
     must_change_password: bool = False
+    kakao_linked: bool = False
 
     model_config = {"from_attributes": True}
+
+    @classmethod
+    def from_user(cls, user: "User") -> "UserResponse":
+        return cls(
+            id=user.id,
+            name=user.name,
+            email=user.email,
+            role=user.role,
+            phone=user.phone,
+            is_active=user.is_active,
+            must_change_password=user.must_change_password,
+            kakao_linked=bool(user.kakao_id),
+        )
 
 
 class ChangePasswordRequest(BaseModel):

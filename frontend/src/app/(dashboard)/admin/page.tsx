@@ -206,6 +206,7 @@ export default function AdminPage() {
               <TableHead>이메일</TableHead>
               <TableHead className="w-[100px]">역할</TableHead>
               <TableHead className="w-[120px]">전화번호</TableHead>
+              <TableHead className="w-[80px]">카카오</TableHead>
               <TableHead className="w-[80px]">상태</TableHead>
               <TableHead className="w-[140px]">관리</TableHead>
             </TableRow>
@@ -213,13 +214,13 @@ export default function AdminPage() {
           <TableBody>
             {isLoading ? (
               <TableRow>
-                <TableCell colSpan={7} className="h-32 text-center">
+                <TableCell colSpan={8} className="h-32 text-center">
                   로딩 중...
                 </TableCell>
               </TableRow>
             ) : users.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={7} className="h-32 text-center text-muted-foreground">
+                <TableCell colSpan={8} className="h-32 text-center text-muted-foreground">
                   등록된 사용자가 없습니다
                 </TableCell>
               </TableRow>
@@ -233,6 +234,11 @@ export default function AdminPage() {
                     <Badge variant="outline">{ROLE_LABELS[user.role]}</Badge>
                   </TableCell>
                   <TableCell>{user.phone || "-"}</TableCell>
+                  <TableCell>
+                    <Badge variant={(user as unknown as { kakao_linked: boolean }).kakao_linked ? "default" : "outline"}>
+                      {(user as unknown as { kakao_linked: boolean }).kakao_linked ? "연동" : "미연동"}
+                    </Badge>
+                  </TableCell>
                   <TableCell>
                     <Badge variant={user.is_active ? "default" : "secondary"}>
                       {user.is_active ? "활성" : "비활성"}

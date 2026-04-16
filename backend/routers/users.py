@@ -53,6 +53,7 @@ class UserResponse(BaseModel):
     role: UserRole
     phone: str | None = None
     is_active: bool
+    kakao_linked: bool = False
 
     model_config = {"from_attributes": True}
 
@@ -80,7 +81,15 @@ def list_users(
         query = query.filter(User.role == role)
 
     total = query.count()
-    items = query.offset((page - 1) * size).limit(size).all()
+    users = query.offset((page - 1) * size).limit(size).all()
+    items = [
+        UserResponse(
+            id=u.id, name=u.name, email=u.email, role=u.role,
+            phone=u.phone, is_active=u.is_active,
+            kakao_linked=bool(u.kakao_id),
+        )
+        for u in users
+    ]
     return UserListResponse(items=items, total=total)
 
 
