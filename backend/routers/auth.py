@@ -132,12 +132,21 @@ async def kakao_callback(code: str, db: Session = Depends(get_db)):
     from services.kakao import exchange_code, get_user_info
 
     # 카카오 토큰 교환
-    kakao_tokens = await exchange_code(code)
-    kakao_access = kakao_tokens["access_token"]
+    try:
+        kakao_tokens = await exchange_code(code)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"카카오 토큰 교환 실패: {str(e)}")
+
+    kakao_access = kakao_tokens.get("access_token")
+    if not kakao_access:
+        raise HTTPException(status_code=400, detail=f"카카오 액세스 토큰 없음: {kakao_tokens}")
     kakao_refresh = kakao_tokens.get("refresh_token", "")
 
     # 카카오 사용자 정보
-    kakao_user = await get_user_info(kakao_access)
+    try:
+        kakao_user = await get_user_info(kakao_access)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"카카오 사용자 정보 조회 실패: {str(e)}")
     kakao_id = str(kakao_user["id"])
     kakao_name = kakao_user.get("properties", {}).get("nickname", "")
 

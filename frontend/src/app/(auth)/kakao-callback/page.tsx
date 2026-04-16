@@ -35,9 +35,10 @@ function KakaoCallbackContent() {
             router.push("/buildings")
           }
         }
-      } catch {
-        setStatus("카카오 로그인에 실패했습니다. 다시 시도해주세요.")
-        setTimeout(() => router.push("/login"), 2000)
+      } catch (err: unknown) {
+        const axiosErr = err as { response?: { data?: { detail?: string } } }
+        const detail = axiosErr.response?.data?.detail || "알 수 없는 오류"
+        setStatus(`카카오 로그인 실패: ${detail}`)
       }
     }
 
