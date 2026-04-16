@@ -22,18 +22,28 @@ function KakaoCallbackContent() {
     const handleCallback = async () => {
       try {
         const { data } = await apiClient.get(`/api/auth/kakao/callback?code=${code}`)
+
+        // 계정 연결 필요
+        if (data.need_link) {
+          const params = new URLSearchParams({
+            kakao_id: data.kakao_id,
+            kakao_name: data.kakao_name,
+            kakao_access_token: data.kakao_access_token,
+            kakao_refresh_token: data.kakao_refresh_token,
+          })
+          router.push(`/link-account?${params.toString()}`)
+          return
+        }
+
+        // 정상 로그인
         localStorage.setItem("access_token", data.access_token)
         await fetchMe()
 
-        if (data.must_change_password) {
-          router.push("/change-password")
+        const user = useAuthStore.getState().user
+        if (user?.role === "reviewer") {
+          router.push("/my-reviews")
         } else {
-          const user = useAuthStore.getState().user
-          if (user?.role === "reviewer") {
-            router.push("/my-reviews")
-          } else {
-            router.push("/buildings")
-          }
+          router.push("/buildings")
         }
       } catch (err: unknown) {
         const axiosErr = err as { response?: { data?: { detail?: string } } }
@@ -48,7 +58,7 @@ function KakaoCallbackContent() {
   return (
     <Card className="w-full max-w-md">
       <CardHeader className="text-center">
-        <CardTitle>{status}</CardTitle>
+        <CardTitle className="text-lg">{status}</CardTitle>
       </CardHeader>
       <CardContent className="text-center text-muted-foreground">
         <p>잠시만 기다려주세요...</p>

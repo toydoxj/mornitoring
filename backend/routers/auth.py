@@ -156,30 +156,64 @@ async def kakao_callback(code: str, db: Session = Depends(get_db)):
 
     # DB에서 사용자 조회 (kakao_id 기준)
     user = db.query(User).filter(User.kakao_id == kakao_id).first()
-    if not user:
-        # 이름으로 매칭 시도 (기존 사용자 연결)
+    if user:
+        user.kakao_access_token = kakao_access
+        user.kakao_refresh_token = kakao_refresh
+        db.commit()
+        db.refresh(user)
+        access_token = create_access_token({"sub": str(user.id), "role": user.role.value})
+        return TokenResponse(access_token=access_token, must_change_password=False)
+
+    # 이름으로 매칭 시도
+    if kakao_name:
         user = db.query(User).filter(User.name == kakao_name).first()
         if user:
             user.kakao_id = kakao_id
-        else:
-            # 신규 사용자 (기본 검토위원)
-            user = User(
-                name=kakao_name,
-                email=f"kakao_{kakao_id}@kakao.com",
-                role=UserRole.REVIEWER,
-                kakao_id=kakao_id,
-            )
-            db.add(user)
+            user.kakao_access_token = kakao_access
+            user.kakao_refresh_token = kakao_refresh
+            db.commit()
+            db.refresh(user)
+            access_token = create_access_token({"sub": str(user.id), "role": user.role.value})
+            return TokenResponse(access_token=access_token, must_change_password=False)
 
-    # 카카오 토큰 저장
-    user.kakao_access_token = kakao_access
-    user.kakao_refresh_token = kakao_refresh
+    # 매칭 안 됨 → 계정 연결 필요
+    return {
+        "access_token": "",
+        "token_type": "bearer",
+        "must_change_password": False,
+        "need_link": True,
+        "kakao_id": kakao_id,
+        "kakao_name": kakao_name or "",
+        "kakao_access_token": kakao_access,
+        "kakao_refresh_token": kakao_refresh,
+    }
+
+
+class LinkAccountRequest(BaseModel):
+    email: str
+    password: str
+    kakao_id: str
+    kakao_access_token: str
+    kakao_refresh_token: str
+
+
+@router.post("/link-account")
+def link_account(body: LinkAccountRequest, db: Session = Depends(get_db)):
+    """기존 계정에 카카오 연결"""
+    user = db.query(User).filter(User.email == body.email).first()
+    if not user or not user.password_hash:
+        raise HTTPException(status_code=401, detail="이메일 또는 비밀번호가 올바르지 않습니다")
+    if not verify_password(body.password, user.password_hash):
+        raise HTTPException(status_code=401, detail="이메일 또는 비밀번호가 올바르지 않습니다")
+
+    user.kakao_id = body.kakao_id
+    user.kakao_access_token = body.kakao_access_token
+    user.kakao_refresh_token = body.kakao_refresh_token
     db.commit()
     db.refresh(user)
 
-    # JWT 발급
     access_token = create_access_token({"sub": str(user.id), "role": user.role.value})
-    return TokenResponse(access_token=access_token)
+    return TokenResponse(access_token=access_token, must_change_password=False)
 
 
 @router.get("/me", response_model=UserResponse)
