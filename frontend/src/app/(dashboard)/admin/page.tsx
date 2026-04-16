@@ -51,6 +51,10 @@ export default function AdminPage() {
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState("")
 
+  // 엑셀 일괄 등록
+  const [bulkUploading, setBulkUploading] = useState(false)
+  const [bulkResult, setBulkResult] = useState<{ created: number; skipped: number } | null>(null)
+
   // 수정 다이얼로그
   const [editTarget, setEditTarget] = useState<User | null>(null)
   const [editData, setEditData] = useState({
@@ -120,6 +124,27 @@ export default function AdminPage() {
     }
   }
 
+  const handleBulkUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setBulkUploading(true)
+    setBulkResult(null)
+    try {
+      const formData = new FormData()
+      formData.append("file", file)
+      const { data } = await apiClient.post("/api/users/import-excel", formData, {
+        headers: { "Content-Type": "multipart/form-data" },
+      })
+      setBulkResult(data)
+      fetchUsers()
+    } catch {
+      setBulkResult({ created: 0, skipped: 0 })
+    } finally {
+      setBulkUploading(false)
+      e.target.value = ""
+    }
+  }
+
   const handleResetPassword = async (userId: number, userName: string) => {
     if (!confirm(`${userName}의 비밀번호를 초기화(ksea)하시겠습니까?`)) return
     try {
@@ -147,7 +172,28 @@ export default function AdminPage() {
           <h1 className="text-2xl font-bold">사용자 관리</h1>
           <p className="text-sm text-muted-foreground">총 {total}명</p>
         </div>
-        <Button onClick={() => setCreateOpen(true)}>사용자 등록</Button>
+        <div className="flex gap-2 items-center">
+          <div className="flex flex-col items-end gap-1">
+            <label className="cursor-pointer">
+              <Input
+                type="file"
+                accept=".xlsx,.xls"
+                onChange={handleBulkUpload}
+                disabled={bulkUploading}
+                className="hidden"
+              />
+              <span className="inline-flex h-9 items-center justify-center rounded-md border px-4 text-sm font-medium hover:bg-accent cursor-pointer">
+                {bulkUploading ? "처리 중..." : "엑셀 일괄등록"}
+              </span>
+            </label>
+            {bulkResult && (
+              <span className="text-xs text-muted-foreground">
+                등록 {bulkResult.created}명 / 스킵 {bulkResult.skipped}명
+              </span>
+            )}
+          </div>
+          <Button onClick={() => setCreateOpen(true)}>사용자 등록</Button>
+        </div>
       </div>
 
       {/* 사용자 목록 */}

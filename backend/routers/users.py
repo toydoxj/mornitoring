@@ -1,6 +1,10 @@
 """사용자 관리 라우터"""
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+import tempfile
+from pathlib import Path
+
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
+from openpyxl import load_workbook
 from pydantic import BaseModel, EmailStr
 from sqlalchemy.orm import Session
 
@@ -12,11 +16,21 @@ from routers.auth import get_current_user, get_password_hash, require_roles
 
 router = APIRouter()
 
-
-# --- Pydantic 스키마 ---
-
 DEFAULT_PASSWORD = "ksea"
 
+ROLE_MAP = {
+    "팀장": UserRole.TEAM_LEADER,
+    "총괄간사": UserRole.CHIEF_SECRETARY,
+    "간사": UserRole.SECRETARY,
+    "검토위원": UserRole.REVIEWER,
+    "team_leader": UserRole.TEAM_LEADER,
+    "chief_secretary": UserRole.CHIEF_SECRETARY,
+    "secretary": UserRole.SECRETARY,
+    "reviewer": UserRole.REVIEWER,
+}
+
+
+# --- Pydantic 스키마 ---
 
 class UserCreate(BaseModel):
     name: str
@@ -94,6 +108,70 @@ def create_user(
     db.commit()
     db.refresh(user)
     return user
+
+
+@router.post("/import-excel")
+async def import_users_excel(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(
+        require_roles(UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY)
+    ),
+):
+    """사용자 일괄 등록 (엑셀)
+
+    엑셀 형식: A열=이름, B열=이메일, C열=역할(팀장/총괄간사/간사/검토위원), D열=전화번호(선택)
+    """
+    if not file.filename or not file.filename.endswith((".xlsx", ".xls")):
+        raise HTTPException(status_code=400, detail="엑셀 파일(.xlsx)만 업로드 가능합니다")
+
+    with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
+        content = await file.read()
+        tmp.write(content)
+        tmp_path = Path(tmp.name)
+
+    try:
+        wb = load_workbook(str(tmp_path), data_only=True, read_only=True)
+        ws = wb.active
+
+        created = 0
+        skipped = 0
+        errors = []
+
+        for row_idx, row in enumerate(ws.iter_rows(min_row=2), start=2):
+            name = str(row[0].value).strip() if row[0].value else None
+            email = str(row[1].value).strip() if len(row) > 1 and row[1].value else None
+            role_str = str(row[2].value).strip() if len(row) > 2 and row[2].value else None
+            phone = str(row[3].value).strip() if len(row) > 3 and row[3].value else None
+
+            if not name or not email:
+                continue
+
+            # 역할 매핑
+            role = ROLE_MAP.get(role_str, UserRole.REVIEWER) if role_str else UserRole.REVIEWER
+
+            # 중복 체크
+            if db.query(User).filter(User.email == email).first():
+                skipped += 1
+                continue
+
+            user = User(
+                name=name,
+                email=email,
+                role=role,
+                phone=phone,
+                password_hash=get_password_hash(DEFAULT_PASSWORD),
+                must_change_password=True,
+            )
+            db.add(user)
+            created += 1
+
+        db.commit()
+        wb.close()
+        return {"created": created, "skipped": skipped, "errors": errors}
+
+    finally:
+        tmp_path.unlink(missing_ok=True)
 
 
 @router.get("/{user_id}", response_model=UserResponse)
