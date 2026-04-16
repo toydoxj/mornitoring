@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from database import get_db
 from models.building import Building
+from models.reviewer import Reviewer
 from models.user import User, UserRole
 from routers.auth import get_current_user, require_roles
 
@@ -127,6 +128,24 @@ def create_building(
     db.commit()
     db.refresh(building)
     return building
+
+
+@router.get("/my-reviews", response_model=BuildingListResponse)
+def my_review_buildings(
+    page: int = Query(1, ge=1),
+    size: int = Query(50, ge=1, le=200),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(UserRole.REVIEWER)),
+):
+    """내가 배정된 검토 대상 건축물 목록 (검토위원 전용)"""
+    reviewer = db.query(Reviewer).filter(Reviewer.user_id == current_user.id).first()
+    if not reviewer:
+        return BuildingListResponse(items=[], total=0)
+
+    query = db.query(Building).filter(Building.reviewer_id == reviewer.id)
+    total = query.count()
+    items = query.order_by(Building.mgmt_no).offset((page - 1) * size).limit(size).all()
+    return BuildingListResponse(items=items, total=total)
 
 
 @router.get("/{building_id}", response_model=BuildingResponse)

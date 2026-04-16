@@ -3,7 +3,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from routers import auth, users, buildings
+from routers import auth, users, buildings, ledger, assignments
 
 app = FastAPI(
     title="건축구조안전 모니터링 시스템",
@@ -24,6 +24,8 @@ app.add_middleware(
 app.include_router(auth.router, prefix="/api/auth", tags=["인증"])
 app.include_router(users.router, prefix="/api/users", tags=["사용자"])
 app.include_router(buildings.router, prefix="/api/buildings", tags=["건축물"])
+app.include_router(ledger.router, prefix="/api/ledger", tags=["관리대장"])
+app.include_router(assignments.router, prefix="/api/assignments", tags=["배정"])
 
 
 @app.get("/api/health")
