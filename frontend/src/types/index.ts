@@ -76,7 +76,8 @@ export const ROLE_LABELS: Record<UserRole, string> = {
 }
 
 // 단계 한글 라벨
-export const PHASE_LABELS: Record<PhaseType, string> = {
+export const PHASE_LABELS: Record<string, string> = {
+  doc_received: "예비도서 접수",
   preliminary: "예비검토",
   supplement_1: "1차 보완",
   supplement_2: "2차 보완",
