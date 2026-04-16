@@ -5,6 +5,8 @@ from pydantic import BaseModel, EmailStr
 from sqlalchemy.orm import Session
 
 from database import get_db
+from models.building import Building
+from models.reviewer import Reviewer
 from models.user import User, UserRole
 from routers.auth import get_current_user, get_password_hash, require_roles
 
@@ -134,12 +136,41 @@ def update_user(
 def delete_user(
     user_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_roles(UserRole.TEAM_LEADER)),
+    current_user: User = Depends(
+        require_roles(UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY)
+    ),
 ):
-    """사용자 삭제 (팀장만)"""
+    """사용자 삭제 (팀장/총괄간사)"""
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다")
 
+    # reviewer 연결 해제
+    reviewer = db.query(Reviewer).filter(Reviewer.user_id == user.id).first()
+    if reviewer:
+        db.query(Building).filter(Building.reviewer_id == reviewer.id).update(
+            {"reviewer_id": None}
+        )
+        db.delete(reviewer)
+
     db.delete(user)
     db.commit()
+
+
+@router.post("/{user_id}/reset-password")
+def reset_password(
+    user_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(
+        require_roles(UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY)
+    ),
+):
+    """비밀번호 초기화 (팀장/총괄간사)"""
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다")
+
+    user.password_hash = get_password_hash(DEFAULT_PASSWORD)
+    user.must_change_password = True
+    db.commit()
+    return {"message": f"{user.name}의 비밀번호가 초기화되었습니다"}

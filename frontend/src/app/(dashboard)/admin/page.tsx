@@ -120,6 +120,16 @@ export default function AdminPage() {
     }
   }
 
+  const handleResetPassword = async (userId: number, userName: string) => {
+    if (!confirm(`${userName}의 비밀번호를 초기화(ksea)하시겠습니까?`)) return
+    try {
+      await apiClient.post(`/api/users/${userId}/reset-password`)
+      alert(`${userName}의 비밀번호가 초기화되었습니다`)
+    } catch (err) {
+      console.error("초기화 실패:", err)
+    }
+  }
+
   const openEdit = (user: User) => {
     setEditTarget(user)
     setEditData({
@@ -186,6 +196,13 @@ export default function AdminPage() {
                     <div className="flex gap-1">
                       <Button size="sm" variant="outline" onClick={() => openEdit(user)}>
                         수정
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => handleResetPassword(user.id, user.name)}
+                      >
+                        PW초기화
                       </Button>
                       <Button
                         size="sm"
