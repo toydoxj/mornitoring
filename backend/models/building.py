@@ -16,8 +16,9 @@ class Building(Base):
     # A: 모니터링 관리번호
     mgmt_no: Mapped[str] = mapped_column(String(20), unique=True, index=True)
 
-    # B: 검토위원 (FK → reviewers)
+    # B: 검토위원
     reviewer_id: Mapped[int | None] = mapped_column(ForeignKey("reviewers.id"))
+    assigned_reviewer_name: Mapped[str | None] = mapped_column(String(50))  # 배정 엑셀 기입 이름
 
     # C~AD: 대상 건축물 개요
     building_type: Mapped[str | None] = mapped_column(String(50))       # 건축구분

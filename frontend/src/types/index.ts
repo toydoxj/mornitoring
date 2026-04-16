@@ -32,6 +32,8 @@ export interface Building {
   final_result: string | null
   reviewer_id: number | null
   reviewer_name: string | null
+  assigned_reviewer_name: string | null
+  reviewer_registered: boolean
 }
 
 export interface BuildingListResponse {

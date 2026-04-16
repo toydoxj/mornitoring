@@ -77,16 +77,23 @@ class BuildingResponse(BaseModel):
     final_result: str | None = None
     reviewer_id: int | None = None
     reviewer_name: str | None = None
+    assigned_reviewer_name: str | None = None
+    reviewer_registered: bool = False
 
     model_config = {"from_attributes": True}
 
 
 def _to_response(building: Building) -> dict:
-    """Building 모델을 응답 dict로 변환 (검토위원 이름 포함)"""
+    """Building 모델을 응답 dict로 변환 (검토위원 이름 + 등록 여부 포함)"""
     data = {c.name: getattr(building, c.name) for c in Building.__table__.columns}
     data["reviewer_name"] = None
+    data["reviewer_registered"] = False
     if building.reviewer and building.reviewer.user:
         data["reviewer_name"] = building.reviewer.user.name
+        data["reviewer_registered"] = True
+    elif building.assigned_reviewer_name:
+        data["reviewer_name"] = building.assigned_reviewer_name
+        data["reviewer_registered"] = False
     return data
 
 
@@ -156,11 +163,15 @@ def my_review_buildings(
     current_user: User = Depends(require_roles(UserRole.REVIEWER, UserRole.SECRETARY, UserRole.CHIEF_SECRETARY)),
 ):
     """내가 배정된 검토 대상 건축물 목록 (검토위원/간사/총괄간사)"""
+    # reviewer_id 또는 assigned_reviewer_name으로 매칭
     reviewer = db.query(Reviewer).filter(Reviewer.user_id == current_user.id).first()
-    if not reviewer:
-        return BuildingListResponse(items=[], total=0)
 
-    query = db.query(Building).filter(Building.reviewer_id == reviewer.id)
+    if reviewer:
+        query = db.query(Building).filter(
+            (Building.reviewer_id == reviewer.id) | (Building.assigned_reviewer_name == current_user.name)
+        )
+    else:
+        query = db.query(Building).filter(Building.assigned_reviewer_name == current_user.name)
     total = query.count()
     buildings = query.order_by(Building.mgmt_no).offset((page - 1) * size).limit(size).all()
     items = [_to_response(b) for b in buildings]

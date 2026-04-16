@@ -181,7 +181,14 @@ export default function BuildingsPage() {
         accessorKey: "reviewer_name",
         header: "검토자",
         size: 80,
-        cell: ({ getValue }) => getValue<string>() || "-",
+        cell: ({ row }) => {
+          const name = row.original.reviewer_name
+          if (!name) return "-"
+          const registered = row.original.reviewer_registered
+          return registered
+            ? <span>{name}</span>
+            : <span className="text-red-500">{name}</span>
+        },
       },
       {
         id: "address",

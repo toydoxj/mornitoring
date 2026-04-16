@@ -56,10 +56,7 @@ def preview_assignment(file_path: str | Path, db: Session) -> dict:
         if building.reviewer and building.reviewer.user:
             current_name = building.reviewer.user.name
 
-        if reviewer_name not in reviewer_map:
-            changes.append({"mgmt_no": mgmt_no, "reviewer_name": reviewer_name, "current_reviewer": current_name, "status": "reviewer_not_found"})
-            summary["reviewer_not_found"] += 1
-            continue
+        registered = reviewer_name in reviewer_map
 
         if current_name == reviewer_name:
             status = "same"
@@ -68,8 +65,18 @@ def preview_assignment(file_path: str | Path, db: Session) -> dict:
         else:
             status = "new"
 
-        changes.append({"mgmt_no": mgmt_no, "reviewer_name": reviewer_name, "current_reviewer": current_name, "status": status})
+        changes.append({
+            "mgmt_no": mgmt_no,
+            "reviewer_name": reviewer_name,
+            "current_reviewer": current_name,
+            "status": status,
+            "registered": registered,
+        })
         summary[status] += 1
+
+    # 미등록 검토위원 수
+    unregistered = set(r[1] for r in rows_data if r[1] not in reviewer_map and building_map.get(r[0]))
+    summary["unregistered"] = len(unregistered)
 
     return {"changes": changes, "summary": summary}
 
@@ -123,13 +130,14 @@ def apply_assignment(file_path: str | Path, db: Session) -> dict:
             skipped += 1
             continue
 
-        user = user_map.get(reviewer_name)
-        if not user:
-            errors.append(f"{mgmt_no}: 검토위원 '{reviewer_name}'을 찾을 수 없습니다")
-            skipped += 1
-            continue
+        # 이름은 항상 저장
+        building.assigned_reviewer_name = reviewer_name
 
-        building.reviewer_id = reviewer_by_user[user.id].id
+        # 등록된 사용자면 reviewer_id도 연결
+        user = user_map.get(reviewer_name)
+        if user and user.id in reviewer_by_user:
+            building.reviewer_id = reviewer_by_user[user.id].id
+
         applied += 1
 
     db.commit()
