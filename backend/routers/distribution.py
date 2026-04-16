@@ -43,42 +43,50 @@ def receive_documents(
     received = body.received_date or date.today()
     updated = 0
     not_found = []
-    notifications: dict[str, list[str]] = {}  # {검토위원이름: [관리번호, ...]}
+    notifications: dict[str, list[str]] = {}
 
-    # 일괄 조회
-    buildings = db.query(Building).filter(Building.mgmt_no.in_(body.mgmt_nos)).all()
-    building_map = {b.mgmt_no: b for b in buildings}
+    # 1. 건축물 일괄 조회 (1000건씩 분할)
+    building_map: dict[str, Building] = {}
+    for i in range(0, len(body.mgmt_nos), 1000):
+        chunk = body.mgmt_nos[i:i+1000]
+        buildings = db.query(Building).filter(Building.mgmt_no.in_(chunk)).all()
+        for b in buildings:
+            building_map[b.mgmt_no] = b
 
+    # 2. 기존 예비검토 stage 일괄 조회
+    building_ids = [b.id for b in building_map.values()]
+    existing_stages: dict[int, ReviewStage] = {}
+    if building_ids:
+        for i in range(0, len(building_ids), 1000):
+            chunk = building_ids[i:i+1000]
+            stages = db.query(ReviewStage).filter(
+                ReviewStage.building_id.in_(chunk),
+                ReviewStage.phase == PhaseType.PRELIMINARY,
+            ).all()
+            for s in stages:
+                existing_stages[s.building_id] = s
+
+    # 3. 일괄 처리
+    batch_count = 0
     for mgmt_no in body.mgmt_nos:
         building = building_map.get(mgmt_no)
         if not building:
             not_found.append(mgmt_no)
             continue
 
-        # 현재 단계 업데이트
         building.current_phase = "doc_received"
 
-        # 예비검토 stage 생성/업데이트
-        stage = (
-            db.query(ReviewStage)
-            .filter(
-                ReviewStage.building_id == building.id,
-                ReviewStage.phase == PhaseType.PRELIMINARY,
-            )
-            .first()
-        )
-        if not stage:
-            stage = ReviewStage(
+        stage = existing_stages.get(building.id)
+        if stage:
+            stage.doc_received_at = received
+        else:
+            db.add(ReviewStage(
                 building_id=building.id,
                 phase=PhaseType.PRELIMINARY,
                 phase_order=0,
                 doc_received_at=received,
-            )
-            db.add(stage)
-        else:
-            stage.doc_received_at = received
+            ))
 
-        # 알림 데이터 수집
         reviewer_name = building.assigned_reviewer_name
         if reviewer_name:
             if reviewer_name not in notifications:
@@ -86,6 +94,9 @@ def receive_documents(
             notifications[reviewer_name].append(mgmt_no)
 
         updated += 1
+        batch_count += 1
+        if batch_count % 500 == 0:
+            db.flush()
 
     db.commit()
 
