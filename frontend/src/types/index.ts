@@ -31,6 +31,7 @@ export interface Building {
   current_phase: string | null
   final_result: string | null
   reviewer_id: number | null
+  reviewer_name: string | null
 }
 
 export interface BuildingListResponse {

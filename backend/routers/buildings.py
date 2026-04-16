@@ -76,8 +76,18 @@ class BuildingResponse(BaseModel):
     current_phase: str | None = None
     final_result: str | None = None
     reviewer_id: int | None = None
+    reviewer_name: str | None = None
 
     model_config = {"from_attributes": True}
+
+
+def _to_response(building: Building) -> dict:
+    """Building 모델을 응답 dict로 변환 (검토위원 이름 포함)"""
+    data = {c.name: getattr(building, c.name) for c in Building.__table__.columns}
+    data["reviewer_name"] = None
+    if building.reviewer and building.reviewer.user:
+        data["reviewer_name"] = building.reviewer.user.name
+    return data
 
 
 class BuildingListResponse(BaseModel):
@@ -111,7 +121,8 @@ def list_buildings(
         query = query.filter(Building.current_phase == phase)
 
     total = query.count()
-    items = query.order_by(Building.mgmt_no).offset((page - 1) * size).limit(size).all()
+    buildings = query.order_by(Building.mgmt_no).offset((page - 1) * size).limit(size).all()
+    items = [_to_response(b) for b in buildings]
     return BuildingListResponse(items=items, total=total)
 
 
@@ -151,7 +162,8 @@ def my_review_buildings(
 
     query = db.query(Building).filter(Building.reviewer_id == reviewer.id)
     total = query.count()
-    items = query.order_by(Building.mgmt_no).offset((page - 1) * size).limit(size).all()
+    buildings = query.order_by(Building.mgmt_no).offset((page - 1) * size).limit(size).all()
+    items = [_to_response(b) for b in buildings]
     return BuildingListResponse(items=items, total=total)
 
 

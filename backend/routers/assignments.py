@@ -1,6 +1,9 @@
 """검토위원 배정 라우터"""
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+import tempfile
+from pathlib import Path
+
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -9,6 +12,7 @@ from models.building import Building
 from models.reviewer import Reviewer
 from models.user import User, UserRole
 from routers.auth import require_roles
+from engines.reviewer_assign import preview_assignment, apply_assignment
 
 router = APIRouter()
 
@@ -85,3 +89,49 @@ def unassign_reviewer(
     building.reviewer_id = None
     db.commit()
     return {"message": "검토위원 배정이 해제되었습니다"}
+
+
+@router.post("/upload/preview")
+async def preview_assignment_excel(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(
+        require_roles(UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY)
+    ),
+):
+    """검토위원 배정 엑셀 미리보기 (변경사항 확인)"""
+    if not file.filename or not file.filename.endswith((".xlsx", ".xls")):
+        raise HTTPException(status_code=400, detail="엑셀 파일(.xlsx)만 업로드 가능합니다")
+
+    with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
+        content = await file.read()
+        tmp.write(content)
+        tmp_path = Path(tmp.name)
+
+    try:
+        return preview_assignment(tmp_path, db)
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+
+@router.post("/upload/apply")
+async def apply_assignment_excel(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(
+        require_roles(UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY)
+    ),
+):
+    """검토위원 배정 엑셀 적용"""
+    if not file.filename or not file.filename.endswith((".xlsx", ".xls")):
+        raise HTTPException(status_code=400, detail="엑셀 파일(.xlsx)만 업로드 가능합니다")
+
+    with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
+        content = await file.read()
+        tmp.write(content)
+        tmp_path = Path(tmp.name)
+
+    try:
+        return apply_assignment(tmp_path, db)
+    finally:
+        tmp_path.unlink(missing_ok=True)

@@ -49,6 +49,15 @@ export default function BuildingsPage() {
   const [uploadOpen, setUploadOpen] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [uploadResult, setUploadResult] = useState<{ imported: number; skipped: number } | null>(null)
+  // 검토위원 배정
+  const [assignOpen, setAssignOpen] = useState(false)
+  const [assignFile, setAssignFile] = useState<File | null>(null)
+  const [assignPreview, setAssignPreview] = useState<{
+    changes: { mgmt_no: string; reviewer_name: string; current_reviewer: string | null; status: string }[]
+    summary: Record<string, number>
+  } | null>(null)
+  const [assigning, setAssigning] = useState(false)
+  const [assignResult, setAssignResult] = useState<{ applied: number; skipped: number } | null>(null)
   const pageSize = 50
 
   const canManage = user && ["team_leader", "chief_secretary", "secretary"].includes(user.role)
@@ -110,6 +119,48 @@ export default function BuildingsPage() {
     }
   }
 
+  const handleAssignPreview = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setAssignFile(file)
+    setAssignPreview(null)
+    setAssignResult(null)
+    setAssigning(true)
+    try {
+      const formData = new FormData()
+      formData.append("file", file)
+      const { data } = await apiClient.post("/api/assignments/upload/preview", formData, {
+        headers: { "Content-Type": "multipart/form-data" },
+      })
+      setAssignPreview(data)
+    } catch {
+      setAssignPreview(null)
+    } finally {
+      setAssigning(false)
+      e.target.value = ""
+    }
+  }
+
+  const handleAssignApply = async () => {
+    if (!assignFile) return
+    setAssigning(true)
+    try {
+      const formData = new FormData()
+      formData.append("file", assignFile)
+      const { data } = await apiClient.post("/api/assignments/upload/apply", formData, {
+        headers: { "Content-Type": "multipart/form-data" },
+      })
+      setAssignResult(data)
+      setAssignPreview(null)
+      setAssignFile(null)
+      fetchBuildings()
+    } catch {
+      // 에러 처리
+    } finally {
+      setAssigning(false)
+    }
+  }
+
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault()
     setPage(1)
@@ -127,10 +178,10 @@ export default function BuildingsPage() {
         ),
       },
       {
-        accessorKey: "reviewer_id",
+        accessorKey: "reviewer_name",
         header: "검토자",
         size: 80,
-        cell: ({ getValue }) => getValue<number>() ? `위원${getValue<number>()}` : "-",
+        cell: ({ getValue }) => getValue<string>() || "-",
       },
       {
         id: "address",
@@ -225,6 +276,11 @@ export default function BuildingsPage() {
               검색
             </Button>
           </form>
+          {canManage && (
+            <Button variant="outline" onClick={() => setAssignOpen(true)}>
+              검토위원 배정
+            </Button>
+          )}
           {canManage && (
             <Dialog open={uploadOpen} onOpenChange={setUploadOpen}>
               <Button onClick={() => setUploadOpen(true)}>엑셀 업로드</Button>
@@ -329,6 +385,93 @@ export default function BuildingsPage() {
           </Button>
         </div>
       )}
+      {/* 검토위원 배정 다이얼로그 */}
+      <Dialog open={assignOpen} onOpenChange={(open) => {
+        setAssignOpen(open)
+        if (!open) { setAssignPreview(null); setAssignResult(null); setAssignFile(null) }
+      }}>
+        <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>검토위원 배정 엑셀 업로드</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              A열: 관리번호, B열: 검토위원 이름으로 구성된 엑셀 파일을 업로드하세요.
+              배정 변경사항을 미리 확인한 후 적용할 수 있습니다.
+            </p>
+            <Input
+              type="file"
+              accept=".xlsx,.xls"
+              onChange={handleAssignPreview}
+              disabled={assigning}
+            />
+            {assigning && <p className="text-sm">처리 중...</p>}
+
+            {assignPreview && (
+              <div className="space-y-3">
+                <div className="flex gap-3 text-sm">
+                  <Badge variant="default">신규 {assignPreview.summary.new}건</Badge>
+                  <Badge variant="secondary">변경 {assignPreview.summary.changed}건</Badge>
+                  <Badge variant="outline">동일 {assignPreview.summary.same}건</Badge>
+                  {assignPreview.summary.not_found > 0 && (
+                    <Badge variant="destructive">관리번호 없음 {assignPreview.summary.not_found}건</Badge>
+                  )}
+                  {assignPreview.summary.reviewer_not_found > 0 && (
+                    <Badge variant="destructive">검토위원 없음 {assignPreview.summary.reviewer_not_found}건</Badge>
+                  )}
+                </div>
+
+                <div className="rounded-md border max-h-60 overflow-y-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>관리번호</TableHead>
+                        <TableHead>배정 검토위원</TableHead>
+                        <TableHead>현재 검토위원</TableHead>
+                        <TableHead>상태</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {assignPreview.changes
+                        .filter((c) => c.status !== "same")
+                        .map((c, i) => (
+                          <TableRow key={i}>
+                            <TableCell className="font-mono">{c.mgmt_no}</TableCell>
+                            <TableCell>{c.reviewer_name}</TableCell>
+                            <TableCell>{c.current_reviewer || "-"}</TableCell>
+                            <TableCell>
+                              <Badge variant={
+                                c.status === "new" ? "default" :
+                                c.status === "changed" ? "secondary" :
+                                "destructive"
+                              }>
+                                {c.status === "new" ? "신규" :
+                                 c.status === "changed" ? "변경" :
+                                 c.status === "not_found" ? "관리번호 없음" :
+                                 "검토위원 없음"}
+                              </Badge>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                    </TableBody>
+                  </Table>
+                </div>
+
+                <Button onClick={handleAssignApply} disabled={assigning} className="w-full">
+                  {assigning ? "적용 중..." : "배정 적용"}
+                </Button>
+              </div>
+            )}
+
+            {assignResult && (
+              <div className="rounded-md bg-green-50 p-3 text-sm text-green-800">
+                <p>배정 완료: <strong>{assignResult.applied}건</strong> 적용</p>
+                {assignResult.skipped > 0 && <p>스킵: {assignResult.skipped}건</p>}
+              </div>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
