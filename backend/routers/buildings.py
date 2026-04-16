@@ -139,9 +139,9 @@ def my_review_buildings(
     page: int = Query(1, ge=1),
     size: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_roles(UserRole.REVIEWER, UserRole.SECRETARY)),
+    current_user: User = Depends(require_roles(UserRole.REVIEWER, UserRole.SECRETARY, UserRole.CHIEF_SECRETARY)),
 ):
-    """내가 배정된 검토 대상 건축물 목록 (검토위원/간사)"""
+    """내가 배정된 검토 대상 건축물 목록 (검토위원/간사/총괄간사)"""
     reviewer = db.query(Reviewer).filter(Reviewer.user_id == current_user.id).first()
     if not reviewer:
         return BuildingListResponse(items=[], total=0)
