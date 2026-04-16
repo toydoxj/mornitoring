@@ -1,6 +1,7 @@
 "use client"
 
 import { useEffect, useState, useMemo } from "react"
+import { useRouter } from "next/navigation"
 import {
   useReactTable,
   getCoreRowModel,
@@ -38,6 +39,7 @@ const RESULT_VARIANT: Record<string, "default" | "secondary" | "destructive" | "
 }
 
 export default function BuildingsPage() {
+  const router = useRouter()
   const user = useAuthStore((s) => s.user)
   const [data, setData] = useState<Building[]>([])
   const [total, setTotal] = useState(0)
@@ -51,6 +53,22 @@ export default function BuildingsPage() {
   const pageSize = 50
 
   const canManage = user && ["team_leader", "chief_secretary", "secretary"].includes(user.role)
+
+  const handleExport = async () => {
+    try {
+      const response = await apiClient.get("/api/ledger/export", {
+        responseType: "blob",
+      })
+      const url = window.URL.createObjectURL(new Blob([response.data]))
+      const link = document.createElement("a")
+      link.href = url
+      link.download = `통합관리대장_${new Date().toISOString().slice(0, 10)}.xlsx`
+      link.click()
+      window.URL.revokeObjectURL(url)
+    } catch (err) {
+      console.error("엑셀 다운로드 실패:", err)
+    }
+  }
 
   const fetchBuildings = async () => {
     setIsLoading(true)
@@ -196,6 +214,9 @@ export default function BuildingsPage() {
           </p>
         </div>
         <div className="flex gap-2">
+          <Button variant="outline" onClick={handleExport}>
+            엑셀 다운로드
+          </Button>
           <form onSubmit={handleSearch} className="flex gap-2">
             <Input
               placeholder="관리번호 또는 건물명 검색"
@@ -272,7 +293,11 @@ export default function BuildingsPage() {
               </TableRow>
             ) : (
               table.getRowModel().rows.map((row) => (
-                <TableRow key={row.id} className="cursor-pointer hover:bg-muted/50">
+                <TableRow
+                  key={row.id}
+                  className="cursor-pointer hover:bg-muted/50"
+                  onClick={() => router.push(`/buildings/${row.original.id}`)}
+                >
                   {row.getVisibleCells().map((cell) => (
                     <TableCell key={cell.id}>
                       {flexRender(cell.column.columnDef.cell, cell.getContext())}

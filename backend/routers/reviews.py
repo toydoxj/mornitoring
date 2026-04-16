@@ -15,6 +15,7 @@ from models.user import User, UserRole
 from routers.auth import get_current_user, require_roles
 from engines.review_validator import validate_review_file
 from engines.review_extractor import extract_review_data
+from engines.phase_machine import get_next_phase, can_advance, is_completed
 
 router = APIRouter()
 
@@ -176,3 +177,56 @@ def get_review_stages(
         .all()
     )
     return stages
+
+
+@router.post("/advance/{building_id}")
+def advance_phase(
+    building_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(
+        require_roles(UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY, UserRole.SECRETARY)
+    ),
+):
+    """건축물의 검토 단계를 다음 단계로 전환 (간사 이상)"""
+    building = db.query(Building).filter(Building.id == building_id).first()
+    if not building:
+        raise HTTPException(status_code=404, detail="건축물을 찾을 수 없습니다")
+
+    if not building.current_phase:
+        raise HTTPException(status_code=400, detail="현재 진행 중인 단계가 없습니다")
+
+    # 현재 단계의 최신 결과 확인
+    try:
+        current_phase_type = PhaseType(building.current_phase)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="알 수 없는 단계입니다")
+
+    current_stage = (
+        db.query(ReviewStage)
+        .filter(
+            ReviewStage.building_id == building.id,
+            ReviewStage.phase == current_phase_type,
+        )
+        .first()
+    )
+
+    if not current_stage or not current_stage.result:
+        raise HTTPException(status_code=400, detail="현재 단계의 검토 결과가 없습니다")
+
+    # 완료 결과면 최종 판정 처리
+    if is_completed(current_stage.result):
+        building.final_result = current_stage.result.value
+        db.commit()
+        return {"message": "최종 판정 완료", "final_result": current_stage.result.value}
+
+    # 보완 필요 시 다음 단계로 전환
+    if can_advance(current_stage.result):
+        next_phase = get_next_phase(current_phase_type)
+        if not next_phase:
+            raise HTTPException(status_code=400, detail="더 이상 진행할 단계가 없습니다")
+
+        building.current_phase = next_phase.value
+        db.commit()
+        return {"message": f"다음 단계로 전환: {next_phase.value}", "next_phase": next_phase.value}
+
+    raise HTTPException(status_code=400, detail="단계 전환 조건이 충족되지 않았습니다")
