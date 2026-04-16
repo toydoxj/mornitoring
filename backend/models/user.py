@@ -28,6 +28,7 @@ class User(Base):
     kakao_access_token: Mapped[str | None] = mapped_column(String(500))
     kakao_refresh_token: Mapped[str | None] = mapped_column(String(500))
     password_hash: Mapped[str | None] = mapped_column(String(200))
+    must_change_password: Mapped[bool] = mapped_column(Boolean, default=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()

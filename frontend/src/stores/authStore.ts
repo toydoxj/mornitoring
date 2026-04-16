@@ -2,10 +2,14 @@ import { create } from "zustand"
 import apiClient from "@/lib/api/client"
 import type { User } from "@/types"
 
+interface LoginResult {
+  mustChangePassword: boolean
+}
+
 interface AuthState {
   user: User | null
   isLoading: boolean
-  login: (email: string, password: string) => Promise<void>
+  login: (email: string, password: string) => Promise<LoginResult>
   logout: () => void
   fetchMe: () => Promise<void>
 }
@@ -27,6 +31,8 @@ export const useAuthStore = create<AuthState>((set) => ({
     // 로그인 후 사용자 정보 가져오기
     const { data: user } = await apiClient.get("/api/auth/me")
     set({ user })
+
+    return { mustChangePassword: data.must_change_password }
   },
 
   logout: () => {

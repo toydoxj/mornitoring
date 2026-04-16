@@ -47,7 +47,6 @@ export default function AdminPage() {
     email: "",
     role: "reviewer" as UserRole,
     phone: "",
-    password: "",
   })
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState("")
@@ -86,7 +85,7 @@ export default function AdminPage() {
     try {
       await apiClient.post("/api/users", formData)
       setCreateOpen(false)
-      setFormData({ name: "", email: "", role: "reviewer", phone: "", password: "" })
+      setFormData({ name: "", email: "", role: "reviewer", phone: "" })
       fetchUsers()
     } catch (err: unknown) {
       const axiosErr = err as { response?: { data?: { detail?: string } } }
@@ -250,15 +249,9 @@ export default function AdminPage() {
                 placeholder="010-0000-0000"
               />
             </div>
-            <div className="space-y-2">
-              <Label>비밀번호</Label>
-              <Input
-                type="password"
-                value={formData.password}
-                onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-                required
-              />
-            </div>
+            <p className="text-sm text-muted-foreground">
+              초기 비밀번호는 <strong>ksea</strong>로 설정됩니다. 최초 로그인 시 변경됩니다.
+            </p>
             {error && <p className="text-sm text-red-500">{error}</p>}
             <Button type="submit" className="w-full" disabled={submitting}>
               {submitting ? "등록 중..." : "등록"}

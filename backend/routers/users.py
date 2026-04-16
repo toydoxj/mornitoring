@@ -13,12 +13,14 @@ router = APIRouter()
 
 # --- Pydantic 스키마 ---
 
+DEFAULT_PASSWORD = "ksea"
+
+
 class UserCreate(BaseModel):
     name: str
     email: EmailStr
     role: UserRole
     phone: str | None = None
-    password: str
 
 
 class UserUpdate(BaseModel):
@@ -83,7 +85,8 @@ def create_user(
         email=body.email,
         role=body.role,
         phone=body.phone,
-        password_hash=get_password_hash(body.password),
+        password_hash=get_password_hash(DEFAULT_PASSWORD),
+        must_change_password=True,
     )
     db.add(user)
     db.commit()

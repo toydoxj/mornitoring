@@ -22,8 +22,12 @@ export default function LoginPage() {
     setIsSubmitting(true)
 
     try {
-      await login(email, password)
-      router.push("/buildings")
+      const result = await login(email, password)
+      if (result.mustChangePassword) {
+        router.push("/change-password")
+      } else {
+        router.push("/buildings")
+      }
     } catch {
       setError("이메일 또는 비밀번호가 올바르지 않습니다")
     } finally {
