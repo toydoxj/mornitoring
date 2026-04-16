@@ -113,6 +113,103 @@ class BuildingListResponse(BaseModel):
 
 # --- 엔드포인트 ---
 
+@router.get("/stats")
+def get_stats(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """대시보드 통계"""
+    from models.review_stage import ReviewStage, PhaseType
+
+    total = db.query(Building).count()
+
+    # 예비도서 접수(배포) 건수
+    doc_received = db.query(Building).filter(Building.current_phase == "doc_received").count()
+
+    # 예비검토 중 (검토서 미접수) — doc_received인데 review_stage에 report_submitted_at이 없는 건
+    doc_received_ids = db.query(Building.id).filter(Building.current_phase == "doc_received").subquery()
+    submitted_ids = (
+        db.query(ReviewStage.building_id)
+        .filter(
+            ReviewStage.phase == PhaseType.PRELIMINARY,
+            ReviewStage.report_submitted_at.isnot(None),
+        )
+        .subquery()
+    )
+    not_submitted = (
+        db.query(Building)
+        .filter(Building.id.in_(doc_received_ids))
+        .filter(~Building.id.in_(submitted_ids))
+        .count()
+    )
+
+    # 예비검토 완료
+    preliminary = db.query(Building).filter(Building.current_phase == "preliminary").count()
+
+    # 보완 진행
+    supplement = db.query(Building).filter(Building.current_phase.like("supplement%")).count()
+
+    # 최종 완료
+    completed = db.query(Building).filter(Building.final_result.isnot(None)).count()
+
+    # 위원별 현황
+    from sqlalchemy import func as sa_func
+    reviewer_stats_raw = (
+        db.query(
+            Building.assigned_reviewer_name,
+            sa_func.count(Building.id).label("total"),
+            sa_func.count(Building.id).filter(Building.current_phase == "doc_received").label("doc_received"),
+            sa_func.count(Building.id).filter(Building.final_result.isnot(None)).label("completed"),
+        )
+        .filter(Building.assigned_reviewer_name.isnot(None))
+        .group_by(Building.assigned_reviewer_name)
+        .order_by(Building.assigned_reviewer_name)
+        .all()
+    )
+
+    # 위원별 검토서 제출 건수 조회
+    submitted_by_reviewer = {}
+    submitted_rows = (
+        db.query(ReviewStage.building_id)
+        .filter(
+            ReviewStage.phase == PhaseType.PRELIMINARY,
+            ReviewStage.report_submitted_at.isnot(None),
+        )
+        .all()
+    )
+    submitted_building_ids = {r[0] for r in submitted_rows}
+
+    reviewer_stats = []
+    for name, total_count, doc_count, comp_count in reviewer_stats_raw:
+        # 해당 위원의 building id 조회
+        reviewer_building_ids = [
+            b.id for b in db.query(Building.id)
+            .filter(Building.assigned_reviewer_name == name, Building.current_phase == "doc_received")
+            .all()
+        ]
+        submitted_count = len([bid for bid in reviewer_building_ids if bid in submitted_building_ids])
+        not_submitted_count = len(reviewer_building_ids) - submitted_count
+
+        reviewer_stats.append({
+            "name": name,
+            "total": total_count,
+            "doc_received": doc_count,
+            "submitted": submitted_count,
+            "not_submitted": not_submitted_count,
+            "completed": comp_count,
+        })
+
+    return {
+        "total": total,
+        "doc_received": doc_received,
+        "not_submitted": not_submitted,
+        "preliminary": preliminary,
+        "supplement": supplement,
+        "completed": completed,
+        "reviewer_stats": reviewer_stats,
+    }
+
+
 @router.get("", response_model=BuildingListResponse)
 def list_buildings(
     search: str | None = None,
