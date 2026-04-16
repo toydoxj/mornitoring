@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import { useParams, useRouter } from "next/navigation"
+import { useParams, useRouter, useSearchParams } from "next/navigation"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -21,7 +21,11 @@ const RESULT_VARIANT: Record<string, "default" | "secondary" | "destructive" | "
 export default function BuildingDetailPage() {
   const params = useParams()
   const router = useRouter()
+  const searchParams = useSearchParams()
+  const from = searchParams.get("from")
   const user = useAuthStore((s) => s.user)
+  const backPath = from === "my-reviews" ? "/my-reviews" : "/buildings"
+  const backLabel = from === "my-reviews" ? "← 내 검토 대상" : "← 목록으로"
   const [building, setBuilding] = useState<Building | null>(null)
   const [stages, setStages] = useState<ReviewStage[]>([])
   const [isLoading, setIsLoading] = useState(true)
@@ -72,8 +76,8 @@ export default function BuildingDetailPage() {
       {/* 헤더 */}
       <div className="flex items-center justify-between">
         <div>
-          <Button variant="ghost" size="sm" onClick={() => router.push("/buildings")}>
-            ← 목록으로
+          <Button variant="ghost" size="sm" onClick={() => router.push(backPath)}>
+            {backLabel}
           </Button>
           <h1 className="mt-2 text-2xl font-bold">
             <span className="font-mono">{building.mgmt_no}</span>
