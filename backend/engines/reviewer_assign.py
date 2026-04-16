@@ -16,75 +16,50 @@ from models.user import User, UserRole
 
 
 def preview_assignment(file_path: str | Path, db: Session) -> dict:
-    """배정 엑셀을 미리보기 (변경사항 확인용)
-
-    Returns:
-        {
-            "changes": [
-                {
-                    "mgmt_no": "2025-0001",
-                    "reviewer_name": "홍길동",
-                    "current_reviewer": "김철수" or null,
-                    "status": "new" | "changed" | "same" | "not_found" | "reviewer_not_found"
-                },
-                ...
-            ],
-            "summary": {"new": 0, "changed": 0, "same": 0, "not_found": 0, "reviewer_not_found": 0}
-        }
-    """
+    """배정 엑셀을 미리보기 (변경사항 확인용) - 일괄 쿼리 최적화"""
     wb = load_workbook(str(file_path), data_only=True, read_only=True)
     ws = wb.active
+
+    # 엑셀 데이터 먼저 수집
+    rows_data = []
+    for row in ws.iter_rows(min_row=2):
+        mgmt_no_cell = row[0].value
+        reviewer_name_cell = row[1].value if len(row) > 1 else None
+        if not mgmt_no_cell or not reviewer_name_cell:
+            continue
+        rows_data.append((str(mgmt_no_cell).strip(), str(reviewer_name_cell).strip()))
+    wb.close()
+
+    if not rows_data:
+        return {"changes": [], "summary": {"new": 0, "changed": 0, "same": 0, "not_found": 0, "reviewer_not_found": 0}}
+
+    # DB 일괄 조회
+    mgmt_nos = [r[0] for r in rows_data]
+    buildings = db.query(Building).filter(Building.mgmt_no.in_(mgmt_nos)).all()
+    building_map: dict[str, Building] = {b.mgmt_no: b for b in buildings}
+
+    reviewer_names = list(set(r[1] for r in rows_data))
+    reviewers = db.query(User).filter(User.name.in_(reviewer_names), User.role == UserRole.REVIEWER).all()
+    reviewer_map: dict[str, User] = {u.name: u for u in reviewers}
 
     changes = []
     summary = {"new": 0, "changed": 0, "same": 0, "not_found": 0, "reviewer_not_found": 0}
 
-    for row in ws.iter_rows(min_row=2):  # 1행은 헤더
-        mgmt_no_cell = row[0].value
-        reviewer_name_cell = row[1].value if len(row) > 1 else None
-
-        if not mgmt_no_cell or not reviewer_name_cell:
-            continue
-
-        mgmt_no = str(mgmt_no_cell).strip()
-        reviewer_name = str(reviewer_name_cell).strip()
-
-        # 건축물 조회
-        building = db.query(Building).filter(Building.mgmt_no == mgmt_no).first()
+    for mgmt_no, reviewer_name in rows_data:
+        building = building_map.get(mgmt_no)
         if not building:
-            changes.append({
-                "mgmt_no": mgmt_no,
-                "reviewer_name": reviewer_name,
-                "current_reviewer": None,
-                "status": "not_found",
-            })
+            changes.append({"mgmt_no": mgmt_no, "reviewer_name": reviewer_name, "current_reviewer": None, "status": "not_found"})
             summary["not_found"] += 1
             continue
 
-        # 검토위원 조회 (이름으로)
-        user = db.query(User).filter(
-            User.name == reviewer_name,
-            User.role == UserRole.REVIEWER,
-        ).first()
-
-        if not user:
-            # 현재 배정된 검토위원 이름
-            current_name = None
-            if building.reviewer and building.reviewer.user:
-                current_name = building.reviewer.user.name
-
-            changes.append({
-                "mgmt_no": mgmt_no,
-                "reviewer_name": reviewer_name,
-                "current_reviewer": current_name,
-                "status": "reviewer_not_found",
-            })
-            summary["reviewer_not_found"] += 1
-            continue
-
-        # 현재 배정 상태 확인
         current_name = None
         if building.reviewer and building.reviewer.user:
             current_name = building.reviewer.user.name
+
+        if reviewer_name not in reviewer_map:
+            changes.append({"mgmt_no": mgmt_no, "reviewer_name": reviewer_name, "current_reviewer": current_name, "status": "reviewer_not_found"})
+            summary["reviewer_not_found"] += 1
+            continue
 
         if current_name == reviewer_name:
             status = "same"
@@ -93,67 +68,69 @@ def preview_assignment(file_path: str | Path, db: Session) -> dict:
         else:
             status = "new"
 
-        changes.append({
-            "mgmt_no": mgmt_no,
-            "reviewer_name": reviewer_name,
-            "current_reviewer": current_name,
-            "status": status,
-        })
+        changes.append({"mgmt_no": mgmt_no, "reviewer_name": reviewer_name, "current_reviewer": current_name, "status": status})
         summary[status] += 1
 
-    wb.close()
     return {"changes": changes, "summary": summary}
 
 
 def apply_assignment(file_path: str | Path, db: Session) -> dict:
-    """배정 엑셀을 실제 적용
-
-    Returns:
-        {"applied": int, "skipped": int, "errors": list[str]}
-    """
+    """배정 엑셀을 실제 적용 - 일괄 쿼리 최적화"""
     wb = load_workbook(str(file_path), data_only=True, read_only=True)
     ws = wb.active
+
+    rows_data = []
+    for row in ws.iter_rows(min_row=2):
+        mgmt_no_cell = row[0].value
+        reviewer_name_cell = row[1].value if len(row) > 1 else None
+        if not mgmt_no_cell or not reviewer_name_cell:
+            continue
+        rows_data.append((str(mgmt_no_cell).strip(), str(reviewer_name_cell).strip()))
+    wb.close()
+
+    if not rows_data:
+        return {"applied": 0, "skipped": 0, "errors": []}
+
+    # DB 일괄 조회
+    mgmt_nos = [r[0] for r in rows_data]
+    buildings = db.query(Building).filter(Building.mgmt_no.in_(mgmt_nos)).all()
+    building_map = {b.mgmt_no: b for b in buildings}
+
+    reviewer_names = list(set(r[1] for r in rows_data))
+    users = db.query(User).filter(User.name.in_(reviewer_names), User.role == UserRole.REVIEWER).all()
+    user_map = {u.name: u for u in users}
+
+    # Reviewer 레코드 일괄 조회/생성
+    user_ids = [u.id for u in users]
+    existing_reviewers = db.query(Reviewer).filter(Reviewer.user_id.in_(user_ids)).all()
+    reviewer_by_user = {r.user_id: r for r in existing_reviewers}
+
+    for user in users:
+        if user.id not in reviewer_by_user:
+            reviewer = Reviewer(user_id=user.id)
+            db.add(reviewer)
+            db.flush()
+            reviewer_by_user[user.id] = reviewer
 
     applied = 0
     skipped = 0
     errors = []
 
-    for row in ws.iter_rows(min_row=2):
-        mgmt_no_cell = row[0].value
-        reviewer_name_cell = row[1].value if len(row) > 1 else None
-
-        if not mgmt_no_cell or not reviewer_name_cell:
-            continue
-
-        mgmt_no = str(mgmt_no_cell).strip()
-        reviewer_name = str(reviewer_name_cell).strip()
-
-        building = db.query(Building).filter(Building.mgmt_no == mgmt_no).first()
+    for mgmt_no, reviewer_name in rows_data:
+        building = building_map.get(mgmt_no)
         if not building:
             errors.append(f"{mgmt_no}: 관리번호를 찾을 수 없습니다")
             skipped += 1
             continue
 
-        user = db.query(User).filter(
-            User.name == reviewer_name,
-            User.role == UserRole.REVIEWER,
-        ).first()
-
+        user = user_map.get(reviewer_name)
         if not user:
             errors.append(f"{mgmt_no}: 검토위원 '{reviewer_name}'을 찾을 수 없습니다")
             skipped += 1
             continue
 
-        # Reviewer 레코드 확인/생성
-        reviewer = db.query(Reviewer).filter(Reviewer.user_id == user.id).first()
-        if not reviewer:
-            reviewer = Reviewer(user_id=user.id)
-            db.add(reviewer)
-            db.flush()
-
-        building.reviewer_id = reviewer.id
+        building.reviewer_id = reviewer_by_user[user.id].id
         applied += 1
 
     db.commit()
-    wb.close()
     return {"applied": applied, "skipped": skipped, "errors": errors}
