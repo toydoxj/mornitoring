@@ -137,11 +137,15 @@ export default function MyReviewsPage() {
             ) : (
               data.map((b) => (
                 <TableRow key={b.id}>
-                  <TableCell
-                    className="font-mono font-medium text-blue-600 cursor-pointer hover:underline"
-                    onClick={() => router.push(`/buildings/${b.id}`)}
-                  >
-                    {b.mgmt_no}
+                  <TableCell className="font-mono font-medium">
+                    <a
+                      href={`/buildings/${b.id}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-blue-600 hover:underline"
+                    >
+                      {b.mgmt_no}
+                    </a>
                   </TableCell>
                   <TableCell>{b.building_name || "-"}</TableCell>
                   <TableCell>
