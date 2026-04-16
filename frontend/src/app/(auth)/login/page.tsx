@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { useAuthStore } from "@/stores/authStore"
+import apiClient from "@/lib/api/client"
 
 export default function LoginPage() {
   const router = useRouter()
@@ -15,6 +16,15 @@ export default function LoginPage() {
   const [password, setPassword] = useState("")
   const [error, setError] = useState("")
   const [isSubmitting, setIsSubmitting] = useState(false)
+
+  const handleKakaoLogin = async () => {
+    try {
+      const { data } = await apiClient.get("/api/auth/kakao/login")
+      window.location.href = data.url
+    } catch {
+      setError("카카오 로그인 연결에 실패했습니다")
+    }
+  }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -80,6 +90,23 @@ export default function LoginPage() {
               {isSubmitting ? "로그인 중..." : "로그인"}
             </Button>
           </form>
+          <div className="mt-4 space-y-2">
+            <div className="relative">
+              <div className="absolute inset-0 flex items-center">
+                <span className="w-full border-t" />
+              </div>
+              <div className="relative flex justify-center text-xs uppercase">
+                <span className="bg-white px-2 text-muted-foreground">또는</span>
+              </div>
+            </div>
+            <Button
+              variant="outline"
+              className="w-full bg-[#FEE500] text-[#191919] hover:bg-[#FDD835] border-[#FEE500]"
+              onClick={handleKakaoLogin}
+            >
+              카카오 로그인
+            </Button>
+          </div>
         </CardContent>
       </Card>
     </div>

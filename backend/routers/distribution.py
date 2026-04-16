@@ -114,47 +114,89 @@ async def send_notifications(
         require_roles(UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY)
     ),
 ):
-    """검토위원에게 카카오톡 알림 발송"""
+    """검토위원에게 카카오톡 알림 발송
+
+    발신자(현재 로그인 사용자)의 카카오 토큰으로 친구에게 메시지를 보냅니다.
+    """
+    from datetime import datetime, timezone
     from models.notification_log import NotificationLog
-    from services.kakao import send_message_to_friend
+    from services.kakao import get_friends, send_message_to_friends
+
+    # 발신자 카카오 토큰 확인
+    if not current_user.kakao_access_token:
+        return {
+            "sent": 0,
+            "failed": len(body),
+            "total": len(body),
+            "error": "카카오 로그인이 필요합니다. 로그인 페이지에서 카카오 로그인을 해주세요.",
+        }
+
+    # 카카오 친구 목록 조회
+    friends = await get_friends(current_user.kakao_access_token)
+    # 닉네임 → UUID 매핑
+    friend_map: dict[str, str] = {}
+    for f in friends:
+        nickname = f.get("profile_nickname", "")
+        uuid = f.get("uuid", "")
+        if nickname and uuid:
+            friend_map[nickname] = uuid
 
     sent = 0
     failed = 0
 
     for notif in body:
-        reviewer_name = notif.get("reviewer_name")
-        message = notif.get("message")
+        reviewer_name = notif.get("reviewer_name", "")
+        message = notif.get("message", "")
 
-        # 사용자 조회
-        user = db.query(User).filter(User.name == reviewer_name).first()
-        if not user or not user.kakao_access_token:
-            # 카카오 미연동 → 로그만 저장
+        # 친구 UUID 찾기
+        friend_uuid = friend_map.get(reviewer_name)
+
+        if not friend_uuid:
             log = NotificationLog(
-                recipient_id=user.id if user else None,
+                recipient_id=None,
                 channel="kakao",
                 template_type="doc_received",
                 title="예비검토서 접수 알림",
                 message=message,
                 is_sent=False,
-                error_message="카카오톡 미연동" if user else "사용자 미등록",
+                error_message=f"카카오 친구 목록에 '{reviewer_name}'이 없습니다",
             )
             db.add(log)
             failed += 1
             continue
 
-        # 카카오 발송 시도
-        # TODO: 실제 발송 시 receiver_uuid 필요
-        log = NotificationLog(
-            recipient_id=user.id,
-            channel="kakao",
-            template_type="doc_received",
+        # 카카오 메시지 발송 (5명씩 분할)
+        result = await send_message_to_friends(
+            access_token=current_user.kakao_access_token,
+            receiver_uuids=[friend_uuid],
             title="예비검토서 접수 알림",
-            message=message,
-            is_sent=False,
-            error_message="카카오 친구 UUID 미설정 (개발 중)",
+            description=message,
         )
-        db.add(log)
-        failed += 1
+
+        if "error" not in result:
+            log = NotificationLog(
+                recipient_id=None,
+                channel="kakao",
+                template_type="doc_received",
+                title="예비검토서 접수 알림",
+                message=message,
+                is_sent=True,
+                sent_at=datetime.now(timezone.utc),
+            )
+            db.add(log)
+            sent += 1
+        else:
+            log = NotificationLog(
+                recipient_id=None,
+                channel="kakao",
+                template_type="doc_received",
+                title="예비검토서 접수 알림",
+                message=message,
+                is_sent=False,
+                error_message=str(result),
+            )
+            db.add(log)
+            failed += 1
 
     db.commit()
     return {"sent": sent, "failed": failed, "total": len(body)}
