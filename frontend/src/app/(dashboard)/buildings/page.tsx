@@ -127,10 +127,10 @@ export default function BuildingsPage() {
         ),
       },
       {
-        accessorKey: "building_name",
-        header: "건물명",
-        size: 200,
-        cell: ({ getValue }) => getValue<string>() || "-",
+        accessorKey: "reviewer_id",
+        header: "검토자",
+        size: 80,
+        cell: ({ getValue }) => getValue<number>() ? `위원${getValue<number>()}` : "-",
       },
       {
         id: "address",
@@ -142,25 +142,16 @@ export default function BuildingsPage() {
         },
       },
       {
-        accessorKey: "main_structure",
-        header: "주구조",
-        size: 100,
+        accessorKey: "building_name",
+        header: "건물명",
+        size: 200,
         cell: ({ getValue }) => getValue<string>() || "-",
       },
       {
-        accessorKey: "gross_area",
-        header: "연면적(㎡)",
-        size: 100,
-        cell: ({ getValue }) => {
-          const v = getValue<number>()
-          return v != null ? v.toLocaleString() : "-"
-        },
-      },
-      {
-        accessorKey: "floors_above",
-        header: "지상층",
-        size: 70,
-        cell: ({ getValue }) => getValue<number>() ?? "-",
+        accessorKey: "main_structure",
+        header: "주구조",
+        size: 120,
+        cell: ({ getValue }) => getValue<string>() || "-",
       },
       {
         accessorKey: "high_risk_type",
@@ -180,7 +171,7 @@ export default function BuildingsPage() {
       },
       {
         accessorKey: "final_result",
-        header: "최종 판정",
+        header: "최종완료",
         size: 90,
         cell: ({ getValue }) => {
           const v = getValue<string>()
