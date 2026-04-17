@@ -209,36 +209,21 @@ export default function DashboardPage() {
           </div>
 
           <div className="space-y-4">
-            {/* 1행: 진행 지표 3버킷 */}
-            <div className="grid gap-3 grid-cols-1 md:grid-cols-3">
+            {/* 1행: 진행 지표 4카드 */}
+            <div className="grid gap-3 grid-cols-1 md:grid-cols-2 lg:grid-cols-4">
               <Bucket label="배정" value={myStats.total} tint="indigo" suffix="건" />
               <Bucket label="미제출 검토서" value={myStats.need_review} tint="red" suffix="건" />
               <SubmittedBucket
                 preliminary={myStats.submitted_preliminary}
                 supplement={myStats.submitted_supplement}
               />
+              <FinalBucket counts={myStats.final_counts} />
             </div>
 
             {/* 구분선 */}
             <div className="border-t border-slate-200" />
 
-            {/* 2행: 최종 완료 건수 4버킷 */}
-            <div>
-              <p className="mb-2 text-sm font-medium text-slate-700">
-                최종 완료 건수 <span className="text-xs text-muted-foreground">(최종 판정 엑셀 업로드로 집계)</span>
-              </p>
-              <div className="grid gap-3 grid-cols-2 md:grid-cols-4">
-                <Bucket label="적합" value={myStats.final_counts.pass} tint="green" suffix="건" />
-                <Bucket label="보완적합" value={myStats.final_counts.pass_supplement} tint="blue" suffix="건" />
-                <Bucket label="부적합" value={myStats.final_counts.fail} tint="red" suffix="건" />
-                <Bucket label="대상제외" value={myStats.final_counts.excluded} tint="slate" suffix="건" />
-              </div>
-            </div>
-
-            {/* 구분선 */}
-            <div className="border-t border-slate-200" />
-
-            {/* 3행: 접수 후 경과일수 9버킷 */}
+            {/* 2행: 접수 후 경과일수 9버킷 */}
             <div>
               <p className="mb-2 text-sm font-medium text-slate-700">
                 접수 후 경과일수 <span className="text-xs text-muted-foreground">(검토서 미제출 건)</span>
@@ -571,6 +556,31 @@ function SubmittedBucket({
       <div className="mt-2 flex gap-3 text-xs text-muted-foreground">
         <span>예비 <strong className="text-slate-700">{preliminary}</strong></span>
         <span>보완 <strong className="text-slate-700">{supplement}</strong></span>
+      </div>
+    </div>
+  )
+}
+
+function FinalBucket({
+  counts,
+}: {
+  counts: { pass: number; pass_supplement: number; fail: number; excluded: number }
+}) {
+  const total = counts.pass + counts.pass_supplement + counts.fail + counts.excluded
+  return (
+    <div className="relative overflow-hidden rounded-xl border bg-white p-4 transition-all hover:shadow-md before:absolute before:left-0 before:top-0 before:h-full before:w-1 before:bg-violet-500">
+      <p className="text-xs font-medium text-muted-foreground">최종 완료</p>
+      <div className="mt-2 flex items-baseline gap-1">
+        <p className="text-3xl font-bold tracking-tight text-violet-600">
+          {total.toLocaleString()}
+        </p>
+        <span className="text-sm text-muted-foreground">건</span>
+      </div>
+      <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
+        <span>적합 <strong className="text-emerald-700">{counts.pass}</strong></span>
+        <span>보완적합 <strong className="text-blue-700">{counts.pass_supplement}</strong></span>
+        <span>부적합 <strong className="text-red-700">{counts.fail}</strong></span>
+        <span>대상제외 <strong className="text-slate-700">{counts.excluded}</strong></span>
       </div>
     </div>
   )
