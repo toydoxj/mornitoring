@@ -1,7 +1,8 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { useRouter } from "next/navigation"
+import { FileSpreadsheet, Upload, X } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -71,6 +72,8 @@ export default function MyReviewsPage() {
   const [previewDone, setPreviewDone] = useState(false)
   const [inappropriateReviewNeeded, setInappropriateReviewNeeded] = useState(false)
   const [reuploadConfirmOpen, setReuploadConfirmOpen] = useState(false)
+  const [isDragging, setIsDragging] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
 
   // 문의 사유 다이얼로그
   const [reasonTarget, setReasonTarget] = useState<Building | null>(null)
@@ -115,10 +118,8 @@ export default function MyReviewsPage() {
   }
 
   // 1단계: 파일 선택 → 미리보기 (검증만)
-  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (!file || !uploadTarget) return
-
+  const processFile = async (file: File) => {
+    if (!uploadTarget) return
     setUploadFile(file)
     setUploading(true)
     setUploadResult(null)
@@ -146,8 +147,29 @@ export default function MyReviewsPage() {
       })
     } finally {
       setUploading(false)
-      e.target.value = ""
+      if (fileInputRef.current) fileInputRef.current.value = ""
     }
+  }
+
+  const handleFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (file) processFile(file)
+  }
+
+  const handleDrop = (e: React.DragEvent<HTMLElement>) => {
+    e.preventDefault()
+    setIsDragging(false)
+    if (uploading || previewDone) return
+    const file = e.dataTransfer.files?.[0]
+    if (file) processFile(file)
+  }
+
+  const handleClearFile = () => {
+    setUploadFile(null)
+    setUploadResult(null)
+    setPreviewDone(false)
+    setInappropriateReviewNeeded(false)
+    if (fileInputRef.current) fileInputRef.current.value = ""
   }
 
   // 업로드 버튼 클릭 핸들러 — 재업로드 확인 다이얼로그 체크
@@ -327,8 +349,7 @@ export default function MyReviewsPage() {
                   <TableCell className="text-center">
                     <Button
                       size="sm"
-                      variant="ghost"
-                      className="text-muted-foreground"
+                      variant="outline"
                       onClick={() => {
                         setReasonTarget(b)
                         setReasonText("")
@@ -354,7 +375,7 @@ export default function MyReviewsPage() {
           setInappropriateReviewNeeded(false)
         }
       }}>
-        <DialogContent>
+        <DialogContent className="max-h-[85vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>검토서 업로드</DialogTitle>
           </DialogHeader>
@@ -370,20 +391,69 @@ export default function MyReviewsPage() {
 
               <div className="space-y-2">
                 <p className="text-sm text-muted-foreground">
-                  검토서 파일(.xlsm/.xlsx)을 선택해주세요.
+                  검토서 파일(.xlsm/.xlsx)을 선택하거나 드래그해주세요.
                   파일명은 관리번호로 시작해야 합니다.
                 </p>
-                <Input
+
+                {/* 숨은 파일 input */}
+                <input
+                  ref={fileInputRef}
                   type="file"
                   accept=".xlsm,.xlsx,.xls"
-                  onChange={handleFileSelect}
+                  onChange={handleFileInputChange}
                   disabled={uploading || previewDone}
+                  className="hidden"
                 />
-              </div>
 
-              {uploading && (
-                <p className="text-sm">처리 중...</p>
-              )}
+                {/* 드롭존 카드 */}
+                {!uploadFile ? (
+                  <button
+                    type="button"
+                    disabled={uploading || previewDone}
+                    onClick={() => fileInputRef.current?.click()}
+                    onDragOver={(e) => {
+                      e.preventDefault()
+                      if (!uploading && !previewDone) setIsDragging(true)
+                    }}
+                    onDragLeave={() => setIsDragging(false)}
+                    onDrop={handleDrop}
+                    className={`group flex w-full flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed p-8 transition-all
+                      ${isDragging
+                        ? "border-primary bg-primary/5 scale-[1.01]"
+                        : "border-muted-foreground/30 hover:border-primary/60 hover:bg-muted/50"}
+                      ${uploading || previewDone ? "cursor-not-allowed opacity-50" : "cursor-pointer"}
+                    `}
+                  >
+                    <Upload className={`h-8 w-8 transition-transform ${isDragging ? "-translate-y-1 text-primary" : "text-muted-foreground group-hover:-translate-y-0.5 group-hover:text-primary"}`} />
+                    <span className="text-sm font-medium">
+                      {isDragging ? "놓으면 업로드 시작" : "클릭 또는 파일을 드래그하세요"}
+                    </span>
+                    <span className="text-xs text-muted-foreground">.xlsm / .xlsx / .xls</span>
+                  </button>
+                ) : (
+                  <div className="flex items-center gap-3 rounded-lg border border-primary/30 bg-primary/5 p-3">
+                    <FileSpreadsheet className="h-8 w-8 text-primary shrink-0" />
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-medium">{uploadFile.name}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {uploading
+                          ? "검증 중..."
+                          : `${(uploadFile.size / 1024).toLocaleString(undefined, { maximumFractionDigits: 1 })} KB`}
+                      </p>
+                    </div>
+                    {!uploading && (
+                      <Button
+                        size="icon-sm"
+                        variant="ghost"
+                        onClick={handleClearFile}
+                        aria-label="파일 제거"
+                      >
+                        <X />
+                      </Button>
+                    )}
+                  </div>
+                )}
+              </div>
 
               {uploadResult && (
                 <div className="space-y-2">
@@ -418,7 +488,6 @@ export default function MyReviewsPage() {
                         {reviewChanges.length > 0 && (
                           <div className="rounded-md p-3 text-sm bg-green-50 text-green-900">
                             <p className="font-medium">검토서 단계 변경</p>
-                            <p className="text-xs mb-1 text-green-700">→ review_stages 테이블에 저장됩니다</p>
                             <ul className="mt-1 list-disc pl-4 space-y-1">
                               {reviewChanges.map((c, i) => (
                                 <li key={i}>{c.label}: {c.old_value} → {c.new_value}</li>
@@ -429,7 +498,6 @@ export default function MyReviewsPage() {
                         {buildingChanges.length > 0 && (
                           <div className="rounded-md p-3 text-sm bg-blue-50 text-blue-800">
                             <p className="font-medium">건축물 정보 변경 내역</p>
-                            <p className="text-xs mb-1 text-blue-600">→ buildings 테이블에 저장됩니다</p>
                             <ul className="mt-1 list-disc pl-4 space-y-1">
                               {buildingChanges.map((c, i) => (
                                 <li key={i}>{c.label}: {c.old_value} → {c.new_value}</li>
@@ -440,7 +508,6 @@ export default function MyReviewsPage() {
                         {referenceChanges.length > 0 && (
                           <div className="rounded-md p-3 text-sm bg-amber-50 text-amber-900 border border-amber-200">
                             <p className="font-medium">참고 비교 (DB 미반영)</p>
-                            <p className="text-xs mb-1 text-amber-700">→ 값 차이를 참고용으로만 표시하며 실제로는 저장/변경되지 않습니다</p>
                             <ul className="mt-1 list-disc pl-4 space-y-1">
                               {referenceChanges.map((c, i) => (
                                 <li key={i}>{c.label}: {c.old_value} → {c.new_value}</li>
