@@ -34,10 +34,6 @@ const RESULT_VARIANT: Record<string, "default" | "secondary" | "destructive" | "
   pass: "default",
   simple_error: "secondary",
   recalculate: "destructive",
-  // 레거시
-  supplement: "secondary",
-  fail: "destructive",
-  minor: "outline",
 }
 
 export default function BuildingsPage() {

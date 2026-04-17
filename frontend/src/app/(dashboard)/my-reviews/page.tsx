@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label"
 import {
   Dialog,
   DialogContent,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
@@ -28,11 +29,17 @@ const RESULT_VARIANT: Record<string, "default" | "secondary" | "destructive" | "
   pass: "default",
   simple_error: "secondary",
   recalculate: "destructive",
-  // 레거시
-  supplement: "secondary",
-  fail: "destructive",
-  minor: "outline",
 }
+
+// 이미 검토서가 제출된 단계 (재업로드 경고 대상)
+const SUBMITTED_PHASES = new Set([
+  "preliminary",
+  "supplement_1",
+  "supplement_2",
+  "supplement_3",
+  "supplement_4",
+  "supplement_5",
+])
 
 interface FieldChange {
   field: string
@@ -62,6 +69,7 @@ export default function MyReviewsPage() {
   const [uploadResult, setUploadResult] = useState<UploadResult | null>(null)
   const [previewDone, setPreviewDone] = useState(false)
   const [inappropriateReviewNeeded, setInappropriateReviewNeeded] = useState(false)
+  const [reuploadConfirmOpen, setReuploadConfirmOpen] = useState(false)
 
   // 문의 사유 다이얼로그
   const [reasonTarget, setReasonTarget] = useState<Building | null>(null)
@@ -139,6 +147,18 @@ export default function MyReviewsPage() {
       setUploading(false)
       e.target.value = ""
     }
+  }
+
+  // 업로드 버튼 클릭 핸들러 — 재업로드 확인 다이얼로그 체크
+  const handleUploadClick = () => {
+    if (!uploadTarget) return
+    const isReupload =
+      uploadTarget.current_phase && SUBMITTED_PHASES.has(uploadTarget.current_phase)
+    if (isReupload) {
+      setReuploadConfirmOpen(true)
+      return
+    }
+    handleConfirmUpload()
   }
 
   // 2단계: 확인 후 업로드
@@ -388,7 +408,7 @@ export default function MyReviewsPage() {
                   {/* 업로드/취소 버튼 (미리보기 성공 시) */}
                   {previewDone && (
                     <div className="flex gap-2">
-                      <Button onClick={handleConfirmUpload} loading={uploading} loadingText="업로드 중..." className="flex-1">
+                      <Button onClick={handleUploadClick} loading={uploading} loadingText="업로드 중..." className="flex-1">
                         업로드
                       </Button>
                       <Button variant="outline" onClick={handleCancelUpload} disabled={uploading} className="flex-1">
@@ -435,6 +455,32 @@ export default function MyReviewsPage() {
               </Button>
             </div>
           )}
+        </DialogContent>
+      </Dialog>
+
+      {/* 재업로드 확인 다이얼로그 */}
+      <Dialog open={reuploadConfirmOpen} onOpenChange={setReuploadConfirmOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>재업로드 확인</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-2 text-sm">
+            <p>현재 <strong>제출된 상태</strong>입니다. 다시 검토서를 업로드하시겠습니까?</p>
+            <p className="text-red-600">기존 검토서는 삭제됩니다.</p>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setReuploadConfirmOpen(false)}>
+              아니오
+            </Button>
+            <Button
+              onClick={() => {
+                setReuploadConfirmOpen(false)
+                handleConfirmUpload()
+              }}
+            >
+              예
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

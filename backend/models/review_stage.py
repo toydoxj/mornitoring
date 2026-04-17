@@ -20,11 +20,8 @@ class PhaseType(str, enum.Enum):
 
 class ResultType(str, enum.Enum):
     PASS = "pass"                      # 적합
-    SIMPLE_ERROR = "simple_error"      # 단순오류 (신규, 완료로 간주)
-    RECALCULATE = "recalculate"        # 재계산 (신규, 보완 필요)
-    SUPPLEMENT = "supplement"          # 보완 (레거시)
-    FAIL = "fail"                      # 부적합 (레거시)
-    MINOR = "minor"                    # 경미 (레거시)
+    SIMPLE_ERROR = "simple_error"      # 단순오류
+    RECALCULATE = "recalculate"        # 재계산
 
 
 class ReviewStage(Base):

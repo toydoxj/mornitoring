@@ -254,7 +254,9 @@ async def upload_review(
         )
 
         if stage:
-            # 기존 단계 업데이트
+            # 기존 단계 업데이트 (재업로드)
+            # 새 파일 업로드 전에 기존 S3 파일 삭제 (날짜 경로가 다르면 orphan 방지)
+            old_s3_key = stage.s3_file_key
             stage.report_submitted_at = date.today()
             stage.reviewer_name = current_user.name
             if extracted["result"]:
@@ -268,7 +270,13 @@ async def upload_review(
             if extracted["review_opinion"]:
                 stage.review_opinion = extracted["review_opinion"]
             stage.inappropriate_review_needed = inappropriate_review_needed
-            stage.s3_file_key = upload_review_file(tmp_path, mgmt_no, actual_phase, file.filename)
+            new_s3_key = upload_review_file(tmp_path, mgmt_no, actual_phase, file.filename)
+            stage.s3_file_key = new_s3_key
+            if old_s3_key and old_s3_key != new_s3_key:
+                try:
+                    delete_file(old_s3_key)
+                except Exception:
+                    pass  # 이전 파일 삭제 실패는 무시 (이미 없거나 권한 이슈)
         else:
             # 새 단계 생성
             stage = ReviewStage(

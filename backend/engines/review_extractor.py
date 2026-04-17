@@ -17,14 +17,13 @@ from openpyxl import load_workbook
 from models.review_stage import ResultType
 
 RESULT_MAP = {
-    # 현행 3체계
     "적합": ResultType.PASS,
     "단순오류": ResultType.SIMPLE_ERROR,
     "재계산": ResultType.RECALCULATE,
-    # 레거시 (기존 엑셀 호환)
-    "보완": ResultType.SUPPLEMENT,
-    "부적합": ResultType.FAIL,
-    "경미": ResultType.MINOR,
+    # 레거시 엑셀 호환: 동일 의미로 매핑
+    "보완": ResultType.RECALCULATE,
+    "부적합": ResultType.RECALCULATE,
+    "경미": ResultType.SIMPLE_ERROR,
 }
 
 
