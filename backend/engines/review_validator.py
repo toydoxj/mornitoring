@@ -107,6 +107,7 @@ def validate_review_file(
     filename: str,
     expected_mgmt_no: str | None,
     submitter_name: str,
+    expected_phase: str | None = None,
 ) -> ValidationResult:
     """검토서 파일 유효성 검증
 
@@ -116,7 +117,10 @@ def validate_review_file(
     3. 검토위원 일치 (로그인 사용자 vs F4)
     4. 적정성 검토 결과가 "적합"이면 부적합유형1은 "적합", 나머지 빈칸
     5. 적정성 검토 결과에 내용이 있는데 부적합유형이 "적합" 또는 비어있는 경우
-    6. 예비검토: 절차 = "1차 적정성 검토", 시트명 = "검토서(1차)" 또는 "검토서 (1차)"
+    6. 차수 라벨 검증 (시트명 + 절차 C5)
+       - expected_phase=preliminary → "1차 적정성 검토" / "검토서(1차)"
+       - expected_phase=supplement_1~5 → "2차 적정성 검토" / "검토서(2차)"
+       (보완검토는 몇 차 보완이든 모두 "2차" 라벨 사용)
     7. 시트가 2개 이상이면 안됨
     """
     result = ValidationResult()
@@ -181,22 +185,44 @@ def validate_review_file(
             f"로그인 사용자({submitter_name})와 일치하지 않습니다."
         )
 
-    # 6, 7. 절차 (C5) 및 시트명 검증
+    # 6. 절차 (C5) 및 시트명 검증 — expected_phase에 맞춰 차수 검증
+    #   예비검토(preliminary)        → "1차 적정성 검토" / "검토서(1차)"
+    #   보완검토(supplement_1..5)    → "2차 적정성 검토" / "검토서(2차)"  (보완은 차수 무관 동일)
     procedure = _cell_str(ws, "C5")
 
-    # expected_mgmt_no가 있으면 phase 정보로 검증 (없으면 시트명으로 추정)
-    if "1차" in sheet_name or "1차" in procedure:
-        # 예비검토
-        if procedure and "1차" not in procedure:
-            result.add_error(f"예비검토인데 절차(C5)가 '{procedure}'입니다. '1차 적정성 검토'여야 합니다.")
-        if "1차" not in sheet_name:
-            result.add_error(f"예비검토인데 시트명이 '{sheet_name}'입니다. '검토서(1차)' 형식이어야 합니다.")
-    elif "2차" in sheet_name or "2차" in procedure:
-        # 보완검토
-        if procedure and "2차" not in procedure:
-            result.add_error(f"보완검토인데 절차(C5)가 '{procedure}'입니다. '2차 적정성 검토'여야 합니다.")
-        if "2차" not in sheet_name:
-            result.add_error(f"보완검토인데 시트명이 '{sheet_name}'입니다. '검토서(2차)' 형식이어야 합니다.")
+    if expected_phase == "preliminary":
+        expected_round = "1차"
+        round_label = "예비검토"
+    elif expected_phase and expected_phase.startswith("supplement_"):
+        expected_round = "2차"
+        round_label = "보완검토"
+    else:
+        expected_round = None
+        round_label = None
+
+    if expected_round:
+        if procedure and expected_round not in procedure:
+            result.add_error(
+                f"{round_label} 업로드인데 절차(C5)가 '{procedure}'입니다. "
+                f"'{expected_round} 적정성 검토'여야 합니다."
+            )
+        if expected_round not in sheet_name:
+            result.add_error(
+                f"{round_label} 업로드인데 시트명이 '{sheet_name}'입니다. "
+                f"'검토서({expected_round})' 형식이어야 합니다."
+            )
+    else:
+        # phase 정보 없으면 기존 휴리스틱 (1차/2차 라벨 기반)
+        if "1차" in sheet_name or "1차" in procedure:
+            if procedure and "1차" not in procedure:
+                result.add_error(f"예비검토인데 절차(C5)가 '{procedure}'입니다.")
+            if "1차" not in sheet_name:
+                result.add_error(f"예비검토인데 시트명이 '{sheet_name}'입니다.")
+        elif "2차" in sheet_name or "2차" in procedure:
+            if procedure and "2차" not in procedure:
+                result.add_error(f"보완검토인데 절차(C5)가 '{procedure}'입니다.")
+            if "2차" not in sheet_name:
+                result.add_error(f"보완검토인데 시트명이 '{sheet_name}'입니다.")
 
     # 적정성 검토 결과 행 찾기
     result_row = _find_result_row(ws)

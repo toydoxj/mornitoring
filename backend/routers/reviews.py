@@ -102,9 +102,21 @@ async def preview_upload(
         tmp_path = Path(tmp.name)
 
     try:
+        # 업로드 단계 매핑 (receive → submit)
+        RECEIVED_TO_SUBMIT = {
+            "doc_received": "preliminary",
+            "supplement_1_received": "supplement_1",
+            "supplement_2_received": "supplement_2",
+            "supplement_3_received": "supplement_3",
+            "supplement_4_received": "supplement_4",
+            "supplement_5_received": "supplement_5",
+        }
+        target_phase = RECEIVED_TO_SUBMIT.get(phase, phase)
+
         validation = validate_review_file(
             file_path=tmp_path, filename=file.filename,
             expected_mgmt_no=mgmt_no, submitter_name=current_user.name,
+            expected_phase=target_phase,
         )
 
         if not validation.is_valid:
@@ -118,16 +130,7 @@ async def preview_upload(
         review_info = extract_review_data(tmp_path)
         extracted_result = review_info.get("result")
         if extracted_result:
-            # 업로드 단계 매핑 (receive → submit)
-            RECEIVED_TO_SUBMIT = {
-                "doc_received": "preliminary",
-                "supplement_1_received": "supplement_1",
-                "supplement_2_received": "supplement_2",
-                "supplement_3_received": "supplement_3",
-                "supplement_4_received": "supplement_4",
-                "supplement_5_received": "supplement_5",
-            }
-            actual_phase = RECEIVED_TO_SUBMIT.get(phase, phase)
+            actual_phase = target_phase
             try:
                 phase_type = PhaseType(actual_phase)
                 result_change = _detect_result_change(
@@ -289,25 +292,7 @@ async def upload_review(
         tmp_path = Path(tmp.name)
 
     try:
-        # 1. 유효성 검증
-        validation = validate_review_file(
-            file_path=tmp_path,
-            filename=file.filename,
-            expected_mgmt_no=mgmt_no,
-            submitter_name=current_user.name,
-        )
-
-        if not validation.is_valid:
-            return UploadResponse(
-                success=False,
-                message="유효성 검증 실패",
-                errors=validation.errors,
-            )
-
-        # 2. 검토서 내용 추출
-        extracted = extract_review_data(tmp_path)
-
-        # 3. PhaseType 변환 (접수 단계는 검토서 제출 단계로 매핑)
+        # 1. PhaseType 변환 (접수 단계 → 검토서 제출 단계)
         RECEIVED_TO_SUBMIT = {
             "doc_received": "preliminary",
             "supplement_1_received": "supplement_1",
@@ -317,6 +302,25 @@ async def upload_review(
             "supplement_5_received": "supplement_5",
         }
         actual_phase = RECEIVED_TO_SUBMIT.get(phase, phase)
+
+        # 2. 유효성 검증 (expected_phase 기준으로 차수 라벨 체크)
+        validation = validate_review_file(
+            file_path=tmp_path,
+            filename=file.filename,
+            expected_mgmt_no=mgmt_no,
+            submitter_name=current_user.name,
+            expected_phase=actual_phase,
+        )
+
+        if not validation.is_valid:
+            return UploadResponse(
+                success=False,
+                message="유효성 검증 실패",
+                errors=validation.errors,
+            )
+
+        # 3. 검토서 내용 추출
+        extracted = extract_review_data(tmp_path)
         try:
             phase_type = PhaseType(actual_phase)
         except ValueError:
