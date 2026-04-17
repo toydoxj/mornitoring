@@ -48,7 +48,7 @@ export default function MyReviewsPage() {
   const [uploading, setUploading] = useState(false)
   const [uploadResult, setUploadResult] = useState<UploadResult | null>(null)
 
-  // 미제출 사유 다이얼로그
+  // 문의 사유 다이얼로그
   const [reasonTarget, setReasonTarget] = useState<Building | null>(null)
   const [reasonText, setReasonText] = useState("")
   const [reasonSubmitting, setReasonSubmitting] = useState(false)
@@ -82,7 +82,7 @@ export default function MyReviewsPage() {
       })
       setReasonTarget(null)
       setReasonText("")
-      alert("미제출 사유가 저장되었습니다")
+      alert("문의 사유가 저장되었습니다")
     } catch {
       alert("저장 실패")
     } finally {
@@ -209,7 +209,7 @@ export default function MyReviewsPage() {
                         setReasonText("")
                       }}
                     >
-                      미제출
+                      문의
                     </Button>
                     </div>
                   </TableCell>
@@ -272,11 +272,11 @@ export default function MyReviewsPage() {
         </DialogContent>
       </Dialog>
 
-      {/* 미제출 사유 다이얼로그 */}
+      {/* 문의 사유 다이얼로그 */}
       <Dialog open={!!reasonTarget} onOpenChange={(open) => !open && setReasonTarget(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>검토서 미제출 사유</DialogTitle>
+            <DialogTitle>검토서 문의 사유</DialogTitle>
           </DialogHeader>
           {reasonTarget && (
             <div className="space-y-4">
@@ -285,10 +285,10 @@ export default function MyReviewsPage() {
                 <p>건물명: {reasonTarget.building_name || "-"}</p>
               </div>
               <div className="space-y-2">
-                <Label>미제출 사유</Label>
+                <Label>문의 사유</Label>
                 <textarea
                   className="w-full min-h-[100px] rounded-md border px-3 py-2 text-sm"
-                  placeholder="검토서를 제출하지 못한 사유를 입력해주세요"
+                  placeholder="문의 내용을 입력해주세요"
                   value={reasonText}
                   onChange={(e) => setReasonText(e.target.value)}
                 />
