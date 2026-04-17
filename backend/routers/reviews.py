@@ -230,6 +230,42 @@ def save_not_submitted_reason(
     return {"message": "미제출 사유가 저장되었습니다"}
 
 
+@router.get("/inquiries")
+def list_inquiries(
+    page: int = Query(1, ge=1),
+    size: int = Query(50, ge=1, le=200),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(
+        require_roles(UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY, UserRole.SECRETARY)
+    ),
+):
+    """문의사항 목록 조회 (팀장/총괄간사/간사)"""
+    query = (
+        db.query(ReviewStage, Building)
+        .join(Building, ReviewStage.building_id == Building.id)
+        .filter(ReviewStage.stage_remarks.isnot(None))
+        .filter(ReviewStage.stage_remarks != "")
+        .order_by(ReviewStage.updated_at.desc())
+    )
+
+    total = query.count()
+    items = query.offset((page - 1) * size).limit(size).all()
+
+    result = []
+    for stage, building in items:
+        result.append({
+            "id": stage.id,
+            "mgmt_no": building.mgmt_no,
+            "building_name": building.building_name,
+            "reviewer_name": stage.reviewer_name or building.assigned_reviewer_name,
+            "phase": stage.phase.value if stage.phase else "",
+            "inquiry": stage.stage_remarks,
+            "created_at": str(stage.updated_at or stage.created_at),
+        })
+
+    return {"items": result, "total": total}
+
+
 @router.get("/download/{stage_id}")
 def download_review(
     stage_id: int,
