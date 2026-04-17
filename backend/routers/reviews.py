@@ -285,7 +285,7 @@ def list_inquiries(
     return {"items": result, "total": total}
 
 
-@router.get("/inquiries/{mgmt_no}")
+@router.get("/building-inquiries/{mgmt_no}")
 def get_building_inquiries(
     mgmt_no: str,
     db: Session = Depends(get_db),

@@ -51,7 +51,7 @@ export default function BuildingDetailPage() {
 
         // 문의사항 조회
         try {
-          const { data: inqData } = await apiClient.get(`/api/reviews/inquiries/${buildingRes.data.mgmt_no}`)
+          const { data: inqData } = await apiClient.get(`/api/reviews/building-inquiries/${buildingRes.data.mgmt_no}`)
           setInquiries(inqData)
         } catch { /* 문의 없음 */ }
       } catch {
@@ -89,7 +89,7 @@ export default function BuildingDetailPage() {
       })
       setNewInquiry("")
       // 문의 새로고침
-      const { data: inqData } = await apiClient.get(`/api/reviews/inquiries/${building.mgmt_no}`)
+      const { data: inqData } = await apiClient.get(`/api/reviews/building-inquiries/${building.mgmt_no}`)
       setInquiries(inqData)
     } catch {
       alert("문의 등록 실패")
