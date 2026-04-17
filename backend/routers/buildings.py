@@ -171,7 +171,11 @@ def get_stats(
             sa_func.count(Building.id).filter(Building.final_result.isnot(None)).label("completed"),
             sa_func.sum(sa_func.coalesce(Building.gross_area, 0)).label("total_area"),
             sa_func.count(Building.id).filter(Building.gross_area >= 1000).label("area_over_1000"),
-            sa_func.count(Building.id).filter(Building.high_risk_type.isnot(None)).label("high_risk"),
+            sa_func.count(Building.id).filter(
+                (Building.is_special_structure == True) |
+                (Building.is_high_rise == True) |
+                (Building.is_multi_use == True)
+            ).label("high_risk"),
         )
         .filter(Building.assigned_reviewer_name.isnot(None))
         .group_by(Building.assigned_reviewer_name)
