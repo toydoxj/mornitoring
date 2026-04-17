@@ -119,10 +119,10 @@ def validate_review_file(
     """
     result = ValidationResult()
 
-    # 1. 파일 확장자 검증
+    # 1. 파일 확장자 검증 — .xlsm만 허용
     suffix = Path(filename).suffix.lower()
-    if suffix not in (".xlsm", ".xlsx", ".xls"):
-        result.add_error(f"지원하지 않는 파일 형식입니다: {suffix} (xlsm만 가능)")
+    if suffix != ".xlsm":
+        result.add_error(f"지원하지 않는 파일 형식입니다: {suffix} (.xlsm 파일만 업로드할 수 있습니다)")
         return result
 
     # 파일명 관리번호 확인

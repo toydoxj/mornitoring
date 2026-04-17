@@ -151,9 +151,17 @@ export default function MyReviewsPage() {
     }
   }
 
+  const validateExtension = (file: File): boolean => {
+    if (!file.name.toLowerCase().endsWith(".xlsm")) {
+      alert(".xlsm 파일만 업로드할 수 있습니다.")
+      return false
+    }
+    return true
+  }
+
   const handleFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
-    if (file) processFile(file)
+    if (file && validateExtension(file)) processFile(file)
   }
 
   const handleDrop = (e: React.DragEvent<HTMLElement>) => {
@@ -161,7 +169,7 @@ export default function MyReviewsPage() {
     setIsDragging(false)
     if (uploading || previewDone) return
     const file = e.dataTransfer.files?.[0]
-    if (file) processFile(file)
+    if (file && validateExtension(file)) processFile(file)
   }
 
   const handleClearFile = () => {
@@ -391,7 +399,7 @@ export default function MyReviewsPage() {
 
               <div className="space-y-2">
                 <p className="text-sm text-muted-foreground">
-                  검토서 파일(.xlsm/.xlsx)을 선택하거나 드래그해주세요.
+                  검토서 파일(.xlsm)을 선택하거나 드래그해주세요.
                   파일명은 관리번호로 시작해야 합니다.
                 </p>
 
@@ -399,7 +407,7 @@ export default function MyReviewsPage() {
                 <input
                   ref={fileInputRef}
                   type="file"
-                  accept=".xlsm,.xlsx,.xls"
+                  accept=".xlsm"
                   onChange={handleFileInputChange}
                   disabled={uploading || previewDone}
                   className="hidden"
@@ -428,7 +436,7 @@ export default function MyReviewsPage() {
                     <span className="text-sm font-medium">
                       {isDragging ? "놓으면 업로드 시작" : "클릭 또는 파일을 드래그하세요"}
                     </span>
-                    <span className="text-xs text-muted-foreground">.xlsm / .xlsx / .xls</span>
+                    <span className="text-xs text-muted-foreground">.xlsm 파일만 가능</span>
                   </button>
                 ) : (
                   <div className="flex items-center gap-3 rounded-lg border border-primary/30 bg-primary/5 p-3">
