@@ -53,7 +53,10 @@ class UserResponse(BaseModel):
     role: UserRole
     phone: str | None = None
     is_active: bool
-    kakao_linked: bool = False
+    # 카카오 상태
+    kakao_linked: bool = False        # 카카오 로그인 완료(kakao_id 존재)
+    kakao_matched: bool = False       # 친구 매칭 완료(kakao_uuid 존재)
+    kakao_uuid: str | None = None
 
     model_config = {"from_attributes": True}
 
@@ -87,6 +90,8 @@ def list_users(
             id=u.id, name=u.name, email=u.email, role=u.role,
             phone=u.phone, is_active=u.is_active,
             kakao_linked=bool(u.kakao_id),
+            kakao_matched=bool(u.kakao_uuid),
+            kakao_uuid=u.kakao_uuid,
         )
         for u in users
     ]

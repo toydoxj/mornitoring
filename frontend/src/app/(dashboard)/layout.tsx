@@ -22,7 +22,6 @@ const NAV_ITEMS = [
   { href: "/inquiries", label: "문의사항", roles: ["team_leader", "chief_secretary", "secretary"] },
   { href: "/inappropriate-review", label: "부적합 검토", roles: ["team_leader", "chief_secretary", "secretary"] },
   { href: "/notifications", label: "알림 현황", roles: ["team_leader", "chief_secretary"] },
-  { href: "/kakao-match", label: "카카오 매칭", roles: ["team_leader", "chief_secretary"] },
   { href: "/admin", label: "사용자 관리", roles: ["team_leader", "chief_secretary"] },
 ] as const
 
