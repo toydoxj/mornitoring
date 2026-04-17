@@ -16,6 +16,7 @@ const SCOPE_CHECK_FLAG = "kakao_scope_checked"
 const NAV_ITEMS = [
   { href: "/dashboard", label: "대시보드", roles: ["team_leader", "chief_secretary", "secretary", "reviewer"] },
   { href: "/announcements", label: "공지사항", roles: ["team_leader", "chief_secretary", "secretary", "reviewer"] },
+  { href: "/discussions", label: "토론방", roles: ["team_leader", "chief_secretary", "secretary", "reviewer"] },
   { href: "/buildings", label: "통합관리대장", roles: ["team_leader", "chief_secretary", "secretary"] },
   { href: "/distribution", label: "도서접수/배포", roles: ["team_leader", "chief_secretary"] },
   { href: "/my-reviews", label: "내 검토 대상", roles: ["chief_secretary", "secretary", "reviewer"] },

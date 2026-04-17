@@ -23,9 +23,8 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import apiClient from "@/lib/api/client"
-import { useAuthStore } from "@/stores/authStore"
 
-interface Announcement {
+interface Discussion {
   id: number
   author_id: number
   author_name: string
@@ -37,17 +36,14 @@ interface Announcement {
 }
 
 interface ListResponse {
-  items: Announcement[]
+  items: Discussion[]
   total: number
 }
 
-export default function AnnouncementsPage() {
+export default function DiscussionsPage() {
   const router = useRouter()
-  const user = useAuthStore((s) => s.user)
-  const canWrite =
-    user && ["team_leader", "chief_secretary", "secretary"].includes(user.role)
 
-  const [items, setItems] = useState<Announcement[]>([])
+  const [items, setItems] = useState<Discussion[]>([])
   const [total, setTotal] = useState(0)
   const [isLoading, setIsLoading] = useState(true)
   const [writeOpen, setWriteOpen] = useState(false)
@@ -60,13 +56,13 @@ export default function AnnouncementsPage() {
   const fetchData = async () => {
     setIsLoading(true)
     try {
-      const { data } = await apiClient.get<ListResponse>("/api/announcements", {
+      const { data } = await apiClient.get<ListResponse>("/api/discussions", {
         params: { size: 50 },
       })
       setItems(data.items)
       setTotal(data.total)
     } catch (err) {
-      console.error("공지사항 조회 실패:", err)
+      console.error("토론방 조회 실패:", err)
     } finally {
       setIsLoading(false)
     }
@@ -81,16 +77,15 @@ export default function AnnouncementsPage() {
     setSubmitting(true)
     try {
       const { data } = await apiClient.post<{ id: number }>(
-        "/api/announcements",
+        "/api/discussions",
         { title, content }
       )
-      // 첨부파일 순차 업로드
       for (const file of pendingFiles) {
         const formData = new FormData()
         formData.append("file", file)
         try {
           await apiClient.post(
-            `/api/announcements/${data.id}/attachments`,
+            `/api/discussions/${data.id}/attachments`,
             formData,
             { headers: { "Content-Type": "multipart/form-data" } }
           )
@@ -127,12 +122,10 @@ export default function AnnouncementsPage() {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold">공지사항</h1>
-          <p className="text-sm text-muted-foreground">총 {total}건</p>
+          <h1 className="text-2xl font-bold">토론방</h1>
+          <p className="text-sm text-muted-foreground">총 {total}건 · 누구나 글을 쓸 수 있습니다</p>
         </div>
-        {canWrite && (
-          <Button onClick={() => setWriteOpen(true)}>새 공지 작성</Button>
-        )}
+        <Button onClick={() => setWriteOpen(true)}>새 글 작성</Button>
       </div>
 
       <div className="rounded-md border bg-white">
@@ -156,25 +149,25 @@ export default function AnnouncementsPage() {
             ) : items.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={5} className="h-32 text-center text-muted-foreground">
-                  등록된 공지사항이 없습니다
+                  등록된 글이 없습니다
                 </TableCell>
               </TableRow>
             ) : (
-              items.map((a) => (
+              items.map((d) => (
                 <TableRow
-                  key={a.id}
+                  key={d.id}
                   className="cursor-pointer hover:bg-muted/30"
-                  onClick={() => router.push(`/announcements/${a.id}`)}
+                  onClick={() => router.push(`/discussions/${d.id}`)}
                 >
-                  <TableCell className="text-center">{a.id}</TableCell>
-                  <TableCell className="font-medium">{a.title}</TableCell>
-                  <TableCell className="text-center text-sm">{a.author_name}</TableCell>
+                  <TableCell className="text-center">{d.id}</TableCell>
+                  <TableCell className="font-medium">{d.title}</TableCell>
+                  <TableCell className="text-center text-sm">{d.author_name}</TableCell>
                   <TableCell className="text-center text-sm text-muted-foreground">
-                    {new Date(a.created_at).toLocaleDateString("ko-KR")}
+                    {new Date(d.created_at).toLocaleDateString("ko-KR")}
                   </TableCell>
                   <TableCell className="text-center">
-                    {a.comment_count > 0 ? (
-                      <Badge variant="secondary">{a.comment_count}</Badge>
+                    {d.comment_count > 0 ? (
+                      <Badge variant="secondary">{d.comment_count}</Badge>
                     ) : (
                       <span className="text-muted-foreground">-</span>
                     )}
@@ -186,11 +179,11 @@ export default function AnnouncementsPage() {
         </Table>
       </div>
 
-      {/* 공지 작성 다이얼로그 */}
+      {/* 글 작성 다이얼로그 */}
       <Dialog open={writeOpen} onOpenChange={setWriteOpen}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>새 공지사항 작성</DialogTitle>
+            <DialogTitle>새 글 작성</DialogTitle>
           </DialogHeader>
           <div className="space-y-3">
             <div className="space-y-2">
@@ -207,10 +200,9 @@ export default function AnnouncementsPage() {
                 className="w-full min-h-[200px] rounded-md border px-3 py-2 text-sm"
                 value={content}
                 onChange={(e) => setContent(e.target.value)}
-                placeholder="공지 내용을 입력하세요"
+                placeholder="내용을 입력하세요"
               />
             </div>
-
             <div className="space-y-2">
               <Label>첨부파일 (선택)</Label>
               <input

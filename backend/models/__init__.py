@@ -7,6 +7,7 @@ from models.audit_log import AuditLog
 from models.inquiry import Inquiry
 from models.inappropriate_note import InappropriateNote
 from models.announcement import Announcement, AnnouncementComment, AnnouncementAttachment
+from models.discussion import Discussion, DiscussionComment, DiscussionAttachment
 
 __all__ = [
     "User",
@@ -20,4 +21,7 @@ __all__ = [
     "Announcement",
     "AnnouncementComment",
     "AnnouncementAttachment",
+    "Discussion",
+    "DiscussionComment",
+    "DiscussionAttachment",
 ]

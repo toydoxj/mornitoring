@@ -59,7 +59,7 @@ interface MyStats {
 
 const ELAPSED_ORDER = ["1일", "2일", "3일", "4일", "5일", "6일", "7일", "1주", "2주이상"] as const
 
-interface AnnouncementItem {
+interface PostItem {
   id: number
   author_name: string
   title: string
@@ -78,6 +78,22 @@ interface NotificationItem {
   error_message: string | null
 }
 
+interface MyInquiryItem {
+  id: number
+  mgmt_no: string
+  content: string
+  reply: string | null
+  status: string
+  created_at: string
+}
+
+const INQUIRY_STATUS_LABELS: Record<string, string> = {
+  open: "접수",
+  asking_agency: "관리원문의중",
+  completed: "완료",
+  next_phase: "다음단계",
+}
+
 const TEMPLATE_LABELS: Record<string, string> = {
   doc_received: "도서 접수",
   review_request: "검토 요청",
@@ -89,8 +105,10 @@ export default function DashboardPage() {
   const user = useAuthStore((s) => s.user)
   const [stats, setStats] = useState<DashboardStats | null>(null)
   const [myStats, setMyStats] = useState<MyStats | null>(null)
-  const [announcements, setAnnouncements] = useState<AnnouncementItem[]>([])
+  const [announcements, setAnnouncements] = useState<PostItem[]>([])
+  const [discussions, setDiscussions] = useState<PostItem[]>([])
   const [notifications, setNotifications] = useState<NotificationItem[]>([])
+  const [myInquiries, setMyInquiries] = useState<MyInquiryItem[]>([])
   const [isLoading, setIsLoading] = useState(true)
 
   const isAdmin = user && ["team_leader", "chief_secretary", "secretary"].includes(user.role)
@@ -106,13 +124,24 @@ export default function DashboardPage() {
 
       // 공지사항 최신 5건
       try {
-        const { data } = await apiClient.get<{ items: AnnouncementItem[] }>(
+        const { data } = await apiClient.get<{ items: PostItem[] }>(
           "/api/announcements",
           { params: { size: 5 } }
         )
         setAnnouncements(data.items)
       } catch (err) {
         console.error("공지사항 조회 실패:", err)
+      }
+
+      // 토론방 최신 5건
+      try {
+        const { data } = await apiClient.get<{ items: PostItem[] }>(
+          "/api/discussions",
+          { params: { size: 5 } }
+        )
+        setDiscussions(data.items)
+      } catch (err) {
+        console.error("토론방 조회 실패:", err)
       }
 
       // 내가 받은 카톡 알림 최신 5건 (모든 로그인 사용자)
@@ -124,6 +153,17 @@ export default function DashboardPage() {
         setNotifications(data.items)
       } catch (err) {
         console.error("내 알림 조회 실패:", err)
+      }
+
+      // 나의 문의사항 최신 5건
+      try {
+        const { data } = await apiClient.get<{ items: MyInquiryItem[] }>(
+          "/api/reviews/my-inquiries",
+          { params: { size: 5 } }
+        )
+        setMyInquiries(data.items)
+      } catch (err) {
+        console.error("내 문의사항 조회 실패:", err)
       }
 
       // 간사 이상만 전체 통계
@@ -153,7 +193,7 @@ export default function DashboardPage() {
         </p>
       </div>
 
-      {/* 상단 위젯 — 공지사항 / 카톡 알림 */}
+      {/* 상단 위젯 — 공지사항 / 카톡 알림 / 토론방 / 나의 문의사항 */}
       <div className="grid gap-4 md:grid-cols-2">
         {/* 공지사항 */}
         <Card>
@@ -220,6 +260,86 @@ export default function DashboardPage() {
                   )}
                   <p className="mt-1 text-xs text-muted-foreground">
                     {new Date(n.sent_at ?? n.created_at).toLocaleString("ko-KR")}
+                  </p>
+                </div>
+              ))
+            )}
+          </CardContent>
+        </Card>
+
+        {/* 토론방 */}
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between pb-3">
+            <CardTitle className="text-base">토론방</CardTitle>
+            <button
+              className="text-xs text-primary hover:underline"
+              onClick={() => router.push("/discussions")}
+            >
+              전체 보기 →
+            </button>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            {discussions.length === 0 ? (
+              <p className="text-sm text-muted-foreground py-2">등록된 글이 없습니다.</p>
+            ) : (
+              discussions.map((d) => (
+                <div
+                  key={d.id}
+                  className="flex items-center justify-between gap-2 rounded-md border p-2 cursor-pointer hover:bg-muted/30"
+                  onClick={() => router.push(`/discussions/${d.id}`)}
+                >
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-medium">{d.title}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {d.author_name} · {new Date(d.created_at).toLocaleDateString("ko-KR")}
+                    </p>
+                  </div>
+                  {d.comment_count > 0 && (
+                    <Badge variant="secondary" className="text-xs shrink-0">
+                      💬 {d.comment_count}
+                    </Badge>
+                  )}
+                </div>
+              ))
+            )}
+          </CardContent>
+        </Card>
+
+        {/* 나의 문의사항 */}
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between pb-3">
+            <CardTitle className="text-base">나의 문의사항</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            {myInquiries.length === 0 ? (
+              <p className="text-sm text-muted-foreground py-2">작성한 문의가 없습니다.</p>
+            ) : (
+              myInquiries.map((q) => (
+                <div
+                  key={q.id}
+                  className="rounded-md border p-2 cursor-pointer hover:bg-muted/30"
+                  onClick={() =>
+                    router.push(`/buildings?mgmt_no=${q.mgmt_no}`)
+                  }
+                >
+                  <div className="flex items-center gap-2">
+                    <Badge
+                      variant={
+                        q.status === "completed" || q.status === "next_phase"
+                          ? "default"
+                          : "outline"
+                      }
+                      className="text-xs shrink-0"
+                    >
+                      {INQUIRY_STATUS_LABELS[q.status] ?? q.status}
+                    </Badge>
+                    <p className="truncate text-sm font-medium font-mono">{q.mgmt_no}</p>
+                  </div>
+                  <p className="mt-1 text-xs text-muted-foreground line-clamp-2 whitespace-pre-wrap break-words">
+                    {q.content}
+                  </p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {new Date(q.created_at).toLocaleDateString("ko-KR")}
                   </p>
                 </div>
               ))

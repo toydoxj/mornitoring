@@ -650,6 +650,41 @@ def list_inquiries(
     return {"items": result, "total": total}
 
 
+@router.get("/my-inquiries")
+def list_my_inquiries(
+    page: int = Query(1, ge=1),
+    size: int = Query(50, ge=1, le=200),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """내가 작성한 문의사항 목록 (모든 로그인 사용자)"""
+    from models.inquiry import Inquiry
+
+    query = db.query(Inquiry).filter(Inquiry.submitter_name == current_user.name)
+    total = query.count()
+    items = (
+        query.order_by(Inquiry.created_at.desc())
+        .offset((page - 1) * size).limit(size).all()
+    )
+    return {
+        "items": [
+            {
+                "id": inq.id,
+                "mgmt_no": inq.mgmt_no,
+                "phase": inq.phase,
+                "submitter_name": inq.submitter_name,
+                "content": inq.content,
+                "reply": inq.reply,
+                "status": inq.status.value,
+                "created_at": str(inq.created_at),
+                "updated_at": str(inq.updated_at),
+            }
+            for inq in items
+        ],
+        "total": total,
+    }
+
+
 @router.get("/building-inquiries/{mgmt_no}")
 def get_building_inquiries(
     mgmt_no: str,
