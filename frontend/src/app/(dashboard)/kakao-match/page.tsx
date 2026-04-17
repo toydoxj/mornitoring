@@ -28,8 +28,21 @@ interface UserStatus {
   name: string
   email: string
   role: UserRole
+  kakao_oauth_linked: boolean
   kakao_linked: boolean
   kakao_uuid: string | null
+}
+
+interface UserScopeDiagnosis {
+  user_id: number
+  user_name: string
+  kakao_id: string | null
+  oauth_linked: boolean
+  token_expired: boolean
+  all_agreed: boolean | null
+  missing_scopes: string[]
+  scopes: ScopeItem[]
+  error: string | null
 }
 
 const ROLE_LABELS: Record<UserRole, string> = {
@@ -82,6 +95,8 @@ export default function KakaoMatchPage() {
   const [selectedUser, setSelectedUser] = useState<UserStatus | null>(null)
   const [search, setSearch] = useState("")
   const [scopeStatus, setScopeStatus] = useState<ScopeStatus | null>(null)
+  const [diagnosis, setDiagnosis] = useState<UserScopeDiagnosis | null>(null)
+  const [diagnosisLoading, setDiagnosisLoading] = useState(false)
 
   const fetchUsers = async () => {
     try {
@@ -149,6 +164,44 @@ export default function KakaoMatchPage() {
     }
   }
 
+  const handleDiagnose = async (user: UserStatus) => {
+    setDiagnosisLoading(true)
+    setDiagnosis({
+      user_id: user.user_id,
+      user_name: user.name,
+      kakao_id: null,
+      oauth_linked: false,
+      token_expired: false,
+      all_agreed: null,
+      missing_scopes: [],
+      scopes: [],
+      error: null,
+    })
+    try {
+      const { data } = await apiClient.get<UserScopeDiagnosis>(
+        `/api/kakao/user/${user.user_id}/scopes`
+      )
+      setDiagnosis(data)
+    } catch (err) {
+      const msg =
+        (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
+        ?? "진단 실패"
+      setDiagnosis({
+        user_id: user.user_id,
+        user_name: user.name,
+        kakao_id: null,
+        oauth_linked: false,
+        token_expired: false,
+        all_agreed: null,
+        missing_scopes: [],
+        scopes: [],
+        error: msg,
+      })
+    } finally {
+      setDiagnosisLoading(false)
+    }
+  }
+
   const handleUnmatch = async (userId: number) => {
     if (!confirm("매칭을 해제하시겠습니까?")) return
     try {
@@ -160,6 +213,7 @@ export default function KakaoMatchPage() {
   }
 
   const matchedCount = users.filter((r) => r.kakao_linked).length
+  const oauthLinkedCount = users.filter((r) => r.kakao_oauth_linked).length
 
   const filteredFriends = friends.filter((f) => {
     const nick = (f.profile_nickname ?? "").toLowerCase()
@@ -172,7 +226,7 @@ export default function KakaoMatchPage() {
         <div>
           <h1 className="text-2xl font-bold">카카오 친구 매칭</h1>
           <p className="text-sm text-muted-foreground">
-            전체 사용자 {users.length}명 중 {matchedCount}명 매칭됨
+            전체 {users.length}명 · 카카오 로그인 {oauthLinkedCount}명 · 매칭 {matchedCount}명
           </p>
         </div>
         <Button onClick={fetchFriends} disabled={isFetchingFriends}>
@@ -251,20 +305,21 @@ export default function KakaoMatchPage() {
               <TableHead>이름</TableHead>
               <TableHead className="w-[100px]">역할</TableHead>
               <TableHead>이메일</TableHead>
-              <TableHead className="w-[120px]">매칭 상태</TableHead>
-              <TableHead className="w-[200px]">작업</TableHead>
+              <TableHead className="w-[120px]">카카오 로그인</TableHead>
+              <TableHead className="w-[120px]">친구 매칭</TableHead>
+              <TableHead className="w-[260px]">작업</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {isLoading ? (
               <TableRow>
-                <TableCell colSpan={6} className="h-32 text-center">
+                <TableCell colSpan={7} className="h-32 text-center">
                   로딩 중...
                 </TableCell>
               </TableRow>
             ) : users.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={6} className="h-32 text-center text-muted-foreground">
+                <TableCell colSpan={7} className="h-32 text-center text-muted-foreground">
                   사용자가 없습니다
                 </TableCell>
               </TableRow>
@@ -282,6 +337,13 @@ export default function KakaoMatchPage() {
                     <Badge variant="outline">{ROLE_LABELS[r.role]}</Badge>
                   </TableCell>
                   <TableCell className="text-sm text-muted-foreground">{r.email}</TableCell>
+                  <TableCell>
+                    {r.kakao_oauth_linked ? (
+                      <Badge>완료</Badge>
+                    ) : (
+                      <Badge variant="outline">미완료</Badge>
+                    )}
+                  </TableCell>
                   <TableCell>
                     {isSelf ? (
                       <Badge variant="secondary">자동 처리</Badge>
@@ -306,6 +368,15 @@ export default function KakaoMatchPage() {
                           onClick={() => handleUnmatch(r.user_id)}
                         >
                           해제
+                        </Button>
+                      )}
+                      {r.kakao_oauth_linked && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => handleDiagnose(r)}
+                        >
+                          진단
                         </Button>
                       )}
                     </div>
@@ -374,6 +445,91 @@ export default function KakaoMatchPage() {
               )}
             </div>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!diagnosis} onOpenChange={(open) => !open && setDiagnosis(null)}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>
+              {diagnosis?.user_name}님 카카오 동의 항목 진단
+            </DialogTitle>
+          </DialogHeader>
+          {diagnosisLoading ? (
+            <p className="text-sm text-muted-foreground">확인 중...</p>
+          ) : diagnosis ? (
+            <div className="space-y-3 text-sm">
+              <div className="flex items-center gap-2">
+                <span className="text-muted-foreground">카카오 로그인:</span>
+                {diagnosis.oauth_linked ? (
+                  <Badge>완료</Badge>
+                ) : (
+                  <Badge variant="outline">미완료</Badge>
+                )}
+              </div>
+              {diagnosis.kakao_id && (
+                <div className="flex items-center gap-2">
+                  <span className="text-muted-foreground">카카오 ID:</span>
+                  <code className="text-xs">{diagnosis.kakao_id}</code>
+                </div>
+              )}
+              {diagnosis.error ? (
+                <div className="rounded-md border border-red-200 bg-red-50 p-3 text-red-700">
+                  {diagnosis.error}
+                </div>
+              ) : (
+                <>
+                  <div className="flex items-center gap-2">
+                    <span className="text-muted-foreground">전체 동의 상태:</span>
+                    {diagnosis.all_agreed === null ? (
+                      <Badge variant="outline">확인 불가</Badge>
+                    ) : diagnosis.all_agreed ? (
+                      <Badge>모두 동의</Badge>
+                    ) : (
+                      <Badge variant="destructive">일부 미동의</Badge>
+                    )}
+                  </div>
+                  {diagnosis.missing_scopes.length > 0 && (
+                    <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-amber-800">
+                      <p className="font-medium">미동의 항목:</p>
+                      <p className="text-xs">
+                        {diagnosis.missing_scopes
+                          .map((s) => SCOPE_LABELS[s] ?? s)
+                          .join(", ")}
+                      </p>
+                      <p className="mt-2 text-xs">
+                        해당 사용자가 본 서비스에 다시 로그인하여 추가 동의를 진행해야 합니다.
+                      </p>
+                    </div>
+                  )}
+                  <div>
+                    <p className="mb-2 text-muted-foreground">동의 항목 상세:</p>
+                    <div className="flex flex-wrap gap-2">
+                      {diagnosis.scopes
+                        .filter((s) =>
+                          [
+                            "profile_nickname",
+                            "friends",
+                            "talk_message",
+                            "account_email",
+                          ].includes(s.id)
+                        )
+                        .map((s) => (
+                          <Badge
+                            key={s.id}
+                            variant={s.agreed ? "default" : "outline"}
+                            className={s.agreed ? "" : "border-red-300 text-red-700"}
+                          >
+                            {SCOPE_LABELS[s.id] ?? s.id}:{" "}
+                            {s.agreed ? "동의" : "미동의"}
+                          </Badge>
+                        ))}
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+          ) : null}
         </DialogContent>
       </Dialog>
     </div>

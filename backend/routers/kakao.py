@@ -201,7 +201,8 @@ class UserMatchStatus(BaseModel):
     name: str
     email: str
     role: UserRole
-    kakao_linked: bool
+    kakao_oauth_linked: bool  # 본 서비스에 카카오 로그인 완료 (kakao_id 존재)
+    kakao_linked: bool  # 내 친구 목록에서 매칭 완료 (kakao_uuid 존재) — 기존 필드 유지
     kakao_uuid: str | None = None
 
 
@@ -225,8 +226,78 @@ async def list_users_match_status(
             name=u.name,
             email=u.email,
             role=u.role,
+            kakao_oauth_linked=bool(u.kakao_id),
             kakao_linked=bool(u.kakao_uuid),
             kakao_uuid=u.kakao_uuid,
         )
         for u in users
     ]
+
+
+class UserScopeDiagnosis(BaseModel):
+    user_id: int
+    user_name: str
+    kakao_id: str | None
+    oauth_linked: bool
+    token_expired: bool
+    all_agreed: bool | None
+    missing_scopes: list[str]
+    scopes: list[ScopeItem]
+    error: str | None = None
+
+
+@router.get("/user/{user_id}/scopes", response_model=UserScopeDiagnosis)
+async def diagnose_user_scopes(
+    user_id: int,
+    db: Session = Depends(get_db),
+    _: User = Depends(
+        require_roles(UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY)
+    ),
+):
+    """특정 사용자의 카카오 동의 항목 진단 (관리자 전용)
+
+    - 해당 사용자가 카카오 로그인 완료했는지
+    - 토큰이 유효한지
+    - 필수 scope(friends, talk_message)에 동의했는지
+    """
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다")
+
+    result = UserScopeDiagnosis(
+        user_id=user.id,
+        user_name=user.name,
+        kakao_id=user.kakao_id,
+        oauth_linked=bool(user.kakao_id),
+        token_expired=False,
+        all_agreed=None,
+        missing_scopes=[],
+        scopes=[],
+    )
+
+    if not user.kakao_id:
+        result.error = "본 서비스에 카카오 로그인을 완료하지 않았습니다"
+        return result
+    if not user.kakao_access_token:
+        result.error = "카카오 토큰 정보가 없습니다"
+        return result
+
+    try:
+        access_token = await ensure_valid_token(user, db)
+    except ValueError as exc:
+        result.token_expired = True
+        result.error = f"토큰 유효하지 않음: {exc}"
+        return result
+
+    try:
+        data = await get_user_scopes(access_token)
+    except Exception as exc:
+        result.error = f"동의 항목 조회 실패: {exc}"
+        return result
+
+    scopes_raw = data.get("scopes", []) or []
+    result.scopes = [ScopeItem(**s) for s in scopes_raw]
+    agreed_ids = {s.id for s in result.scopes if s.agreed}
+    result.missing_scopes = [sid for sid in REQUIRED_SCOPES if sid not in agreed_ids]
+    result.all_agreed = len(result.missing_scopes) == 0
+    return result
