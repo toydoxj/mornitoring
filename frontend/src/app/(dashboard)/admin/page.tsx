@@ -322,8 +322,8 @@ export default function AdminPage() {
               초기 비밀번호는 <strong>ksea</strong>로 설정됩니다. 최초 로그인 시 변경됩니다.
             </p>
             {error && <p className="text-sm text-red-500">{error}</p>}
-            <Button type="submit" className="w-full" disabled={submitting}>
-              {submitting ? "등록 중..." : "등록"}
+            <Button type="submit" className="w-full" loading={submitting} loadingText="등록 중...">
+              등록
             </Button>
           </form>
         </DialogContent>
@@ -374,8 +374,8 @@ export default function AdminPage() {
               />
               <Label htmlFor="is_active">활성 상태</Label>
             </div>
-            <Button type="submit" className="w-full" disabled={submitting}>
-              {submitting ? "저장 중..." : "저장"}
+            <Button type="submit" className="w-full" loading={submitting} loadingText="저장 중...">
+              저장
             </Button>
           </form>
         </DialogContent>

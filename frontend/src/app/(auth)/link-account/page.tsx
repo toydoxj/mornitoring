@@ -92,8 +92,8 @@ function LinkAccountContent() {
             />
           </div>
           {error && <p className="text-sm text-red-500">{error}</p>}
-          <Button type="submit" className="w-full" disabled={isSubmitting}>
-            {isSubmitting ? "연결 중..." : "계정 연결"}
+          <Button type="submit" className="w-full" loading={isSubmitting} loadingText="연결 중...">
+            계정 연결
           </Button>
           <Button
             type="button"

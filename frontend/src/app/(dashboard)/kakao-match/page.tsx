@@ -229,8 +229,8 @@ export default function KakaoMatchPage() {
             전체 {users.length}명 · 카카오 로그인 {oauthLinkedCount}명 · 매칭 {matchedCount}명
           </p>
         </div>
-        <Button onClick={fetchFriends} disabled={isFetchingFriends}>
-          {isFetchingFriends ? "로딩 중..." : "친구 목록 새로고침"}
+        <Button onClick={fetchFriends} loading={isFetchingFriends} loadingText="로딩 중...">
+          친구 목록 새로고침
         </Button>
       </div>
 

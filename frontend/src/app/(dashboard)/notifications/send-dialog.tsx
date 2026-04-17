@@ -319,8 +319,13 @@ export function SendNotificationDialog({ open, onOpenChange, onSuccess }: Props)
               <Button variant="outline" onClick={handleClose} disabled={isSending}>
                 취소
               </Button>
-              <Button onClick={handleSend} disabled={isSending || selectedIds.size === 0}>
-                {isSending ? "발송 중..." : `${selectedIds.size}명에게 발송`}
+              <Button
+                onClick={handleSend}
+                disabled={selectedIds.size === 0}
+                loading={isSending}
+                loadingText="발송 중..."
+              >
+                {`${selectedIds.size}명에게 발송`}
               </Button>
             </DialogFooter>
           </div>

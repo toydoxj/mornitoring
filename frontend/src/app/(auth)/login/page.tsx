@@ -86,8 +86,8 @@ export default function LoginPage() {
             {error && (
               <p className="text-sm text-red-500">{error}</p>
             )}
-            <Button type="submit" className="w-full" disabled={isSubmitting}>
-              {isSubmitting ? "로그인 중..." : "로그인"}
+            <Button type="submit" className="w-full" loading={isSubmitting} loadingText="로그인 중...">
+              로그인
             </Button>
           </form>
           <div className="mt-4 space-y-2">

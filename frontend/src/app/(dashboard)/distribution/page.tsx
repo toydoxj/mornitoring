@@ -153,8 +153,8 @@ export default function DistributionPage() {
             </p>
           </div>
 
-          <Button onClick={handleReceive} disabled={isProcessing}>
-            {isProcessing ? "처리 중..." : "접수 처리"}
+          <Button onClick={handleReceive} loading={isProcessing} loadingText="처리 중...">
+            접수 처리
           </Button>
         </CardContent>
       </Card>
@@ -192,9 +192,11 @@ export default function DistributionPage() {
             <CardTitle>3단계: 검토위원 알림 발송</CardTitle>
             <Button
               onClick={handleSendNotifications}
-              disabled={notifSent || notifSending}
+              disabled={notifSent}
+              loading={notifSending}
+              loadingText="발송 중..."
             >
-              {notifSending ? "발송 중..." : notifSent ? "발송 완료" : "카카오톡 알림 발송"}
+              {notifSent ? "발송 완료" : "카카오톡 알림 발송"}
             </Button>
           </CardHeader>
           <CardContent>

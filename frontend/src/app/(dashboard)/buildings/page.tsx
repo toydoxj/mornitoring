@@ -546,8 +546,8 @@ export default function BuildingsPage() {
                   </Table>
                 </div>
 
-                <Button onClick={handleAssignApply} disabled={assigning} className="w-full">
-                  {assigning ? "적용 중..." : "배정 적용"}
+                <Button onClick={handleAssignApply} loading={assigning} loadingText="적용 중..." className="w-full">
+                  배정 적용
                 </Button>
               </div>
             )}

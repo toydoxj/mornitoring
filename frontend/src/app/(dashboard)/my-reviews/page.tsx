@@ -380,8 +380,8 @@ export default function MyReviewsPage() {
                   {/* 업로드/취소 버튼 (미리보기 성공 시) */}
                   {previewDone && (
                     <div className="flex gap-2">
-                      <Button onClick={handleConfirmUpload} disabled={uploading} className="flex-1">
-                        {uploading ? "업로드 중..." : "업로드"}
+                      <Button onClick={handleConfirmUpload} loading={uploading} loadingText="업로드 중..." className="flex-1">
+                        업로드
                       </Button>
                       <Button variant="outline" onClick={handleCancelUpload} disabled={uploading} className="flex-1">
                         취소
@@ -418,10 +418,12 @@ export default function MyReviewsPage() {
               </div>
               <Button
                 onClick={handleReasonSubmit}
-                disabled={reasonSubmitting || !reasonText.trim()}
+                disabled={!reasonText.trim()}
+                loading={reasonSubmitting}
+                loadingText="저장 중..."
                 className="w-full"
               >
-                {reasonSubmitting ? "저장 중..." : "저장"}
+                저장
               </Button>
             </div>
           )}

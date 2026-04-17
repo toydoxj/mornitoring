@@ -87,8 +87,8 @@ export default function ChangePasswordPage() {
               />
             </div>
             {error && <p className="text-sm text-red-500">{error}</p>}
-            <Button type="submit" className="w-full" disabled={isSubmitting}>
-              {isSubmitting ? "변경 중..." : "비밀번호 변경"}
+            <Button type="submit" className="w-full" loading={isSubmitting} loadingText="변경 중...">
+              비밀번호 변경
             </Button>
           </form>
         </CardContent>

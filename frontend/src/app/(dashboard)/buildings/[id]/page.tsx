@@ -260,9 +260,11 @@ export default function BuildingDetailPage() {
               />
               <Button
                 onClick={handleSubmitInquiry}
-                disabled={submittingInquiry || !newInquiry.trim()}
+                disabled={!newInquiry.trim()}
+                loading={submittingInquiry}
+                loadingText="등록 중..."
               >
-                {submittingInquiry ? "등록 중..." : "문의 등록"}
+                문의 등록
               </Button>
             </div>
           )}
