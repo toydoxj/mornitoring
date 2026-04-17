@@ -18,6 +18,16 @@ def _get_s3_client():
     )
 
 
+PHASE_FOLDER_MAP = {
+    "preliminary": "예비검토",
+    "supplement_1": "보완검토(1차)",
+    "supplement_2": "보완검토(2차)",
+    "supplement_3": "보완검토(3차)",
+    "supplement_4": "보완검토(4차)",
+    "supplement_5": "보완검토(5차)",
+}
+
+
 def upload_review_file(
     file_path: str | Path,
     mgmt_no: str,
@@ -26,17 +36,16 @@ def upload_review_file(
 ) -> str:
     """검토서 파일을 S3에 업로드
 
-    저장 경로: reviews/{년도}/{월}/{일}/{관리번호}_{단계}_{원본파일명}
+    저장 경로: reviews/{예비검토|보완검토(N차)}/{YYYY-MM-DD}/{관리번호}.xlsm
 
     Returns:
         S3 key (파일 경로)
     """
     today = date.today()
     suffix = Path(original_filename).suffix
-    s3_key = (
-        f"reviews/{today.year}/{today.month:02d}/{today.day:02d}/"
-        f"{mgmt_no}_{phase}{suffix}"
-    )
+    phase_folder = PHASE_FOLDER_MAP.get(phase, phase)
+    date_folder = today.strftime("%Y-%m-%d")
+    s3_key = f"reviews/{phase_folder}/{date_folder}/{mgmt_no}{suffix}"
 
     if not settings.aws_access_key_id:
         # S3 미설정 시 로컬 모드 (key만 반환)
@@ -75,6 +84,36 @@ def get_download_url(s3_key: str, expires_in: int = 3600) -> str:
         return url
     except ClientError:
         return ""
+
+
+def list_review_files(prefix: str = "reviews/") -> list[dict]:
+    """S3에 저장된 검토서 파일 목록 조회"""
+    if not settings.aws_access_key_id:
+        return []
+
+    client = _get_s3_client()
+    try:
+        response = client.list_objects_v2(
+            Bucket=settings.s3_bucket_name,
+            Prefix=prefix,
+        )
+        files = []
+        for obj in response.get("Contents", []):
+            key = obj["Key"]
+            parts = key.split("/")
+            # reviews/{phase_folder}/{date}/{filename}
+            if len(parts) >= 4:
+                files.append({
+                    "key": key,
+                    "phase": parts[1],
+                    "date": parts[2],
+                    "filename": parts[3],
+                    "size": obj["Size"],
+                    "last_modified": obj["LastModified"].isoformat(),
+                })
+        return files
+    except ClientError:
+        return []
 
 
 def delete_file(s3_key: str) -> bool:

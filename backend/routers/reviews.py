@@ -16,7 +16,7 @@ from routers.auth import get_current_user, require_roles
 from engines.review_validator import validate_review_file
 from engines.review_extractor import extract_review_data
 from engines.phase_machine import get_next_phase, can_advance, is_completed
-from services.s3_storage import upload_review_file, get_download_url
+from services.s3_storage import upload_review_file, get_download_url, list_review_files, delete_file
 from services.audit import log_action
 
 router = APIRouter()
@@ -175,6 +175,50 @@ async def upload_review(
 
     finally:
         tmp_path.unlink(missing_ok=True)
+
+
+@router.get("/files")
+def list_uploaded_files(
+    phase: str | None = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(
+        require_roles(UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY)
+    ),
+):
+    """업로드된 검토서 파일 목록 (총괄간사/팀장)"""
+    prefix = "reviews/"
+    if phase:
+        from services.s3_storage import PHASE_FOLDER_MAP
+        phase_folder = PHASE_FOLDER_MAP.get(phase, phase)
+        prefix = f"reviews/{phase_folder}/"
+
+    files = list_review_files(prefix)
+    return files
+
+
+@router.get("/files/download")
+def download_file(
+    key: str = Query(...),
+    delete_after: bool = Query(False),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(
+        require_roles(UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY)
+    ),
+):
+    """검토서 파일 다운로드 URL 생성 (다운 후 삭제 옵션)"""
+    url = get_download_url(key)
+    if not url:
+        raise HTTPException(status_code=404, detail="파일을 찾을 수 없습니다")
+
+    if delete_after:
+        delete_file(key)
+        # DB에서도 s3_file_key 제거
+        stage = db.query(ReviewStage).filter(ReviewStage.s3_file_key == key).first()
+        if stage:
+            stage.s3_file_key = None
+            db.commit()
+
+    return {"download_url": url, "deleted": delete_after}
 
 
 @router.get("/stages/{building_id}", response_model=list[ReviewStageResponse])

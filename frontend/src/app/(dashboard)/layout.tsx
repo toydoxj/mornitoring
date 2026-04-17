@@ -14,6 +14,7 @@ const NAV_ITEMS = [
   { href: "/buildings", label: "통합관리대장", roles: ["team_leader", "chief_secretary", "secretary"] },
   { href: "/distribution", label: "도서접수/배포", roles: ["team_leader", "chief_secretary"] },
   { href: "/my-reviews", label: "내 검토 대상", roles: ["chief_secretary", "secretary", "reviewer"] },
+  { href: "/review-files", label: "검토서 관리", roles: ["team_leader", "chief_secretary"] },
   { href: "/inquiries", label: "문의사항", roles: ["team_leader", "chief_secretary", "secretary"] },
   { href: "/notifications", label: "알림 현황", roles: ["team_leader", "chief_secretary"] },
   { href: "/admin", label: "사용자 관리", roles: ["team_leader", "chief_secretary"] },
