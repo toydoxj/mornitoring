@@ -227,16 +227,16 @@ export default function MyReviewsPage() {
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead className="w-[120px]">관리번호</TableHead>
+              <TableHead className="w-[120px] text-center">관리번호</TableHead>
               <TableHead className="w-[220px]">주소</TableHead>
-              <TableHead className="w-[100px]">연면적(㎡)</TableHead>
-              <TableHead className="w-[80px]">지상층</TableHead>
-              <TableHead className="w-[120px]">고위험군</TableHead>
+              <TableHead className="w-[100px] text-center">연면적(㎡)</TableHead>
+              <TableHead className="w-[80px] text-center">지상층</TableHead>
+              <TableHead className="w-[120px] text-center">고위험군</TableHead>
               <TableHead className="w-[80px] text-center">부적합</TableHead>
-              <TableHead className="w-[120px]">현재단계</TableHead>
-              <TableHead className="w-[90px]">최근판정</TableHead>
-              <TableHead className="w-[100px]">검토서</TableHead>
-              <TableHead className="w-[80px]">문의</TableHead>
+              <TableHead className="w-[120px] text-center">현재단계</TableHead>
+              <TableHead className="w-[90px] text-center">최근판정</TableHead>
+              <TableHead className="w-[100px] text-center">검토서</TableHead>
+              <TableHead className="w-[80px] text-center">문의</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -256,7 +256,7 @@ export default function MyReviewsPage() {
               data.map((b) => (
                 <TableRow key={b.id}>
                   <TableCell
-                    className="font-mono font-medium text-blue-600 cursor-pointer hover:underline"
+                    className="font-mono font-medium text-blue-600 cursor-pointer hover:underline text-center"
                     onClick={() => router.push(`/buildings/${b.id}?from=my-reviews`)}
                   >
                     {b.mgmt_no}
@@ -267,16 +267,16 @@ export default function MyReviewsPage() {
                   >
                     {b.full_address || "-"}
                   </TableCell>
-                  <TableCell className="text-right">{b.gross_area?.toLocaleString() ?? "-"}</TableCell>
-                  <TableCell className="text-right">{b.floors_above ?? "-"}</TableCell>
-                  <TableCell className="text-sm">
+                  <TableCell className="text-center">{b.gross_area?.toLocaleString() ?? "-"}</TableCell>
+                  <TableCell className="text-center">{b.floors_above ?? "-"}</TableCell>
+                  <TableCell className="text-sm text-center">
                     {(() => {
                       const tags: string[] = []
                       if (b.is_special_structure) tags.push("특수")
                       if (b.is_high_rise) tags.push("고층")
                       if (b.is_multi_use) tags.push("다중이용")
                       return tags.length > 0 ? (
-                        <div className="flex flex-wrap gap-1">
+                        <div className="flex flex-wrap justify-center gap-1">
                           {tags.map((t) => (
                             <Badge key={t} variant="outline" className="text-xs">
                               {t}
@@ -295,12 +295,12 @@ export default function MyReviewsPage() {
                       <span className="text-muted-foreground">-</span>
                     )}
                   </TableCell>
-                  <TableCell className="text-sm">
+                  <TableCell className="text-sm text-center">
                     {b.current_phase
                       ? PHASE_LABELS[b.current_phase as PhaseType] || b.current_phase
                       : "-"}
                   </TableCell>
-                  <TableCell>
+                  <TableCell className="text-center">
                     {b.latest_result ? (
                       <Badge variant={RESULT_VARIANT[b.latest_result] || "outline"}>
                         {RESULT_LABELS[b.latest_result as ResultType] || b.latest_result}
@@ -309,7 +309,7 @@ export default function MyReviewsPage() {
                       <span className="text-muted-foreground">-</span>
                     )}
                   </TableCell>
-                  <TableCell>
+                  <TableCell className="text-center">
                     <Button
                       size="sm"
                       variant="outline"
@@ -321,7 +321,7 @@ export default function MyReviewsPage() {
                       업로드
                     </Button>
                   </TableCell>
-                  <TableCell>
+                  <TableCell className="text-center">
                     <Button
                       size="sm"
                       variant="ghost"
