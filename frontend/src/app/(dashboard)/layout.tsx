@@ -81,7 +81,7 @@ export default function DashboardLayout({
     <div className="min-h-screen bg-gray-50">
       {/* 상단 네비게이션 */}
       <header className="border-b bg-white">
-        <div className="mx-auto flex h-14 max-w-[1920px] items-center justify-between px-4">
+        <div className="mx-auto flex h-14 w-[90%] items-center justify-between">
           <div className="flex items-center gap-6">
             <Link href="/buildings" className="text-lg font-bold">
               모니터링
@@ -111,7 +111,7 @@ export default function DashboardLayout({
       </header>
 
       {/* 본문 */}
-      <main className="mx-auto max-w-[1920px] px-4 py-6">{children}</main>
+      <main className="mx-auto w-[90%] py-6">{children}</main>
     </div>
   )
 }
