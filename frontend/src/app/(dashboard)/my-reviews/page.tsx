@@ -507,7 +507,7 @@ export default function MyReviewsPage() {
                         )}
                         {referenceChanges.length > 0 && (
                           <div className="rounded-md p-3 text-sm bg-amber-50 text-amber-900 border border-amber-200">
-                            <p className="font-medium">참고 비교 (DB 미반영)</p>
+                            <p className="font-medium">주요 구조 형식 검토</p>
                             <ul className="mt-1 list-disc pl-4 space-y-1">
                               {referenceChanges.map((c, i) => (
                                 <li key={i}>{c.label}: {c.old_value} → {c.new_value}</li>
