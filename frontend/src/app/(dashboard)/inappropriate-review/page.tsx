@@ -13,7 +13,17 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import apiClient from "@/lib/api/client"
-import { PHASE_LABELS, RESULT_LABELS, type PhaseType, type ResultType } from "@/types"
+import { RESULT_LABELS, type ResultType } from "@/types"
+
+// 지적단계(검토서 제출 단계) 전용 짧은 한글 라벨
+const INDICATION_PHASE_LABELS: Record<string, string> = {
+  preliminary: "예비검토",
+  supplement_1: "보완검토 1차",
+  supplement_2: "보완검토 2차",
+  supplement_3: "보완검토 3차",
+  supplement_4: "보완검토 4차",
+  supplement_5: "보완검토 5차",
+}
 
 type Decision = "pending" | "confirmed_serious" | "confirmed_simple" | "excluded"
 
@@ -129,7 +139,7 @@ export default function InappropriateReviewPage() {
               <TableHead className="w-[100px] text-center">연면적(㎡)</TableHead>
               <TableHead className="w-[80px] text-center">지상층</TableHead>
               <TableHead className="w-[120px] text-center">고위험군</TableHead>
-              <TableHead className="w-[120px] text-center">현재단계</TableHead>
+              <TableHead className="w-[120px] text-center">지적단계</TableHead>
               <TableHead className="w-[90px] text-center">최근판정</TableHead>
               <TableHead className="w-[90px] text-center">확정(심각)</TableHead>
               <TableHead className="w-[90px] text-center">확정(단순)</TableHead>
@@ -189,9 +199,7 @@ export default function InappropriateReviewPage() {
                       })()}
                     </TableCell>
                     <TableCell className="text-sm text-center">
-                      {b.current_phase
-                        ? PHASE_LABELS[b.current_phase as PhaseType] || b.current_phase
-                        : "-"}
+                      {INDICATION_PHASE_LABELS[b.phase] || b.phase}
                     </TableCell>
                     <TableCell className="text-center">
                       {b.latest_result ? (

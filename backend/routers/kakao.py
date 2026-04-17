@@ -108,7 +108,7 @@ class FriendsResponse(BaseModel):
 async def list_kakao_friends(
     db: Session = Depends(get_db),
     current_user: User = Depends(
-        require_roles(UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY, UserRole.SECRETARY)
+        require_roles(UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY)
     ),
 ):
     """현재 로그인한 사용자의 카카오 친구 목록 조회.
@@ -157,7 +157,7 @@ async def match_friend(
     body: MatchRequest,
     db: Session = Depends(get_db),
     _: User = Depends(
-        require_roles(UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY, UserRole.SECRETARY)
+        require_roles(UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY)
     ),
 ):
     """검토위원(또는 임의 사용자)과 카카오 UUID 매칭"""
@@ -184,7 +184,7 @@ async def unmatch_friend(
     user_id: int,
     db: Session = Depends(get_db),
     _: User = Depends(
-        require_roles(UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY, UserRole.SECRETARY)
+        require_roles(UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY)
     ),
 ):
     """매칭 해제"""
