@@ -92,8 +92,9 @@ export const ROLE_LABELS: Record<UserRole, string> = {
 }
 
 // 단계 한글 라벨
-// 흐름: 예비도서 접수 → 예비검토서 제출 → 보완도서(1차) 접수 → 보완검토서(1차) 제출 → ...
+// 흐름: 배정완료 → 예비도서 접수 → 예비검토서 제출 → 보완도서(1차) 접수 → 보완검토서(1차) 제출 → ...
 export const PHASE_LABELS: Record<string, string> = {
+  assigned: "배정완료",
   doc_received: "예비도서 접수",
   preliminary: "예비검토서 제출",
   supplement_1_received: "보완도서(1차) 접수",

@@ -32,6 +32,7 @@ class DocReceiveResponse(BaseModel):
 _NEXT_RECEIVE_ROUND: dict[str | None, str] = {
     None: "preliminary",
     "": "preliminary",
+    "assigned": "preliminary",                  # 배정완료 → 예비도서 접수
     "doc_received": "preliminary",              # 재접수
     "preliminary": "supplement_1",              # 예비 제출 후 → 1차 보완도서
     "supplement_1_received": "supplement_1",    # 1차 보완도서 재접수

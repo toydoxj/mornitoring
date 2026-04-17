@@ -138,6 +138,10 @@ def apply_assignment(file_path: str | Path, db: Session) -> dict:
         if user and user.id in reviewer_by_user:
             building.reviewer_id = reviewer_by_user[user.id].id
 
+        # 단계 미설정 건물은 배정완료 단계로 설정
+        if not building.current_phase:
+            building.current_phase = "assigned"
+
         applied += 1
 
     db.commit()

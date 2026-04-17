@@ -15,6 +15,7 @@ from models.review_stage import ResultType
 
 # 단계 순서 (문자열 기반)
 PHASE_SEQUENCE = [
+    "assigned",
     "doc_received",
     "preliminary",
     "supplement_1_received",

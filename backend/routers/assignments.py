@@ -69,6 +69,8 @@ def assign_reviewer(
         raise HTTPException(status_code=404, detail="검토위원을 찾을 수 없습니다")
 
     building.reviewer_id = reviewer.id
+    if not building.current_phase:
+        building.current_phase = "assigned"
     db.commit()
     return {"message": f"관리번호 {building.mgmt_no}에 검토위원이 배정되었습니다"}
 

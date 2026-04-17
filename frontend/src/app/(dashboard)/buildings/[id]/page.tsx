@@ -78,21 +78,6 @@ export default function BuildingDetailPage() {
     fetchData()
   }, [params.id, router])
 
-  const handleAdvance = async () => {
-    try {
-      await apiClient.post(`/api/reviews/advance/${params.id}`)
-      // 새로고침
-      const [buildingRes, stagesRes] = await Promise.all([
-        apiClient.get<Building>(`/api/buildings/${params.id}`),
-        apiClient.get<ReviewStage[]>(`/api/reviews/stages/${params.id}`),
-      ])
-      setBuilding(buildingRes.data)
-      setStages(stagesRes.data)
-    } catch (err) {
-      console.error("단계 전환 실패:", err)
-    }
-  }
-
   const handleSavePhase = async () => {
     if (!building || !phaseDraft) return
     if (phaseDraft === building.current_phase) {
@@ -223,13 +208,8 @@ export default function BuildingDetailPage() {
 
       {/* 검토 진행 타임라인 */}
       <Card>
-        <CardHeader className="flex flex-row items-center justify-between">
+        <CardHeader>
           <CardTitle>검토 진행 현황</CardTitle>
-          {canManage && !building.final_result && (
-            <Button size="sm" onClick={handleAdvance}>
-              다음 단계로 전환
-            </Button>
-          )}
         </CardHeader>
         <CardContent>
           {stages.length === 0 ? (
