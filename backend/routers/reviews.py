@@ -45,6 +45,7 @@ class ReviewStageResponse(BaseModel):
     s3_file_key: str | None = None
     inappropriate_review_needed: bool = False
     inappropriate_decision: str | None = None
+    inappropriate_note: str | None = None
 
     model_config = {"from_attributes": True}
 
@@ -702,6 +703,7 @@ class InappropriateReviewItem(BaseModel):
     current_phase: str | None = None
     latest_result: str | None = None
     inappropriate_decision: str | None = None
+    inappropriate_note: str | None = None
     phase: str
 
 
@@ -784,6 +786,7 @@ def list_inappropriate_reviews(
                     if stage.inappropriate_decision
                     else "pending"
                 ),
+                inappropriate_note=stage.inappropriate_note,
                 phase=stage.phase.value,
             )
         )
@@ -791,7 +794,8 @@ def list_inappropriate_reviews(
 
 
 class InappropriateDecisionRequest(BaseModel):
-    decision: str  # "pending" | "confirmed" | "rejected"
+    decision: str | None = None  # pending / confirmed_serious / confirmed_simple / excluded
+    note: str | None = None      # 간사진 의견 (None이면 변경 안 함, 빈 문자열이면 비우기)
 
 
 @router.patch("/inappropriate/{stage_id}")
@@ -803,22 +807,39 @@ def set_inappropriate_decision(
         require_roles(UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY, UserRole.SECRETARY)
     ),
 ):
-    """부적합 검토 판정 변경 (간사 이상)."""
-    try:
-        new_decision = InappropriateDecision(body.decision)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="잘못된 판정값")
+    """부적합 검토 판정/의견 변경 (간사 이상).
 
+    decision과 note는 각각 독립적으로 변경 가능 (둘 다 선택적).
+    """
     stage = db.query(ReviewStage).filter(ReviewStage.id == stage_id).first()
     if not stage:
         raise HTTPException(status_code=404, detail="검토 단계를 찾을 수 없습니다")
     if not stage.inappropriate_review_needed:
         raise HTTPException(status_code=400, detail="부적합 검토 대상이 아닙니다")
 
-    stage.inappropriate_decision = new_decision
+    changed: dict = {}
+    if body.decision is not None:
+        try:
+            new_decision = InappropriateDecision(body.decision)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="잘못된 판정값")
+        stage.inappropriate_decision = new_decision
+        changed["decision"] = new_decision.value
+
+    if body.note is not None:
+        stage.inappropriate_note = body.note if body.note else None
+        changed["note"] = stage.inappropriate_note
+
+    if not changed:
+        raise HTTPException(status_code=400, detail="변경할 값이 없습니다")
+
     log_action(
-        db, current_user.id, "inappropriate_decision", "review_stage", stage.id,
-        after_data={"decision": new_decision.value},
+        db, current_user.id, "inappropriate_update", "review_stage", stage.id,
+        after_data=changed,
     )
     db.commit()
-    return {"stage_id": stage.id, "decision": new_decision.value}
+    return {
+        "stage_id": stage.id,
+        "decision": stage.inappropriate_decision.value if stage.inappropriate_decision else "pending",
+        "note": stage.inappropriate_note,
+    }

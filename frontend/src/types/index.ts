@@ -83,6 +83,7 @@ export interface ReviewStage {
   defect_type_3: string | null
   inappropriate_review_needed?: boolean
   inappropriate_decision?: InappropriateDecisionType | null
+  inappropriate_note?: string | null
 }
 
 // 역할 한글 라벨

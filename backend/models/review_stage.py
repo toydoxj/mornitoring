@@ -65,6 +65,8 @@ class ReviewStage(Base):
     inappropriate_decision: Mapped[InappropriateDecision | None] = mapped_column(
         Enum(InappropriateDecision), default=None
     )
+    # 간사진 의견 (판정 근거/메모)
+    inappropriate_note: Mapped[str | None] = mapped_column(Text)
 
     # 검토서 파일
     s3_file_key: Mapped[str | None] = mapped_column(String(500))     # S3 파일 경로

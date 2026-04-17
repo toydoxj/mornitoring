@@ -78,6 +78,26 @@ export default function BuildingDetailPage() {
     fetchData()
   }, [params.id, router])
 
+  const [noteDraft, setNoteDraft] = useState<Record<number, string>>({})
+  const [savingNote, setSavingNote] = useState<number | null>(null)
+
+  const handleSaveNote = async (stageId: number) => {
+    const note = noteDraft[stageId] ?? ""
+    setSavingNote(stageId)
+    try {
+      await apiClient.patch(`/api/reviews/inappropriate/${stageId}`, { note })
+      const { data: stagesRes } = await apiClient.get<ReviewStage[]>(`/api/reviews/stages/${params.id}`)
+      setStages(stagesRes)
+    } catch (err) {
+      const msg =
+        (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
+        ?? "저장 실패"
+      alert(msg)
+    } finally {
+      setSavingNote(null)
+    }
+  }
+
   const handleSavePhase = async () => {
     if (!building || !phaseDraft) return
     if (phaseDraft === building.current_phase) {
@@ -280,29 +300,56 @@ export default function BuildingDetailPage() {
 
                       {/* 부적합 검토 판정 (간사 이상 + 부적합 체크된 단계만) */}
                       {stage.inappropriate_review_needed && canManage && (
-                        <div className="rounded-md border border-orange-200 bg-orange-50 p-3">
-                          <dt className="text-sm font-medium text-orange-900 mb-2">
-                            부적합 대상 검토 판정
-                          </dt>
-                          <div className="flex flex-wrap gap-2">
-                            {([
-                              { key: "confirmed_serious", label: "확정(심각)" },
-                              { key: "confirmed_simple", label: "확정(단순)" },
-                              { key: "pending", label: "대기" },
-                              { key: "excluded", label: "제외" },
-                            ] as const).map((opt) => {
-                              const active = (stage.inappropriate_decision ?? "pending") === opt.key
-                              return (
-                                <Button
-                                  key={opt.key}
-                                  size="sm"
-                                  variant={active ? (opt.key === "excluded" ? "destructive" : "default") : "outline"}
-                                  onClick={() => handleInappropriateDecision(stage.id, opt.key)}
-                                >
-                                  {opt.label}
-                                </Button>
-                              )
-                            })}
+                        <div className="rounded-md border border-orange-200 bg-orange-50 p-3 space-y-3">
+                          <div>
+                            <dt className="text-sm font-medium text-orange-900 mb-2">
+                              부적합 대상 검토 판정
+                            </dt>
+                            <div className="flex flex-wrap gap-2">
+                              {([
+                                { key: "confirmed_serious", label: "확정(심각)" },
+                                { key: "confirmed_simple", label: "확정(단순)" },
+                                { key: "pending", label: "대기" },
+                                { key: "excluded", label: "제외" },
+                              ] as const).map((opt) => {
+                                const active = (stage.inappropriate_decision ?? "pending") === opt.key
+                                return (
+                                  <Button
+                                    key={opt.key}
+                                    size="sm"
+                                    variant={active ? (opt.key === "excluded" ? "destructive" : "default") : "outline"}
+                                    onClick={() => handleInappropriateDecision(stage.id, opt.key)}
+                                  >
+                                    {opt.label}
+                                  </Button>
+                                )
+                              })}
+                            </div>
+                          </div>
+
+                          {/* 간사진 의견 */}
+                          <div>
+                            <dt className="text-sm font-medium text-orange-900 mb-1">
+                              간사진 의견
+                            </dt>
+                            <textarea
+                              className="w-full min-h-[80px] rounded-md border border-orange-200 bg-white px-3 py-2 text-sm"
+                              placeholder="판정 근거·검토 메모를 작성하세요"
+                              value={noteDraft[stage.id] ?? stage.inappropriate_note ?? ""}
+                              onChange={(e) =>
+                                setNoteDraft({ ...noteDraft, [stage.id]: e.target.value })
+                              }
+                            />
+                            <div className="flex justify-end mt-2">
+                              <Button
+                                size="sm"
+                                onClick={() => handleSaveNote(stage.id)}
+                                loading={savingNote === stage.id}
+                                loadingText="저장 중..."
+                              >
+                                의견 저장
+                              </Button>
+                            </div>
                           </div>
                         </div>
                       )}

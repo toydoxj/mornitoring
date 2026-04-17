@@ -41,6 +41,7 @@ interface InappropriateItem {
   current_phase: string | null
   latest_result: string | null
   inappropriate_decision: Decision
+  inappropriate_note: string | null
   phase: string
 }
 
@@ -172,8 +173,18 @@ export default function InappropriateReviewPage() {
                     <TableCell className="font-mono font-medium text-blue-600 text-center">
                       {b.mgmt_no}
                     </TableCell>
-                    <TableCell className="text-sm max-w-[220px] truncate" title={b.building_name ?? undefined}>
-                      {b.full_address || "-"}
+                    <TableCell className="text-sm max-w-[220px]">
+                      <div className="truncate" title={b.building_name ?? undefined}>
+                        {b.full_address || "-"}
+                      </div>
+                      {b.inappropriate_note && (
+                        <div
+                          className="mt-1 truncate text-xs text-muted-foreground"
+                          title={b.inappropriate_note}
+                        >
+                          💬 {b.inappropriate_note}
+                        </div>
+                      )}
                     </TableCell>
                     <TableCell className="text-center">
                       {b.gross_area?.toLocaleString() ?? "-"}
