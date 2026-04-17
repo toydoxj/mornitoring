@@ -165,6 +165,11 @@ export default function MyReviewsPage() {
       setInappropriateReviewNeeded(false)
       if (result.success) {
         fetchData()
+        // 성공 알림을 1초간 보여준 뒤 다이얼로그 닫기
+        setTimeout(() => {
+          setUploadTarget(null)
+          setUploadResult(null)
+        }, 1000)
       }
     } catch {
       setUploadResult({
