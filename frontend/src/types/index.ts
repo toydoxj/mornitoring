@@ -9,6 +9,7 @@ export interface User {
   role: UserRole
   phone: string | null
   is_active: boolean
+  kakao_linked?: boolean
 }
 
 // 건축물 (통합관리대장)

@@ -37,6 +37,7 @@ export const useAuthStore = create<AuthState>((set) => ({
 
   logout: () => {
     localStorage.removeItem("access_token")
+    sessionStorage.removeItem("kakao_scope_checked")
     set({ user: null })
     window.location.href = "/login"
   },

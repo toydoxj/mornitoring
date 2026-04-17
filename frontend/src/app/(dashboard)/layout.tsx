@@ -8,6 +8,10 @@ import { Badge } from "@/components/ui/badge"
 import { Separator } from "@/components/ui/separator"
 import { useAuthStore } from "@/stores/authStore"
 import { ROLE_LABELS } from "@/types"
+import apiClient from "@/lib/api/client"
+
+const SCOPE_CHECK_ROLES = ["team_leader", "chief_secretary", "secretary"]
+const SCOPE_CHECK_FLAG = "kakao_scope_checked"
 
 const NAV_ITEMS = [
   { href: "/dashboard", label: "대시보드", roles: ["team_leader", "chief_secretary", "secretary", "reviewer"] },
@@ -39,6 +43,25 @@ export default function DashboardLayout({
       router.push("/login")
     }
   }, [isLoading, user, router])
+
+  // 카카오 scope 자동 체크 — 메시지 발송 권한이 필요한 역할만, 세션당 1회
+  useEffect(() => {
+    if (!user || !user.kakao_linked) return
+    if (!SCOPE_CHECK_ROLES.includes(user.role)) return
+    if (sessionStorage.getItem(SCOPE_CHECK_FLAG)) return
+
+    sessionStorage.setItem(SCOPE_CHECK_FLAG, "1")
+    apiClient
+      .get<{ all_agreed: boolean; reauthorize_url: string | null }>(
+        "/api/kakao/me/scopes"
+      )
+      .then(({ data }) => {
+        if (!data.all_agreed && data.reauthorize_url) {
+          window.location.href = data.reauthorize_url
+        }
+      })
+      .catch((err) => console.error("카카오 scope 체크 실패:", err))
+  }, [user])
 
   if (isLoading) {
     return (
