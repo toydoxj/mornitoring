@@ -258,13 +258,12 @@ export default function MyReviewsPage() {
                   <TableCell
                     className="font-mono font-medium text-blue-600 cursor-pointer hover:underline"
                     onClick={() => router.push(`/buildings/${b.id}?from=my-reviews`)}
-                    title={b.building_name ?? undefined}
                   >
                     {b.mgmt_no}
                   </TableCell>
                   <TableCell
                     className="text-sm max-w-[220px] truncate"
-                    title={b.full_address ?? undefined}
+                    title={b.building_name ?? undefined}
                   >
                     {b.full_address || "-"}
                   </TableCell>
