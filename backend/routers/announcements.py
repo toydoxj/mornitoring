@@ -1,15 +1,23 @@
 """공지사항 게시판 라우터"""
 
+import tempfile
+import uuid
 from datetime import datetime
+from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from database import get_db
-from models.announcement import Announcement, AnnouncementComment
+from models.announcement import Announcement, AnnouncementComment, AnnouncementAttachment
 from models.user import User, UserRole
 from routers.auth import get_current_user, require_roles
+from services.s3_storage import (
+    upload_generic_file,
+    get_download_url,
+    delete_file as s3_delete_file,
+)
 
 router = APIRouter()
 
@@ -38,8 +46,20 @@ class AnnouncementResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class AttachmentResponse(BaseModel):
+    id: int
+    announcement_id: int
+    filename: str
+    file_size: int
+    uploaded_by: int
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
 class AnnouncementDetailResponse(AnnouncementResponse):
     comments: list[CommentResponse] = []
+    attachments: list[AttachmentResponse] = []
 
 
 class AnnouncementListResponse(BaseModel):
@@ -119,6 +139,12 @@ def get_announcement(
     comments = [
         CommentResponse.model_validate(c) for c in ann.comments
     ]
+    attachments = (
+        db.query(AnnouncementAttachment)
+        .filter(AnnouncementAttachment.announcement_id == ann.id)
+        .order_by(AnnouncementAttachment.created_at)
+        .all()
+    )
     return AnnouncementDetailResponse(
         id=ann.id,
         author_id=ann.author_id,
@@ -129,6 +155,7 @@ def get_announcement(
         updated_at=ann.updated_at,
         comment_count=len(comments),
         comments=comments,
+        attachments=[AttachmentResponse.model_validate(a) for a in attachments],
     )
 
 
@@ -266,4 +293,105 @@ def delete_comment(
     if not is_owner and not is_admin:
         raise HTTPException(status_code=403, detail="삭제 권한이 없습니다")
     db.delete(c)
+    db.commit()
+
+
+# ---- 첨부파일 ----
+
+@router.post(
+    "/{announcement_id}/attachments",
+    response_model=AttachmentResponse,
+    status_code=201,
+)
+async def upload_attachment(
+    announcement_id: int,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(
+        require_roles(UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY, UserRole.SECRETARY)
+    ),
+):
+    """첨부파일 업로드 (공지 작성자 또는 팀장/총괄간사)"""
+    ann = db.query(Announcement).filter(Announcement.id == announcement_id).first()
+    if not ann:
+        raise HTTPException(status_code=404, detail="공지사항을 찾을 수 없습니다")
+    is_owner = ann.author_id == current_user.id
+    is_admin = current_user.role in (UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY)
+    if not is_owner and not is_admin:
+        raise HTTPException(status_code=403, detail="첨부파일 업로드 권한이 없습니다")
+
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="파일이 없습니다")
+
+    # 임시 저장 후 S3 업로드
+    suffix = Path(file.filename).suffix
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+        content = await file.read()
+        tmp.write(content)
+        tmp_path = Path(tmp.name)
+
+    try:
+        unique = uuid.uuid4().hex[:8]
+        s3_key = f"announcements/{announcement_id}/{unique}_{file.filename}"
+        upload_generic_file(
+            tmp_path, s3_key,
+            content_type=file.content_type or "application/octet-stream",
+        )
+
+        attachment = AnnouncementAttachment(
+            announcement_id=announcement_id,
+            filename=file.filename,
+            s3_key=s3_key,
+            file_size=len(content),
+            uploaded_by=current_user.id,
+        )
+        db.add(attachment)
+        db.commit()
+        db.refresh(attachment)
+        return attachment
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+
+@router.get("/attachments/{attachment_id}/download")
+def download_attachment(
+    attachment_id: int,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    """첨부파일 다운로드 URL 반환 (presigned)"""
+    att = db.query(AnnouncementAttachment).filter(
+        AnnouncementAttachment.id == attachment_id
+    ).first()
+    if not att:
+        raise HTTPException(status_code=404, detail="첨부파일을 찾을 수 없습니다")
+    url = get_download_url(att.s3_key)
+    return {"download_url": url, "filename": att.filename}
+
+
+@router.delete("/attachments/{attachment_id}", status_code=204)
+def delete_attachment(
+    attachment_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(
+        require_roles(UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY, UserRole.SECRETARY)
+    ),
+):
+    """첨부파일 삭제 (업로더 본인 또는 팀장/총괄간사)"""
+    att = db.query(AnnouncementAttachment).filter(
+        AnnouncementAttachment.id == attachment_id
+    ).first()
+    if not att:
+        raise HTTPException(status_code=404, detail="첨부파일을 찾을 수 없습니다")
+    is_owner = att.uploaded_by == current_user.id
+    is_admin = current_user.role in (UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY)
+    if not is_owner and not is_admin:
+        raise HTTPException(status_code=403, detail="삭제 권한이 없습니다")
+
+    # S3 파일 삭제 (실패해도 DB는 지움)
+    try:
+        s3_delete_file(att.s3_key)
+    except Exception:
+        pass
+    db.delete(att)
     db.commit()

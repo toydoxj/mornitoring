@@ -1,7 +1,8 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { useParams, useRouter } from "next/navigation"
+import { FileIcon, Paperclip, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -25,6 +26,15 @@ interface Comment {
   created_at: string
 }
 
+interface Attachment {
+  id: number
+  announcement_id: number
+  filename: string
+  file_size: number
+  uploaded_by: number
+  created_at: string
+}
+
 interface AnnouncementDetail {
   id: number
   author_id: number
@@ -35,6 +45,7 @@ interface AnnouncementDetail {
   updated_at: string
   comment_count: number
   comments: Comment[]
+  attachments: Attachment[]
 }
 
 export default function AnnouncementDetailPage() {
@@ -51,6 +62,9 @@ export default function AnnouncementDetailPage() {
   const [editTitle, setEditTitle] = useState("")
   const [editContent, setEditContent] = useState("")
   const [submittingEdit, setSubmittingEdit] = useState(false)
+
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
+  const [uploadingFile, setUploadingFile] = useState(false)
 
   const isOwner = !!user && !!ann && user.id === ann.author_id
   const isAdmin = user && ["team_leader", "chief_secretary"].includes(user.role)
@@ -133,6 +147,56 @@ export default function AnnouncementDetailPage() {
     }
   }
 
+  const handleUploadFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setUploadingFile(true)
+    try {
+      const formData = new FormData()
+      formData.append("file", file)
+      await apiClient.post(`/api/announcements/${params.id}/attachments`, formData, {
+        headers: { "Content-Type": "multipart/form-data" },
+      })
+      fetchData()
+    } catch (err) {
+      const msg =
+        (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
+        ?? "업로드 실패"
+      alert(msg)
+    } finally {
+      setUploadingFile(false)
+      if (fileInputRef.current) fileInputRef.current.value = ""
+    }
+  }
+
+  const handleDeleteAttachment = async (attId: number) => {
+    if (!confirm("첨부파일을 삭제하시겠습니까?")) return
+    try {
+      await apiClient.delete(`/api/announcements/attachments/${attId}`)
+      fetchData()
+    } catch (err) {
+      const msg =
+        (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
+        ?? "삭제 실패"
+      alert(msg)
+    }
+  }
+
+  const handleDownloadAttachment = async (attId: number) => {
+    try {
+      const { data } = await apiClient.get<{ download_url: string; filename: string }>(
+        `/api/announcements/attachments/${attId}/download`
+      )
+      if (data.download_url) {
+        window.open(data.download_url, "_blank")
+      } else {
+        alert("다운로드 URL을 생성할 수 없습니다")
+      }
+    } catch {
+      alert("다운로드 실패")
+    }
+  }
+
   const handleDelete = async () => {
     if (!confirm("공지사항을 삭제하시겠습니까?")) return
     try {
@@ -192,6 +256,68 @@ export default function AnnouncementDetailPage() {
         </CardHeader>
         <CardContent>
           <div className="whitespace-pre-wrap break-words text-sm">{ann.content}</div>
+
+          {/* 첨부파일 목록 */}
+          {(ann.attachments?.length ?? 0) > 0 && (
+            <div className="mt-6 space-y-2">
+              <p className="text-sm font-medium">첨부파일 ({ann.attachments.length})</p>
+              {ann.attachments.map((a) => {
+                const canDeleteFile =
+                  user?.id === a.uploaded_by ||
+                  (user && ["team_leader", "chief_secretary"].includes(user.role))
+                return (
+                  <div
+                    key={a.id}
+                    className="flex items-center gap-2 rounded-md border p-2 text-sm"
+                  >
+                    <FileIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
+                    <button
+                      className="flex-1 truncate text-left text-blue-600 hover:underline"
+                      onClick={() => handleDownloadAttachment(a.id)}
+                    >
+                      {a.filename}
+                    </button>
+                    <span className="text-xs text-muted-foreground shrink-0">
+                      {(a.file_size / 1024).toLocaleString(undefined, { maximumFractionDigits: 1 })} KB
+                    </span>
+                    {canDeleteFile && (
+                      <Button
+                        size="icon-xs"
+                        variant="ghost"
+                        onClick={() => handleDeleteAttachment(a.id)}
+                        aria-label="삭제"
+                      >
+                        <X />
+                      </Button>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          )}
+
+          {/* 첨부파일 업로드 버튼 (수정 권한자) */}
+          {canEdit && (
+            <div className="mt-4">
+              <input
+                ref={fileInputRef}
+                type="file"
+                className="hidden"
+                onChange={handleUploadFile}
+                disabled={uploadingFile}
+              />
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => fileInputRef.current?.click()}
+                loading={uploadingFile}
+                loadingText="업로드 중..."
+              >
+                <Paperclip className="mr-1" />
+                첨부파일 추가
+              </Button>
+            </div>
+          )}
         </CardContent>
       </Card>
 

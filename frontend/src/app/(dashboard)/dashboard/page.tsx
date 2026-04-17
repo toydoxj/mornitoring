@@ -115,22 +115,24 @@ export default function DashboardPage() {
         console.error("공지사항 조회 실패:", err)
       }
 
-      // 카톡 알림 최신 5건 (간사 이상만 권한)
+      // 내가 받은 카톡 알림 최신 5건 (모든 로그인 사용자)
+      try {
+        const { data } = await apiClient.get<{ items: NotificationItem[] }>(
+          "/api/notifications/my",
+          { params: { size: 5, page: 1 } }
+        )
+        setNotifications(data.items)
+      } catch (err) {
+        console.error("내 알림 조회 실패:", err)
+      }
+
+      // 간사 이상만 전체 통계
       if (isAdmin) {
         try {
           const { data } = await apiClient.get<DashboardStats>("/api/buildings/stats")
           setStats(data)
         } catch (err) {
           console.error("전체 통계 조회 실패:", err)
-        }
-        try {
-          const { data } = await apiClient.get<{ items: NotificationItem[] }>(
-            "/api/notifications",
-            { params: { size: 5, page: 1 } }
-          )
-          setNotifications(data.items)
-        } catch (err) {
-          console.error("알림 조회 실패:", err)
         }
       }
       setIsLoading(false)
@@ -191,46 +193,34 @@ export default function DashboardPage() {
           </CardContent>
         </Card>
 
-        {/* 카톡 알림 — 간사 이상만 */}
+        {/* 내가 받은 카톡 알림 */}
         <Card>
-          <CardHeader className="flex flex-row items-center justify-between pb-3">
-            <CardTitle className="text-base">카톡 알림 최신</CardTitle>
-            {isAdmin && (
-              <button
-                className="text-xs text-primary hover:underline"
-                onClick={() => router.push("/notifications")}
-              >
-                전체 보기 →
-              </button>
-            )}
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base">내가 받은 카톡 알림</CardTitle>
           </CardHeader>
           <CardContent className="space-y-2">
-            {!isAdmin ? (
-              <p className="text-sm text-muted-foreground py-2">
-                알림 조회 권한이 없습니다.
-              </p>
-            ) : notifications.length === 0 ? (
-              <p className="text-sm text-muted-foreground py-2">발송된 알림이 없습니다.</p>
+            {notifications.length === 0 ? (
+              <p className="text-sm text-muted-foreground py-2">받은 알림이 없습니다.</p>
             ) : (
               notifications.map((n) => (
                 <div
                   key={n.id}
-                  className="flex items-center gap-2 rounded-md border p-2"
+                  className="rounded-md border p-2"
                 >
-                  <Badge
-                    variant={n.is_sent ? "default" : "destructive"}
-                    className="text-xs shrink-0"
-                  >
-                    {n.is_sent ? "성공" : "실패"}
-                  </Badge>
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-medium">
-                      [{TEMPLATE_LABELS[n.template_type] ?? n.template_type}] {n.title}
-                    </p>
-                    <p className="text-xs text-muted-foreground">
-                      {new Date(n.sent_at ?? n.created_at).toLocaleString("ko-KR")}
-                    </p>
+                  <div className="flex items-center gap-2">
+                    <Badge variant="outline" className="text-xs shrink-0">
+                      {TEMPLATE_LABELS[n.template_type] ?? n.template_type}
+                    </Badge>
+                    <p className="truncate text-sm font-medium">{n.title}</p>
                   </div>
+                  {n.message && (
+                    <p className="mt-1 text-xs text-muted-foreground line-clamp-2 whitespace-pre-wrap break-words">
+                      {n.message}
+                    </p>
+                  )}
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {new Date(n.sent_at ?? n.created_at).toLocaleString("ko-KR")}
+                  </p>
                 </div>
               ))
             )}

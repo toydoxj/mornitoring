@@ -238,12 +238,37 @@ def list_notifications(
         require_roles(UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY)
     ),
 ):
-    """알림 로그 목록 조회"""
+    """알림 로그 목록 조회 (관리자용, 전체)"""
     query = db.query(NotificationLog)
 
     if is_sent is not None:
         query = query.filter(NotificationLog.is_sent == is_sent)
 
+    total = query.count()
+    items = (
+        query.order_by(NotificationLog.created_at.desc())
+        .offset((page - 1) * size)
+        .limit(size)
+        .all()
+    )
+    return NotificationListResponse(items=items, total=total)
+
+
+from routers.auth import get_current_user  # noqa: E402
+
+
+@router.get("/my", response_model=NotificationListResponse)
+def list_my_notifications(
+    page: int = Query(1, ge=1),
+    size: int = Query(50, ge=1, le=200),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """내가 받은 알림 목록 (모든 로그인 사용자)"""
+    query = (
+        db.query(NotificationLog)
+        .filter(NotificationLog.recipient_id == current_user.id)
+    )
     total = query.count()
     items = (
         query.order_by(NotificationLog.created_at.desc())

@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from sqlalchemy import String, Text, DateTime, ForeignKey, func
+from sqlalchemy import String, Text, DateTime, Integer, ForeignKey, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from database import Base
@@ -46,3 +46,19 @@ class AnnouncementComment(Base):
     )
 
     announcement = relationship("Announcement", back_populates="comments")
+
+
+class AnnouncementAttachment(Base):
+    __tablename__ = "announcement_attachments"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    announcement_id: Mapped[int] = mapped_column(
+        ForeignKey("announcements.id", ondelete="CASCADE"), index=True
+    )
+    filename: Mapped[str] = mapped_column(String(255))        # 원본 파일명
+    s3_key: Mapped[str] = mapped_column(String(500))          # S3 경로
+    file_size: Mapped[int] = mapped_column(Integer)           # 바이트
+    uploaded_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )

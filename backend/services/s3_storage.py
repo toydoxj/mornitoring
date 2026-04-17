@@ -141,3 +141,22 @@ def delete_file(s3_key: str) -> bool:
         return True
     except ClientError:
         return False
+
+
+def upload_generic_file(
+    file_path: str | Path,
+    s3_key: str,
+    content_type: str = "application/octet-stream",
+) -> str:
+    """임의 경로에 파일 업로드 (S3 미설정 시 키만 반환)"""
+    if not settings.aws_access_key_id:
+        return s3_key
+
+    client = _get_s3_client()
+    client.upload_file(
+        str(file_path),
+        settings.s3_bucket_name,
+        s3_key,
+        ExtraArgs={"ContentType": content_type},
+    )
+    return s3_key
