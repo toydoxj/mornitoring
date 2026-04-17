@@ -228,8 +228,7 @@ export default function MyReviewsPage() {
           <TableHeader>
             <TableRow>
               <TableHead className="w-[120px]">관리번호</TableHead>
-              <TableHead className="w-[160px]">주소</TableHead>
-              <TableHead className="w-[130px]">건물명</TableHead>
+              <TableHead className="w-[220px]">주소</TableHead>
               <TableHead className="w-[100px]">연면적(㎡)</TableHead>
               <TableHead className="w-[80px]">지상층</TableHead>
               <TableHead className="w-[120px]">고위험군</TableHead>
@@ -243,13 +242,13 @@ export default function MyReviewsPage() {
           <TableBody>
             {isLoading ? (
               <TableRow>
-                <TableCell colSpan={11} className="h-32 text-center">
+                <TableCell colSpan={10} className="h-32 text-center">
                   로딩 중...
                 </TableCell>
               </TableRow>
             ) : data.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={11} className="h-32 text-center text-muted-foreground">
+                <TableCell colSpan={10} className="h-32 text-center text-muted-foreground">
                   배정된 검토 대상이 없습니다
                 </TableCell>
               </TableRow>
@@ -259,20 +258,15 @@ export default function MyReviewsPage() {
                   <TableCell
                     className="font-mono font-medium text-blue-600 cursor-pointer hover:underline"
                     onClick={() => router.push(`/buildings/${b.id}?from=my-reviews`)}
+                    title={b.building_name ?? undefined}
                   >
                     {b.mgmt_no}
                   </TableCell>
                   <TableCell
-                    className="text-sm max-w-[160px] truncate"
+                    className="text-sm max-w-[220px] truncate"
                     title={b.full_address ?? undefined}
                   >
                     {b.full_address || "-"}
-                  </TableCell>
-                  <TableCell
-                    className="max-w-[130px] truncate"
-                    title={b.building_name ?? undefined}
-                  >
-                    {b.building_name || "-"}
                   </TableCell>
                   <TableCell className="text-right">{b.gross_area?.toLocaleString() ?? "-"}</TableCell>
                   <TableCell className="text-right">{b.floors_above ?? "-"}</TableCell>
