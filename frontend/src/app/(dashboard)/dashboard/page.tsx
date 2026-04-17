@@ -212,7 +212,7 @@ export default function DashboardPage() {
             {/* 1행: 진행 지표 4카드 */}
             <div className="grid gap-3 grid-cols-1 md:grid-cols-2 lg:grid-cols-4">
               <Bucket label="배정" value={myStats.total} tint="indigo" suffix="건" />
-              <Bucket label="미제출 검토서" value={myStats.need_review} tint="red" suffix="건" />
+              <Bucket label="검토서 미제출" value={myStats.need_review} tint="red" suffix="건" />
               <SubmittedBucket
                 preliminary={myStats.submitted_preliminary}
                 supplement={myStats.submitted_supplement}
