@@ -76,6 +76,9 @@ class BuildingResponse(BaseModel):
     floors_above: int | None = None
     floors_below: int | None = None
     high_risk_type: str | None = None
+    is_special_structure: bool | None = None
+    is_high_rise: bool | None = None
+    is_multi_use: bool | None = None
     current_phase: str | None = None
     final_result: str | None = None
     reviewer_id: int | None = None

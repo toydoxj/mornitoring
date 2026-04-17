@@ -29,6 +29,9 @@ export interface Building {
   floors_above: number | null
   floors_below: number | null
   high_risk_type: string | null
+  is_special_structure?: boolean | null
+  is_high_rise?: boolean | null
+  is_multi_use?: boolean | null
   current_phase: string | null
   final_result: string | null
   reviewer_id: number | null

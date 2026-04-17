@@ -271,11 +271,23 @@ export default function MyReviewsPage() {
                   <TableCell className="text-right">{b.gross_area?.toLocaleString() ?? "-"}</TableCell>
                   <TableCell className="text-right">{b.floors_above ?? "-"}</TableCell>
                   <TableCell className="text-sm">
-                    {b.high_risk_type ? (
-                      <Badge variant="outline" className="text-xs">{b.high_risk_type}</Badge>
-                    ) : (
-                      "-"
-                    )}
+                    {(() => {
+                      const tags: string[] = []
+                      if (b.is_special_structure) tags.push("특수")
+                      if (b.is_high_rise) tags.push("고층")
+                      if (b.is_multi_use) tags.push("다중이용")
+                      return tags.length > 0 ? (
+                        <div className="flex flex-wrap gap-1">
+                          {tags.map((t) => (
+                            <Badge key={t} variant="outline" className="text-xs">
+                              {t}
+                            </Badge>
+                          ))}
+                        </div>
+                      ) : (
+                        <span className="text-muted-foreground">-</span>
+                      )
+                    })()}
                   </TableCell>
                   <TableCell className="text-center">
                     {b.latest_inappropriate ? (
