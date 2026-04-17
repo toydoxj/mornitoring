@@ -1,296 +1,194 @@
-# 건축구조안전 모니터링 시스템 - 구현 계획서
+# 건축구조안전 모니터링 시스템 — 구현 계획서
+
+> 최종 갱신: 2026-04-17
+> 진행 상황: Stage 1~3 완료, Stage 4 일부 완료 + 추가 기능 개발 중
 
 ## Context
 
-건축구조안전 모니터링 업무(관리번호 부여 → 설계도서 배포 → 검토서 수집 → 보완 반복)를 현재 엑셀 기반 수작업으로 처리하고 있음. 이를 **웹 기반 통합 시스템**으로 전환하여 총괄간사·검토위원 간 업무 자동화를 달성하는 것이 목적.
+건축구조안전 모니터링 업무(관리번호 부여 → 설계도서 배포 → 검토서 수집 → 보완 반복)를 현재 엑셀 기반 수작업에서 **웹 기반 통합 시스템**으로 전환.
 
-- 접수 도서 데이터는 **간사가 엑셀(또는 웹 폼)에 입력 후 업로드**하는 방식
-- 로컬 폴더 자동화(Electron)는 불필요 → **별도 엑셀 매크로/유틸리티**로 데이터 입력 보조
-- 시스템은 순수 웹 앱으로 구성
-
-**사용자 규모**: 팀장 1 + 총괄간사 1 + 간사 5 + 검토위원 50 ≈ 약 60명
-**핵심 데이터**: 통합관리대장 (102열, 1500+ 행, 예비검토~N차 보완 반복 구조)
+- 사용자: 팀장 1 + 총괄간사 1 + 간사 5 + 검토위원 50 ≈ **약 60명**
+- 핵심 데이터: 통합관리대장 (102열, 3,401건 적재 완료)
 
 ---
 
 ## 기술 스택
 
-```
-┌─────────────────────────────────────────────────┐
-│                    Frontend                      │
-│  Next.js 14 (App Router) + TypeScript            │
-│  Tailwind CSS + shadcn/ui                        │
-│  TanStack Table (대장 그리드)                     │
-│  React Hook Form + Zod (검토서 업로드/유효성)     │
-└────────────────────┬────────────────────────────┘
-                     │ REST API (JSON)
-┌────────────────────▼────────────────────────────┐
-│                    Backend                        │
-│  FastAPI (Python 3.11+)                          │
-│  SQLAlchemy + Alembic (ORM/마이그레이션)          │
-│  openpyxl (엑셀 읽기/쓰기/검증)                  │
-│  Pydantic v2 (모델 검증)                         │
-│  python-jose + passlib (JWT 인증)                │
-│  카카오 OAuth2 (로그인 + 친구에게 보내기)         │
-└────────────────────┬────────────────────────────┘
-                     │
-┌────────────────────▼────────────────────────────┐
-│               Infrastructure                     │
-│  PostgreSQL 15 (마스터 DB)                       │
-│  AWS S3 (검토서 파일 저장)                        │
-│  카카오톡 "친구에게 보내기" API (검토위원 알림)   │
-└─────────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────────┐
-│            별도 유틸리티 (간사용)                  │
-│  Python CLI 또는 엑셀 VBA 매크로                  │
-│  - 접수 폴더 스캔 → 관리번호 파싱                 │
-│  - 통합관리대장 엑셀 자동 기입                    │
-│  - 검토위원별 폴더 생성/파일 복사                 │
-└─────────────────────────────────────────────────┘
-```
-
-### 스택 선정 근거
-
-| 결정 | 이유 |
-|------|------|
-| **Next.js + FastAPI** | 기존 repo(MIDAS 프로젝트)와 동일 스택 → 학습곡선 최소화 |
-| **PostgreSQL** (엑셀 직접 조작 X) | 50명 동시 접근 시 엑셀 파일 잠금/충돌 불가피. DB를 마스터로 두고 엑셀은 import/export만 |
-| **S3** (Google Drive X) | API 안정성, 버전 관리, 접근 제어 우수. 날짜별 prefix로 폴더 구조 |
-| **별도 Python CLI/매크로** (Electron X) | 로컬 폴더 작업은 간사 PC에서 가끔 실행 → 데스크톱 앱 불필요, 경량 스크립트로 충분 |
-| **카카오톡 "친구에게 보내기" API** | 무료, 카카오 로그인을 인증 겸용. 검토위원이 앱 동의 + 운영 계정과 친구 관계 필요 |
+| 계층 | 스택 |
+|---|---|
+| Frontend | Next.js 16 (App Router) + TypeScript + Tailwind + shadcn/ui |
+| Backend | FastAPI + SQLAlchemy + Alembic + Pydantic v2 |
+| DB | PostgreSQL 17 (Supabase Seoul) |
+| Storage | AWS S3 (검토서 파일) |
+| 인증 | JWT + 카카오 OAuth2 |
+| 알림 | 카카오톡 친구 메시지 API + 나에게 보내기 |
+| 배포 | Frontend → Vercel / Backend → Render |
 
 ---
 
-## 시스템 아키텍처
+## 구현 진행 현황
 
-```mermaid
-flowchart TB
-    subgraph Client["클라이언트"]
-        WEB["웹 브라우저<br/>(모든 사용자)"]
-    end
+### ✅ Stage 1: 기반 구축 — 완료
 
-    subgraph LocalTool["간사 PC (별도 유틸리티)"]
-        CLI["Python CLI / 엑셀 매크로<br/>- 폴더 분류<br/>- 대장 자동 기입"]
-        LOCAL["D:/2026모니터링/<br/>(로컬 폴더)"]
-        CLI -->|파일 읽기/쓰기| LOCAL
-    end
+- [x] **1-1** PostgreSQL 스키마 + Alembic 마이그레이션
+  - 10개 테이블: users, reviewers, buildings, review_stages, inquiries, inappropriate_notes, notification_logs, announcements, announcement_comments, audit_logs
+- [x] **1-2** JWT 인증 + RBAC (4개 역할)
+- [x] **1-3** 통합관리대장 엑셀 → DB import 엔진 (`engines/ledger_import_unified.py`)
+- [x] **1-4** DB → 엑셀 export (`engines/ledger_export.py`)
+- [x] **1-5** 사용자 관리 CRUD + 엑셀 일괄 등록 (`/admin`)
+- [ ] **1-6** 간사용 엑셀 입력 유틸리티 (Python CLI) — **미구현** (실무상 불필요 판단)
 
-    subgraph Server["서버"]
-        API["FastAPI<br/>REST API"]
-        WORKER["Background Worker<br/>(엑셀 파싱, 알림)"]
-    end
+### ✅ Stage 2: 핵심 루프 — 완료
 
-    subgraph Storage["저장소"]
-        DB[(PostgreSQL)]
-        S3["AWS S3<br/>(검토서 파일)"]
-    end
+- [x] **2-1** 관리번호 조회 + 대장 그리드 (`/buildings`)
+- [x] **2-2** 검토위원 배정 UI (엑셀 일괄 + 수동)
+- [x] **2-3** 간사용 엑셀 업로드
+- [x] **2-4** 카카오톡 알림 연동 (OAuth + 친구 메시지 + 나에게 보내기)
+- [x] **2-5** 검토위원 "내 검토 대상" 페이지 (`/my-reviews`)
 
-    subgraph External["외부 서비스"]
-        KAKAO["카카오<br/>알림톡 API"]
-    end
+### ✅ Stage 3: 검토서 업로드 — 완료
 
-    WEB -->|HTTP/JSON| API
-    CLI -->|엑셀 업로드| API
-    API --> DB
-    API --> S3
-    WORKER --> DB
-    WORKER --> KAKAO
-    API --> WORKER
-```
+- [x] **3-1** 검토서 업로드 API + UI (미리보기 → 확인 → 업로드 2단계)
+- [x] **3-2** 유효성 검증 (파일명/관리번호/검토자명/단계별 차수 라벨)
+- [x] **3-3** S3 업로드 (날짜/단계별 prefix, 재업로드 시 이전 파일 자동 삭제)
+- [x] **3-4** 검토서 내용 자동 추출 (H4 결과 / F11 주구조 / F12 내진등급 / F13 도면작성자 자격 / G81~ 부적합유형 등)
+- [x] **3-5** 대장 그리드에 단계별 상태 반영
 
----
+### ⏸ Stage 4: 반복 패턴 + 운영 — 일부 완료
 
-## 데이터 모델 (핵심 테이블)
+- [x] **4-1** 단계 상태머신 (`phase_machine.py`, PHASE_SEQUENCE에 `assigned` 추가됨)
+- [x] **4-2** 단계별 동적 컬럼 (건물 상세 페이지 타임라인)
+- [x] **4-3** 감사 로그 (audit_logs)
+- [x] **4-4** 엑셀 export (DB → 통합관리대장 형식)
+- [x] **4-5** 검토서 미제출 사유 입력 → 문의사항으로 확장 (`/inquiries`)
 
-```
-┌──────────────┐     ┌──────────────────┐     ┌───────────────┐
-│    users     │     │    buildings     │     │   reviewers   │
-├──────────────┤     ├──────────────────┤     ├───────────────┤
-│ id (PK)      │     │ id (PK)          │     │ id (PK)       │
-│ name         │     │ mgmt_no (UNIQUE) │     │ user_id (FK)  │
-│ role (enum)  │◄────│ reviewer_id (FK) │     │ group_no      │
-│ phone        │     │ address          │     │ specialty     │
-│ kakao_id     │     │ gross_area       │     └───────────────┘
-│ password_hash│     │ floors_above     │
-└──────────────┘     │ floors_below     │
-                     │ main_structure   │
-                     │ main_usage       │
-                     │ high_risk_type   │
-                     │ architect_firm   │
-                     │ struct_engineer  │
-                     │ current_phase    │
-                     │ final_result     │
-                     └────────┬─────────┘
-                              │ 1:N
-                     ┌────────▼─────────┐
-                     │  review_stages   │
-                     ├──────────────────┤
-                     │ id (PK)          │
-                     │ building_id (FK) │
-                     │ phase (enum)     │  ← 예비/1차/2차/3차...
-                     │ doc_distributed  │  ← 도서배포일
-                     │ report_submitted │  ← 검토서 제출일
-                     │ reviewer_name    │
-                     │ result (enum)    │  ← 적합/보완/부적합
-                     │ defect_type_1    │
-                     │ defect_type_2    │
-                     │ defect_type_3    │
-                     │ review_opinion   │
-                     │ objection_filed  │  ← 이의신청 여부
-                     │ objection_reason │
-                     │ s3_file_key      │  ← 검토서 파일 경로
-                     └──────────────────┘
-```
+### ✅ 추가 구현 완료
+
+**카카오 알림**
+- [x] 카카오 디벨로퍼스 권한 검수 통과 (2026-04-17)
+- [x] Scope 자동 체크 + 재동의 리다이렉트
+- [x] 친구 매칭 페이지 (`/admin`에 통합)
+- [x] 본인 발송 시 "나에게 보내기" API 자동 분기
+- [x] pair 20건/일 제한 자체 모니터링
+
+**부적합 대상 검토**
+- [x] 검토서 업로드 시 "부적정 사례 검토 필요" 체크박스
+- [x] `/inappropriate-review` 페이지 (간사 이상)
+- [x] 판정 4단계 (확정-심각 / 확정-단순 / 대기 / 제외)
+- [x] 간사진 의견 다중 작성 (작성자/시각 기록)
+- [x] 지적단계 표시 (예비검토/보완검토 N차)
+
+**공지사항**
+- [x] 게시판 (목록/상세/작성/수정/삭제)
+- [x] 댓글 기능
+- [x] 대시보드 상단 위젯 (공지사항 + 카톡 알림 최신 5건)
+
+**대시보드**
+- [x] 개인 현황 (배정/제출검토서/연면적/1000㎡↑/고위험/검토대상/경과일수)
+- [x] 전체 현황 (미배정/배정완료/검토서대기/검토진행중/완료)
+- [x] 위원별 현황 테이블 (간사 이상)
+
+**기타**
+- [x] Button 컴포넌트 인터랙션 강화 (loading prop + 스피너)
+- [x] 화면폭 반응형 (뷰포트 90%)
+- [x] 간사 이상이 단계 수동 수정 가능 (건물 상세)
+- [x] 문의사항 작성 권한 — "담당 건물" 기준 (역할 무관)
 
 ---
 
-## 구현 단계 (4단계)
+## 아직 남은 작업 (TODO)
 
-### Stage 1: 기반 구축 (2~3주)
+### 우선순위 높음
+- [ ] **검토서 양식 셀 위치 재확인**
+  - F9/H9 도면작성자 소속/성명 — **현재 미사용으로 삭제됨, 자격(F13)만 유지**
+  - 실제 양식의 내진등급 셀이 F12가 맞는지 최종 확인
+- [ ] **최종 완료(completed) 판정용 별도 엑셀 업로드 기능**
+  - 현재 `phase_machine`에서 자동 completed 처리 비활성화됨
+  - 별도 엑셀로 최종 판정 지정 예정 (사용자 요구)
+- [ ] **검토위원 50명 실제 온보딩**
+  - 사용자 계정 생성 (엑셀 일괄등록)
+  - 카카오 로그인 + 동의 + 카카오톡 친구 관계 확보
+  - 간사가 `/admin`에서 친구 매칭
+- [ ] **프로덕션 배포 환경 최종 점검**
+  - 마이그레이션 자동 적용 확인 (Render)
+  - 환경변수/시크릿 점검
+  - AWS S3 운영 버킷 / IAM 정책
 
-**목표**: 인증, DB, 통합관리대장 import/export, 엑셀 입력 유틸리티
+### 우선순위 중간
+- [ ] **도서배포(`doc_distributed_at`) 워크플로**
+  - 현재 `doc_received_at`만 기록되고 있음
+  - 간사가 검토위원에게 도서 배포한 날짜를 별도 기록하는 UI/API 필요할지 검토
+- [ ] **검토 마감일 알림 (자동 리마인더)**
+  - 접수 후 N일 경과 시 자동 알림 (카카오 메시지 API 자동 발송은 검수 정책상 별도 검토 필요)
+  - 현재는 수동 발송만 구현
+- [ ] **검토서 버전 히스토리**
+  - 현재 같은 단계 재업로드 시 기존 파일/데이터 덮어쓰기
+  - 이전 버전 스냅샷 보존 필요한지 검토 (audit_logs에 업로드 행위만 기록 중)
+- [ ] **인덱스 최적화**
+  - `buildings.current_phase`, `buildings.assigned_reviewer_name` 등 빈번한 필터 대상 인덱스 검토
+  - 3,401건 규모에서는 문제 없으나 확장 대비
 
-| # | 작업 | 파일/위치 |
-|---|------|-----------|
-| 1-1 | PostgreSQL 스키마 + Alembic 마이그레이션 | `backend/models/`, `alembic/` |
-| 1-2 | JWT 인증 + RBAC (팀장/총괄간사/간사/검토위원) | `backend/routers/auth.py`, `backend/auth_middleware.py` |
-| 1-3 | 통합관리대장 엑셀 → DB import 엔진 | `backend/engines/ledger_import.py` |
-| 1-4 | DB → 엑셀 export (열 매핑 102열 재현) | `backend/engines/ledger_export.py` |
-| 1-5 | 사용자 관리 CRUD API + 프론트 페이지 | `frontend/app/admin/` |
-| 1-6 | **엑셀 입력 유틸리티** (간사용 Python CLI) | `tools/ledger_tool.py` |
+### 우선순위 낮음
+- [ ] **미사용 필드 정리**
+  - `buildings.drawing_creator_firm`, `drawing_creator_name` (사용자가 제거 요청, DB 컬럼은 아직 존재)
+  - `buildings.high_risk_type` (전부 NULL, is_special/high_rise/multi_use 3개 불리언으로 대체됨)
+- [ ] **검토위원별 성과 리포트 export**
+- [ ] **알림 템플릿 관리 UI**
+  - 현재 프론트에 하드코딩된 템플릿 3종 (검토 요청/도서 접수/리마인더)
+  - 팀장이 템플릿 편집하게 하려면 DB 기반 관리 필요
+- [ ] **백엔드 단위 테스트 / E2E 테스트 작성**
+- [ ] **모바일 반응형 최적화** (현재 태블릿 이상 전제)
 
-#### 1-6 엑셀 입력 유틸리티 상세
-
-간사가 로컬 PC에서 실행하는 Python CLI 도구:
-
-```
-python ledger_tool.py classify --source "D:/2026모니터링/01.접수자료/예비검토/20260501" \
-                                --target "D:/2026모니터링/02.배포자료" \
-                                --ledger "통합관리대장.xlsx"
-```
-
-기능:
-- **자료분류**: 접수 폴더 스캔 → 폴더명에서 관리번호 파싱(`2026-0001_서울시...`) → 통합관리대장에서 해당 관리번호의 검토위원 조회 → 검토위원 이름 폴더 생성 + 파일 복사
-- **대장 기입**: 검토서 내용을 읽어 통합관리대장의 해당 행에 자동 기입
-- **웹 업로드**: 처리 완료 후 API를 호출하여 DB에도 동기화 (선택 기능)
-
----
-
-### Stage 2: Phase 0~1 핵심 루프 (3~4주)
-
-**목표**: 관리번호 → 검토위원 배치 → 대장 업로드 → 알림
-
-| # | 작업 | 파일/위치 |
-|---|------|-----------|
-| 2-1 | 관리번호 등록/조회 + 대장 그리드 UI | `frontend/app/dashboard/`, `backend/routers/building.py` |
-| 2-2 | 검토위원 배치 UI (드래그 or 셀렉트) | `frontend/app/dashboard/ReviewerAssign.tsx` |
-| 2-3 | 간사용 엑셀 업로드 (대장 데이터 일괄 등록) | `backend/routers/ledger.py`, `frontend/app/upload/` |
-| 2-4 | 카카오 알림톡 연동 (검토대상 추가 알림) | `backend/services/kakao_notify.py` |
-| 2-5 | 검토위원 로그인 후 [검토대상] 목록 페이지 | `frontend/app/my-reviews/` |
-
-### Stage 3: Phase 2 검토서 업로드 루프 (3~4주)
-
-**목표**: 검토서 업로드 → 유효성 검증 → S3 저장 → 대장 자동 반영
-
-| # | 작업 | 파일/위치 |
-|---|------|-----------|
-| 3-1 | 검토서 업로드 API + UI | `backend/routers/review.py`, `frontend/app/my-reviews/upload/` |
-| 3-2 | 유효성 검증 엔진 (파일명=관리번호, 내부 관리번호 일치, 제출자=검토자) | `backend/engines/review_validator.py` |
-| 3-3 | S3 업로드 (날짜별 prefix: `reviews/2026/05/01/2026-0001.xlsm`) | `backend/services/s3_storage.py` |
-| 3-4 | 검토서 내용 자동 추출 → DB review_stages 반영 | `backend/engines/review_extractor.py` |
-| 3-5 | 대장 그리드에 단계별 상태 실시간 반영 | `frontend/app/dashboard/StageColumns.tsx` |
-
-### Stage 4: 반복 패턴 + 운영 (2~3주)
-
-**목표**: 예비→1차→2차→...N차 상태머신, 엑셀 export, 운영 기능
-
-| # | 작업 | 파일/위치 |
-|---|------|-----------|
-| 4-1 | 단계 상태머신 (예비 → 보완1차 → ... 완료) | `backend/engines/phase_machine.py` |
-| 4-2 | 메인 그리드 단계별 동적 컬럼 (탭 또는 가로 스크롤) | `frontend/app/dashboard/` |
-| 4-3 | 감사 로그 (누가/언제/무엇을) | `backend/models/audit_log.py` |
-| 4-4 | 엑셀 export (현재 DB 상태 → 통합관리대장 형식) | `backend/routers/export.py` |
-| 4-5 | 검토서 미제출 사유 입력 워크플로 | `frontend/app/my-reviews/reason/` |
+### 문서화
+- [ ] `kakao-message-setup.md` 최신화 (검수 통과 반영)
+- [ ] `kakao-permission-review-purpose.md`는 보관/삭제 결정
+- [ ] API 엔드포인트 전체 목록 문서 (현재 `/openapi.json`으로 확인 가능)
+- [ ] 운영 매뉴얼 (간사/팀장용 사용 가이드)
 
 ---
 
-## 업무 흐름
+## 완료된 마일스톤
 
-```mermaid
-flowchart LR
-    subgraph Phase0["Phase 0: 관리번호·배치"]
-        A1["국토안전관리원<br/>관리번호 부여"] --> A2["총괄간사<br/>대장에 검토위원 지정"]
-    end
-
-    subgraph Phase1["Phase 1: 접수·배포"]
-        B1["설계도서 접수<br/>(폴더 단위)"] --> B2["간사: 엑셀/웹폼으로<br/>접수 데이터 입력·업로드"]
-        B2 --> B3["CLI 유틸: 폴더 자동분류<br/>(검토위원별 복사)"]
-        B3 --> B4["카카오 알림톡<br/>검토위원에게 통보"]
-        B4 --> B5["검토위원 로그인<br/>검토대상 확인"]
-    end
-
-    subgraph Phase2["Phase 2: 검토·제출"]
-        C1["검토위원<br/>설계도서 검토"] --> C2["검토서 작성<br/>(엑셀)"]
-        C2 --> C3["웹에서 검토서 업로드"]
-        C3 --> C4["유효성 검증<br/>(3종)"]
-        C4 -->|통과| C5["S3 저장 +<br/>대장 자동 반영"]
-        C4 -->|실패| C6["오류 안내<br/>재업로드"]
-    end
-
-    Phase0 --> Phase1 --> Phase2
-    C5 -->|보완 필요| Phase1
-```
+| 시점 | 마일스톤 |
+|---|---|
+| 2026-04 초 | Stage 1 완료 (DB/인증/대장 import·export) |
+| 2026-04 중 | Stage 2~3 완료 (검토서 업로드/검증/추출 + 카카오 알림) |
+| 2026-04-17 | **카카오 디벨로퍼스 친구/메시지 권한 검수 통과** |
+| 2026-04-17 | 부적합 검토·공지사항·대시보드 재구성 |
 
 ---
 
-## 발생 가능 시나리오 및 대응
+## 발생 가능 시나리오 및 대응 (기존)
 
 ### 시나리오 1: 엑셀과 DB 데이터 불일치
-- **상황**: 간사가 엑셀로 데이터를 입력한 뒤 웹 업로드를 잊어버려 DB와 엑셀이 달라짐
-- **대응**: 엑셀 업로드 시 diff 비교 화면 제공 (변경된 행 하이라이트). 주기적으로 "동기화 필요" 알림.
+엑셀 업로드 시 diff 비교 화면 제공 (미리보기 → 확인 → 업로드). ✅ 구현됨.
 
 ### 시나리오 2: 검토서 유효성 검증 실패
-- **상황**: 파일명이 관리번호와 불일치, 또는 내부 검토자명이 로그인 사용자와 다름
-- **대응**: 구체적 오류 메시지 반환. 검토서 재업로드 유도.
+구체적 오류 메시지 반환. ✅ 구현됨.
 
 ### 시나리오 3: 카카오톡 알림 발송 실패
-- **상황**: 수신자가 친구 관계 미등록, 카카오 토큰 만료, API 장애
-- **대응**: 실패 건을 `notification_log` 테이블에 기록. 토큰 만료 시 refresh token으로 자동 갱신. 친구 미등록 시 웹 내 알림으로 fallback. 관리자 대시보드에서 실패 건 확인 및 수동 재발송.
+`notification_logs`에 기록, 토큰 만료 자동 갱신, pair 20건/일 자체 체크. ✅ 구현됨.
 
 ### 시나리오 4: 검토위원 50명 동시 접속
-- **상황**: 마감일 전날 다수 검토위원이 동시에 검토서 업로드
-- **대응**: S3 pre-signed URL로 직접 업로드 + 비동기 검증으로 서버 부하 분산.
+S3 pre-signed URL 직접 업로드 — **현재는 서버 경유 업로드** (3,401건 기준 충분, 추후 최적화 여지).
 
 ### 시나리오 5: 엑셀 양식 변경
-- **상황**: 국토안전관리원에서 통합관리대장 양식(열 구성)을 변경
-- **대응**: 열 매핑을 설정 파일(`column_mapping.json`)로 분리. 양식 변경 시 매핑만 수정.
+열 매핑은 `engines/column_mapping.py`에서 관리. 변경 시 이 파일만 수정. ✅
 
-### 시나리오 6: 보완 검토 차수가 5차 이상
-- **상황**: PRD에서 5차까지 예시했으나 실무에서 더 늘어날 수 있음
-- **대응**: `review_stages` 테이블이 1:N 관계이므로 차수 제한 없음. UI도 동적 렌더링.
+### 시나리오 6: 보완 검토 5차 이상
+`review_stages` 1:N 구조. 현재 코드는 supplement_1~5 enum 제한 — 6차 이상 필요 시 enum 확장 필요.
 
-### 시나리오 7: 엑셀 매크로 유틸리티와 웹 시스템 간 데이터 충돌
-- **상황**: CLI 유틸로 로컬 엑셀을 수정했지만 웹에 업로드하기 전에 다른 간사가 웹에서 같은 건을 수정
-- **대응**: 업로드 시 `mgmt_no + updated_at` 기반 낙관적 잠금(optimistic locking). 충돌 감지 시 diff 표시 후 사용자가 선택.
+### 시나리오 7: 예비도서 재접수 (2번 오는 경우)
+간사가 건물 상세 페이지에서 **단계 수동 수정** 기능으로 처리 가능. ✅ 구현됨.
 
 ---
 
-## 검증 방법
+## 참고 문서
 
-1. **Stage 1 검증**: 샘플 엑셀(`관리대장 샘플.xlsx`) import → DB 저장 → export하여 원본과 비교
-2. **Stage 2 검증**: 관리번호 등록 → 검토위원 배치 → CLI로 폴더 분류 → 알림톡 발송 로그 확인
-3. **Stage 3 검증**: 샘플 검토서 업로드 → 3종 유효성 검증 통과/실패 케이스 → S3 확인 → DB 자동 반영 확인
-4. **E2E 테스트**: 관리번호 생성 → 도서 접수 → 검토서 제출 → 보완 단계 전환 → 최종 판정까지 전체 흐름
-
----
-
-## 사전 확인 필요 사항
-
-- [ ] 카카오 개발자 앱 등록 및 카카오 로그인 + 메시지 발송 권한 설정
-- [ ] 시스템 운영 계정 생성 (검토위원들이 친구 추가할 대상)
-- [ ] AWS 계정 및 S3 버킷 생성
-- [ ] PostgreSQL 호스팅 결정 (AWS RDS / 자체 서버)
-- [ ] 검토서 엑셀(.xlsm) 양식의 정확한 셀 위치 (관리번호, 검토자명, 판정결과 등)
-- [ ] 도메인 및 SSL 인증서 (웹 배포용)
-- [ ] 간사 PC 로컬 폴더 경로 규칙 최종 확정 (CLI 유틸 설정용)
+- `.doc/PRD.md` — 제품 요구사항
+- `.doc/database.md` — DB 스키마 상세 (최신)
+- `.doc/kakao-message-setup.md` — 카카오 API 도입 가이드
+- `.doc/kakao-permission-review-purpose.md` — 검수 신청 시 제출 문서 (통과됨)
+- `.doc/excel_valid.md` — 엑셀 유효성 규칙
+- `.doc/관리대장 샘플.xlsx` — 통합관리대장 양식
+- `.doc/2025-0005.xlsm` — 검토서 양식 샘플
