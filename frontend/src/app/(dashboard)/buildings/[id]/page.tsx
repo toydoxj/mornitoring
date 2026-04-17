@@ -9,7 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Separator } from "@/components/ui/separator"
 import apiClient from "@/lib/api/client"
 import { useAuthStore } from "@/stores/authStore"
-import type { Building, ReviewStage, PhaseType, ResultType } from "@/types"
+import type { Building, ReviewStage, PhaseType, ResultType, InappropriateDecisionType } from "@/types"
 import { PHASE_LABELS, RESULT_LABELS } from "@/types"
 
 const RESULT_VARIANT: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
@@ -79,6 +79,23 @@ export default function BuildingDetailPage() {
       setStages(stagesRes.data)
     } catch (err) {
       console.error("단계 전환 실패:", err)
+    }
+  }
+
+  const handleInappropriateDecision = async (
+    stageId: number,
+    decision: InappropriateDecisionType
+  ) => {
+    try {
+      await apiClient.patch(`/api/reviews/inappropriate/${stageId}`, { decision })
+      // 단계 목록 재조회
+      const { data: stagesRes } = await apiClient.get<ReviewStage[]>(`/api/reviews/stages/${params.id}`)
+      setStages(stagesRes)
+    } catch (err) {
+      const msg =
+        (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
+        ?? "변경 실패"
+      alert(msg)
     }
   }
 
@@ -230,6 +247,35 @@ export default function BuildingDetailPage() {
                           <dt className="text-muted-foreground mb-1">검토의견</dt>
                           <div className="rounded-md bg-muted p-3 text-sm whitespace-pre-wrap break-words max-h-60 overflow-y-auto">
                             {stage.review_opinion}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* 부적합 검토 판정 (간사 이상 + 부적합 체크된 단계만) */}
+                      {stage.inappropriate_review_needed && canManage && (
+                        <div className="rounded-md border border-orange-200 bg-orange-50 p-3">
+                          <dt className="text-sm font-medium text-orange-900 mb-2">
+                            부적합 대상 검토 판정
+                          </dt>
+                          <div className="flex flex-wrap gap-2">
+                            {([
+                              { key: "confirmed_serious", label: "확정(심각)" },
+                              { key: "confirmed_simple", label: "확정(단순)" },
+                              { key: "pending", label: "대기" },
+                              { key: "excluded", label: "제외" },
+                            ] as const).map((opt) => {
+                              const active = (stage.inappropriate_decision ?? "pending") === opt.key
+                              return (
+                                <Button
+                                  key={opt.key}
+                                  size="sm"
+                                  variant={active ? (opt.key === "excluded" ? "destructive" : "default") : "outline"}
+                                  onClick={() => handleInappropriateDecision(stage.id, opt.key)}
+                                >
+                                  {opt.label}
+                                </Button>
+                              )
+                            })}
                           </div>
                         </div>
                       )}

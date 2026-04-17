@@ -24,6 +24,13 @@ class ResultType(str, enum.Enum):
     RECALCULATE = "recalculate"        # 재계산
 
 
+class InappropriateDecision(str, enum.Enum):
+    PENDING = "pending"                     # 대기 (기본값)
+    CONFIRMED_SERIOUS = "confirmed_serious" # 확정(심각)
+    CONFIRMED_SIMPLE = "confirmed_simple"   # 확정(단순)
+    EXCLUDED = "excluded"                   # 제외 (확정됐다가 추후 제외 가능)
+
+
 class ReviewStage(Base):
     __tablename__ = "review_stages"
 
@@ -54,6 +61,10 @@ class ReviewStage(Base):
 
     # 부적정 사례 검토 필요 여부 (업로드 시 검토자가 체크)
     inappropriate_review_needed: Mapped[bool] = mapped_column(Boolean, default=False)
+    # 부적합 검토 판정 (간사 이상이 결정)
+    inappropriate_decision: Mapped[InappropriateDecision | None] = mapped_column(
+        Enum(InappropriateDecision), default=None
+    )
 
     # 검토서 파일
     s3_file_key: Mapped[str | None] = mapped_column(String(500))     # S3 파일 경로

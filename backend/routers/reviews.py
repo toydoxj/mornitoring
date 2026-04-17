@@ -43,6 +43,8 @@ class ReviewStageResponse(BaseModel):
     defect_type_3: str | None = None
     review_opinion: str | None = None
     s3_file_key: str | None = None
+    inappropriate_review_needed: bool = False
+    inappropriate_decision: str | None = None
 
     model_config = {"from_attributes": True}
 
@@ -677,3 +679,146 @@ def advance_phase(
         return {"message": f"다음 단계로 전환: {next_phase.value}", "next_phase": next_phase.value}
 
     raise HTTPException(status_code=400, detail="단계 전환 조건이 충족되지 않았습니다")
+
+
+# ==============================
+# 부적합 대상 검토 (간사 이상)
+# ==============================
+
+from models.review_stage import InappropriateDecision  # noqa: E402
+
+
+class InappropriateReviewItem(BaseModel):
+    stage_id: int
+    building_id: int
+    mgmt_no: str
+    building_name: str | None = None
+    full_address: str | None = None
+    gross_area: float | None = None
+    floors_above: int | None = None
+    is_special_structure: bool | None = None
+    is_high_rise: bool | None = None
+    is_multi_use: bool | None = None
+    current_phase: str | None = None
+    latest_result: str | None = None
+    inappropriate_decision: str | None = None
+    phase: str
+
+
+class InappropriateReviewListResponse(BaseModel):
+    items: list[InappropriateReviewItem]
+    total: int
+
+
+def _address_of(b: Building) -> str | None:
+    parts: list[str] = []
+    for v in (b.sido, b.sigungu, b.beopjeongdong):
+        if v:
+            parts.append(str(v))
+    main = b.main_lot_no or ""
+    sub = b.sub_lot_no or ""
+    if main and sub:
+        parts.append(f"{main}-{sub}")
+    elif main:
+        parts.append(str(main))
+    if b.special_lot_no:
+        parts.append(str(b.special_lot_no))
+    return " ".join(parts) if parts else None
+
+
+@router.get("/inappropriate", response_model=InappropriateReviewListResponse)
+def list_inappropriate_reviews(
+    decision: str | None = None,
+    db: Session = Depends(get_db),
+    _: User = Depends(
+        require_roles(UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY, UserRole.SECRETARY)
+    ),
+):
+    """부적합 검토 필요로 체크된 stage 목록 (간사 이상).
+
+    decision: 'pending' | 'confirmed' | 'rejected' 필터링 (선택)
+    """
+    query = (
+        db.query(ReviewStage, Building)
+        .join(Building, ReviewStage.building_id == Building.id)
+        .filter(ReviewStage.inappropriate_review_needed.is_(True))
+    )
+
+    if decision == "pending":
+        query = query.filter(
+            (ReviewStage.inappropriate_decision.is_(None))
+            | (ReviewStage.inappropriate_decision == InappropriateDecision.PENDING)
+        )
+    elif decision == "confirmed_serious":
+        query = query.filter(ReviewStage.inappropriate_decision == InappropriateDecision.CONFIRMED_SERIOUS)
+    elif decision == "confirmed_simple":
+        query = query.filter(ReviewStage.inappropriate_decision == InappropriateDecision.CONFIRMED_SIMPLE)
+    elif decision == "excluded":
+        query = query.filter(ReviewStage.inappropriate_decision == InappropriateDecision.EXCLUDED)
+
+    rows = query.order_by(Building.mgmt_no, ReviewStage.phase_order.desc()).all()
+    # 건물별 최신 stage만
+    latest_by_building: dict[int, tuple[ReviewStage, Building]] = {}
+    for stage, building in rows:
+        if building.id not in latest_by_building:
+            latest_by_building[building.id] = (stage, building)
+
+    items = []
+    for stage, b in latest_by_building.values():
+        items.append(
+            InappropriateReviewItem(
+                stage_id=stage.id,
+                building_id=b.id,
+                mgmt_no=b.mgmt_no,
+                building_name=b.building_name,
+                full_address=_address_of(b),
+                gross_area=float(b.gross_area) if b.gross_area is not None else None,
+                floors_above=b.floors_above,
+                is_special_structure=b.is_special_structure,
+                is_high_rise=b.is_high_rise,
+                is_multi_use=b.is_multi_use,
+                current_phase=b.current_phase,
+                latest_result=stage.result.value if stage.result else None,
+                inappropriate_decision=(
+                    stage.inappropriate_decision.value
+                    if stage.inappropriate_decision
+                    else "pending"
+                ),
+                phase=stage.phase.value,
+            )
+        )
+    return InappropriateReviewListResponse(items=items, total=len(items))
+
+
+class InappropriateDecisionRequest(BaseModel):
+    decision: str  # "pending" | "confirmed" | "rejected"
+
+
+@router.patch("/inappropriate/{stage_id}")
+def set_inappropriate_decision(
+    stage_id: int,
+    body: InappropriateDecisionRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(
+        require_roles(UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY, UserRole.SECRETARY)
+    ),
+):
+    """부적합 검토 판정 변경 (간사 이상)."""
+    try:
+        new_decision = InappropriateDecision(body.decision)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="잘못된 판정값")
+
+    stage = db.query(ReviewStage).filter(ReviewStage.id == stage_id).first()
+    if not stage:
+        raise HTTPException(status_code=404, detail="검토 단계를 찾을 수 없습니다")
+    if not stage.inappropriate_review_needed:
+        raise HTTPException(status_code=400, detail="부적합 검토 대상이 아닙니다")
+
+    stage.inappropriate_decision = new_decision
+    log_action(
+        db, current_user.id, "inappropriate_decision", "review_stage", stage.id,
+        after_data={"decision": new_decision.value},
+    )
+    db.commit()
+    return {"stage_id": stage.id, "decision": new_decision.value}

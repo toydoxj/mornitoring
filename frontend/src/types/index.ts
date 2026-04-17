@@ -60,6 +60,12 @@ export type PhaseType =
 
 export type ResultType = "pass" | "simple_error" | "recalculate"
 
+export type InappropriateDecisionType =
+  | "pending"
+  | "confirmed_serious"
+  | "confirmed_simple"
+  | "excluded"
+
 export interface ReviewStage {
   id: number
   building_id: number
@@ -73,6 +79,8 @@ export interface ReviewStage {
   defect_type_1: string | null
   defect_type_2: string | null
   defect_type_3: string | null
+  inappropriate_review_needed?: boolean
+  inappropriate_decision?: InappropriateDecisionType | null
 }
 
 // 역할 한글 라벨
