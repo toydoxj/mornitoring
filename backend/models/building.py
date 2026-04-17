@@ -48,6 +48,7 @@ class Building(Base):
     struct_eng_name: Mapped[str | None] = mapped_column(String(50))     # 책임구조기술자(성명)
     drawing_creator_firm: Mapped[str | None] = mapped_column(String(100))  # 도면작성자(소속)
     drawing_creator_name: Mapped[str | None] = mapped_column(String(50))   # 도면작성자(성명)
+    drawing_creator_qualification: Mapped[str | None] = mapped_column(String(30))  # 도면작성자 자격 (건축사/건축구조기술사/기타)
     seismic_level: Mapped[str | None] = mapped_column(String(50))        # 내진등급
     detail_category1: Mapped[str | None] = mapped_column(String(50))    # 유형별상세검토-1 (공법)
     detail_category2: Mapped[str | None] = mapped_column(String(50))    # 유형별상세검토-2 (전이구조)

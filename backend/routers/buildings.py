@@ -85,6 +85,7 @@ class BuildingResponse(BaseModel):
     struct_eng_name: str | None = None
     drawing_creator_firm: str | None = None
     drawing_creator_name: str | None = None
+    drawing_creator_qualification: str | None = None
     seismic_level: str | None = None
     current_phase: str | None = None
     final_result: str | None = None

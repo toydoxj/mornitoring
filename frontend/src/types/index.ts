@@ -40,6 +40,7 @@ export interface Building {
   struct_eng_name?: string | null
   drawing_creator_firm?: string | null
   drawing_creator_name?: string | null
+  drawing_creator_qualification?: string | null
   seismic_level?: string | null
   current_phase: string | null
   final_result: string | null

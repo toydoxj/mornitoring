@@ -163,7 +163,7 @@ def _detect_changes(building: Building, extracted_data: dict) -> list[FieldChang
         "drawing_creator_name": ("drawing_creator_name", "도면작성자(성명)"),
         "main_structure_type": ("main_structure", "주구조형식"),
         "high_risk_type": ("high_risk_type", "고위험유형"),
-        "struct_drawing_qual": ("seismic_level", "내진등급"),
+        "struct_drawing_qual": ("drawing_creator_qualification", "도면작성자 자격"),
     }
     DETAIL_CATEGORY_MAP = {
         "type_construction_method": ("detail_category1", "공법"),
@@ -244,7 +244,7 @@ def _apply_changes(building: Building, extracted_data: dict):
         "drawing_creator_name": "drawing_creator_name",
         # "main_structure_type": "main_structure",  # 의도적으로 제외
         "high_risk_type": "high_risk_type",
-        "struct_drawing_qual": "seismic_level",
+        "struct_drawing_qual": "drawing_creator_qualification",
     }
     DETAIL_CATEGORY_MAP = {
         "type_construction_method": "detail_category1",
