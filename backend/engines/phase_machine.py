@@ -30,11 +30,19 @@ PHASE_SEQUENCE = [
     "completed",
 ]
 
-# 보완이 필요한 결과 (다음 단계로 진행)
-REQUIRES_SUPPLEMENT = {ResultType.SUPPLEMENT, ResultType.FAIL, ResultType.RECALCULATE}
+# 다음 단계로 진행되는 결과 — 현재 모든 판정 결과가 다음 단계로 진행됨
+# 최종 완료는 별도 엑셀 업로드로 지정할 예정이므로 여기서는 완료 처리하지 않음
+REQUIRES_SUPPLEMENT = {
+    ResultType.PASS,
+    ResultType.SIMPLE_ERROR,
+    ResultType.RECALCULATE,
+    ResultType.SUPPLEMENT,
+    ResultType.FAIL,
+    ResultType.MINOR,
+}
 
-# 완료 결과
-COMPLETED_RESULTS = {ResultType.PASS, ResultType.MINOR, ResultType.SIMPLE_ERROR}
+# 검토서 업로드 흐름에서 자동 완료 처리 비활성화
+COMPLETED_RESULTS: set[ResultType] = set()
 
 
 def get_next_phase(current_phase: str) -> str | None:
