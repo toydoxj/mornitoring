@@ -15,6 +15,13 @@ from models.user import User, UserRole
 from routers.auth import get_current_user, require_roles
 from engines.review_validator import validate_review_file
 from engines.review_extractor import extract_review_data
+
+# 판정결과 한글 라벨
+_RESULT_KOREAN = {
+    "pass": "적합",
+    "simple_error": "단순오류",
+    "recalculate": "재계산",
+}
 from engines.phase_machine import get_next_phase, can_advance, is_completed
 from services.s3_storage import upload_review_file, get_download_url, list_review_files, delete_file
 from services.audit import log_action
@@ -97,9 +104,34 @@ async def preview_upload(
         if not validation.is_valid:
             return UploadResponse(success=False, message="유효성 검증 실패", errors=validation.errors)
 
-        # 변경사항 감지
+        # 변경사항 감지 (건축물 필드)
         extracted_data = validation.extracted_data
         changes = _detect_changes(building, extracted_data)
+
+        # 검토결과(ReviewStage.result) 비교 추가
+        review_info = extract_review_data(tmp_path)
+        extracted_result = review_info.get("result")
+        if extracted_result:
+            # 업로드 단계 매핑 (receive → submit)
+            RECEIVED_TO_SUBMIT = {
+                "doc_received": "preliminary",
+                "supplement_1_received": "supplement_1",
+                "supplement_2_received": "supplement_2",
+                "supplement_3_received": "supplement_3",
+                "supplement_4_received": "supplement_4",
+                "supplement_5_received": "supplement_5",
+            }
+            actual_phase = RECEIVED_TO_SUBMIT.get(phase, phase)
+            try:
+                phase_type = PhaseType(actual_phase)
+                result_change = _detect_result_change(
+                    db, building.id, phase_type, extracted_result
+                )
+                if result_change:
+                    # 검토결과는 변경내역 목록 최상단에 노출
+                    changes.insert(0, result_change)
+            except ValueError:
+                pass
 
         return UploadResponse(
             success=True,
@@ -112,13 +144,13 @@ async def preview_upload(
 
 
 def _detect_changes(building: Building, extracted_data: dict) -> list[FieldChange]:
-    """건축물 정보 변경사항 감지"""
+    """건축물 정보 변경사항 감지 (DB 업데이트 여부와 무관하게 차이 표시)"""
     BUILDING_UPDATE_MAP = {
         "architect_firm": ("architect_firm", "건축사(소속)"),
         "architect_name": ("architect_name", "건축사(성명)"),
         "struct_eng_firm": ("struct_eng_firm", "책임구조기술자(소속)"),
         "struct_eng_name": ("struct_eng_name", "책임구조기술자(성명)"),
-        "main_structure_type": ("main_structure", "주요 구조형식"),
+        "main_structure_type": ("main_structure", "주구조형식"),
         "high_risk_type": ("high_risk_type", "고위험유형"),
         "struct_drawing_qual": ("seismic_level", "내진등급"),
     }
@@ -151,14 +183,48 @@ def _detect_changes(building: Building, extracted_data: dict) -> list[FieldChang
     return changes
 
 
+def _detect_result_change(
+    db,
+    building_id: int,
+    phase_type_value,
+    extracted_result,
+) -> "FieldChange | None":
+    """검토결과(ReviewStage.result) 변경 감지 (ReviewStage 레코드 대상)"""
+    current_stage = (
+        db.query(ReviewStage)
+        .filter(
+            ReviewStage.building_id == building_id,
+            ReviewStage.phase == phase_type_value,
+        )
+        .first()
+    )
+    old_result = current_stage.result if current_stage else None
+    new_label = _RESULT_KOREAN.get(extracted_result.value) if extracted_result else None
+    if not new_label:
+        return None
+    if old_result and old_result == extracted_result:
+        return None
+    old_label = _RESULT_KOREAN.get(old_result.value) if old_result else None
+    return FieldChange(
+        field="result",
+        label="검토결과" if old_label else "검토결과 (신규)",
+        old_value=old_label or "-",
+        new_value=new_label,
+    )
+
+
 def _apply_changes(building: Building, extracted_data: dict):
-    """건축물 정보 변경 적용"""
+    """건축물 정보 변경 적용.
+
+    주의: main_structure(주구조형식)는 미리보기에서는 비교 표시하지만
+    빌딩 DB에는 반영하지 않는다.
+    """
     BUILDING_UPDATE_MAP = {
         "architect_firm": "architect_firm",
         "architect_name": "architect_name",
         "struct_eng_firm": "struct_eng_firm",
         "struct_eng_name": "struct_eng_name",
-        "main_structure_type": "main_structure",
+        # "main_structure_type": "main_structure",  # 의도적으로 제외
         "high_risk_type": "high_risk_type",
         "struct_drawing_qual": "seismic_level",
     }
