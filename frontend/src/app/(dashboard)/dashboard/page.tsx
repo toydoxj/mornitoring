@@ -38,26 +38,51 @@ interface DashboardStats {
   reviewer_stats: ReviewerStat[]
 }
 
+interface MyStats {
+  total: number
+  total_area: number
+  area_over_1000: number
+  high_risk: number
+  need_review: number
+  submitted: number
+  elapsed_buckets: Record<string, number>
+}
+
+const ELAPSED_ORDER = ["1일", "2일", "3일", "4일", "5일", "6일", "7일", "1주", "2주이상"] as const
+
 export default function DashboardPage() {
   const user = useAuthStore((s) => s.user)
   const [stats, setStats] = useState<DashboardStats | null>(null)
+  const [myStats, setMyStats] = useState<MyStats | null>(null)
   const [isLoading, setIsLoading] = useState(true)
 
-  useEffect(() => {
-    const fetchStats = async () => {
-      try {
-        const { data } = await apiClient.get<DashboardStats>("/api/buildings/stats")
-        setStats(data)
-      } catch (err) {
-        console.error("통계 조회 실패:", err)
-      } finally {
-        setIsLoading(false)
-      }
-    }
-    fetchStats()
-  }, [])
+  const isAdmin = user && ["team_leader", "chief_secretary", "secretary"].includes(user.role)
 
-  if (isLoading || !stats) {
+  useEffect(() => {
+    const fetchAll = async () => {
+      try {
+        // 개인 통계는 모든 로그인 사용자
+        const { data: mine } = await apiClient.get<MyStats>("/api/buildings/my-stats")
+        setMyStats(mine)
+      } catch (err) {
+        console.error("개인 통계 조회 실패:", err)
+      }
+
+      // 간사 이상만 전체 통계
+      if (isAdmin) {
+        try {
+          const { data } = await apiClient.get<DashboardStats>("/api/buildings/stats")
+          setStats(data)
+        } catch (err) {
+          console.error("전체 통계 조회 실패:", err)
+        }
+      }
+      setIsLoading(false)
+    }
+    fetchAll()
+  }, [isAdmin])
+
+  if (isLoading) {
     return <div className="flex justify-center py-20 text-muted-foreground">로딩 중...</div>
   }
 
@@ -70,42 +95,103 @@ export default function DashboardPage() {
         </p>
       </div>
 
-      {/* 통계 카드 */}
-      <div className="grid gap-4 md:grid-cols-5">
-        <StatCard title="총 등록건" value={stats.total} />
-        <StatCard title="예비도서 배포" value={stats.doc_received} color="blue" />
-        <StatCard title="검토서 미접수" value={stats.not_submitted} color="red" />
-        <StatCard title="보완 진행" value={stats.supplement} />
-        <StatCard title="최종 완료" value={stats.completed} color="green" />
-      </div>
-
-      {/* 단계별 현황 */}
-      <Card>
-        <CardHeader>
-          <CardTitle>단계별 현황</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="grid gap-3 md:grid-cols-4">
-            {Object.entries(PHASE_LABELS).map(([key, label]) => {
-              const count = stats.phase_counts[key] || 0
-              if (count === 0 && !["doc_received", "preliminary", "none"].includes(key)) return null
-              return (
-                <div key={key} className="flex items-center justify-between rounded-md border p-3">
-                  <span className="text-sm">{label}</span>
-                  <span className="text-lg font-bold">{count}</span>
-                </div>
-              )
-            })}
-            <div className="flex items-center justify-between rounded-md border p-3">
-              <span className="text-sm">미접수</span>
-              <span className="text-lg font-bold">{stats.phase_counts["none"] || 0}</span>
+      {/* 내 담당 현황 (모든 로그인 사용자) */}
+      {myStats && myStats.total > 0 && (
+        <>
+          <div>
+            <h2 className="text-lg font-bold mb-2">내 담당 현황</h2>
+            <div className="grid gap-4 md:grid-cols-4">
+              <StatCard title="배정" value={myStats.total} />
+              <StatCard
+                title="연면적 합"
+                value={Math.round(myStats.total_area)}
+                suffix="㎡"
+              />
+              <StatCard title="1,000㎡ 이상" value={myStats.area_over_1000} color="blue" />
+              <StatCard title="고위험군" value={myStats.high_risk} color="red" />
             </div>
           </div>
-        </CardContent>
-      </Card>
+
+          <div className="grid gap-4 md:grid-cols-2">
+            <StatCard title="검토 대상 (검토서 미제출)" value={myStats.need_review} color="red" />
+            <StatCard title="검토서 제출 완료" value={myStats.submitted} color="green" />
+          </div>
+
+          {/* 접수 후 경과일수 */}
+          <Card>
+            <CardHeader>
+              <CardTitle>접수 후 경과일수 (검토서 미제출 건)</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="grid gap-2 md:grid-cols-9">
+                {ELAPSED_ORDER.map((key) => {
+                  const count = myStats.elapsed_buckets[key] ?? 0
+                  const isLong = key === "1주" || key === "2주이상"
+                  return (
+                    <div
+                      key={key}
+                      className={`rounded-md border p-3 text-center ${
+                        isLong && count > 0
+                          ? "border-red-300 bg-red-50"
+                          : count > 0
+                            ? "border-orange-200 bg-orange-50"
+                            : ""
+                      }`}
+                    >
+                      <p className="text-xs text-muted-foreground">{key}</p>
+                      <p className="text-lg font-bold">{count}</p>
+                    </div>
+                  )
+                })}
+              </div>
+            </CardContent>
+          </Card>
+        </>
+      )}
+
+      {/* 전체 통계 (간사 이상) */}
+      {isAdmin && stats && (
+        <>
+          <div>
+            <h2 className="text-lg font-bold mb-2">전체 현황</h2>
+            <div className="grid gap-4 md:grid-cols-5">
+              <StatCard title="총 등록건" value={stats.total} />
+              <StatCard title="예비도서 배포" value={stats.doc_received} color="blue" />
+              <StatCard title="검토서 미접수" value={stats.not_submitted} color="red" />
+              <StatCard title="보완 진행" value={stats.supplement} />
+              <StatCard title="최종 완료" value={stats.completed} color="green" />
+            </div>
+          </div>
+
+          {/* 단계별 현황 */}
+          <Card>
+            <CardHeader>
+              <CardTitle>단계별 현황</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="grid gap-3 md:grid-cols-4">
+                {Object.entries(PHASE_LABELS).map(([key, label]) => {
+                  const count = stats.phase_counts[key] || 0
+                  if (count === 0 && !["doc_received", "preliminary", "none"].includes(key)) return null
+                  return (
+                    <div key={key} className="flex items-center justify-between rounded-md border p-3">
+                      <span className="text-sm">{label}</span>
+                      <span className="text-lg font-bold">{count}</span>
+                    </div>
+                  )
+                })}
+                <div className="flex items-center justify-between rounded-md border p-3">
+                  <span className="text-sm">미접수</span>
+                  <span className="text-lg font-bold">{stats.phase_counts["none"] || 0}</span>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        </>
+      )}
 
       {/* 위원별 현황 */}
-      {stats.reviewer_stats.length > 0 && (
+      {isAdmin && stats && stats.reviewer_stats.length > 0 && (
         <Card>
           <CardHeader>
             <CardTitle>검토위원별 현황</CardTitle>
@@ -176,10 +262,12 @@ function StatCard({
   title,
   value,
   color,
+  suffix,
 }: {
   title: string
   value: number
   color?: "blue" | "red" | "green"
+  suffix?: string
 }) {
   const colorClass = color === "blue"
     ? "text-blue-600"
@@ -197,7 +285,10 @@ function StatCard({
         </CardTitle>
       </CardHeader>
       <CardContent>
-        <p className={`text-3xl font-bold ${colorClass}`}>{value.toLocaleString()}</p>
+        <p className={`text-3xl font-bold ${colorClass}`}>
+          {value.toLocaleString()}
+          {suffix && <span className="ml-1 text-base font-normal text-muted-foreground">{suffix}</span>}
+        </p>
       </CardContent>
     </Card>
   )

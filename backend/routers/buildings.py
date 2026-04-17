@@ -349,6 +349,112 @@ def create_building(
     return building
 
 
+@router.get("/my-stats")
+def my_stats(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(
+        require_roles(
+            UserRole.REVIEWER, UserRole.SECRETARY, UserRole.CHIEF_SECRETARY, UserRole.TEAM_LEADER
+        )
+    ),
+):
+    """개인 대시보드 통계 (본인 담당 건물 기준)."""
+    from datetime import date as _date
+    from models.review_stage import ReviewStage
+
+    # 담당 건물 조회 (reviewer_id 또는 assigned_reviewer_name)
+    reviewer = db.query(Reviewer).filter(Reviewer.user_id == current_user.id).first()
+    if reviewer:
+        query = db.query(Building).filter(
+            (Building.reviewer_id == reviewer.id)
+            | (Building.assigned_reviewer_name == current_user.name)
+        )
+    else:
+        query = db.query(Building).filter(Building.assigned_reviewer_name == current_user.name)
+    buildings = query.all()
+
+    total = len(buildings)
+    total_area = float(sum((float(b.gross_area) if b.gross_area else 0.0) for b in buildings))
+    area_over_1000 = sum(1 for b in buildings if (b.gross_area or 0) >= 1000)
+    high_risk = sum(
+        1 for b in buildings
+        if b.is_special_structure or b.is_high_rise or b.is_multi_use
+    )
+
+    # '_received' 상태 (도서 접수 후 검토서 미제출)
+    RECEIVED_PHASES = {
+        "doc_received",
+        "supplement_1_received",
+        "supplement_2_received",
+        "supplement_3_received",
+        "supplement_4_received",
+        "supplement_5_received",
+    }
+    received_buildings = [b for b in buildings if b.current_phase in RECEIVED_PHASES]
+    need_review = len(received_buildings)
+
+    # 검토서 제출 건수 — 본인 담당 건물들에서 report_submitted_at 있는 stage 수
+    building_ids = [b.id for b in buildings]
+    submitted = 0
+    if building_ids:
+        submitted = (
+            db.query(ReviewStage)
+            .filter(
+                ReviewStage.building_id.in_(building_ids),
+                ReviewStage.report_submitted_at.isnot(None),
+            )
+            .count()
+        )
+
+    # 접수 후 경과일수 버킷 — 현재 '_received' 단계의 doc_received_at 기준
+    RECEIVED_TO_SUBMIT_PHASE = {
+        "doc_received": "preliminary",
+        "supplement_1_received": "supplement_1",
+        "supplement_2_received": "supplement_2",
+        "supplement_3_received": "supplement_3",
+        "supplement_4_received": "supplement_4",
+        "supplement_5_received": "supplement_5",
+    }
+    elapsed_buckets = {
+        "1일": 0, "2일": 0, "3일": 0, "4일": 0, "5일": 0,
+        "6일": 0, "7일": 0, "1주": 0, "2주이상": 0,
+    }
+    today = _date.today()
+    if received_buildings:
+        pairs = [(b.id, RECEIVED_TO_SUBMIT_PHASE[b.current_phase]) for b in received_buildings]
+        stage_map: dict[tuple[int, str], ReviewStage] = {}
+        stages = (
+            db.query(ReviewStage)
+            .filter(ReviewStage.building_id.in_([p[0] for p in pairs]))
+            .all()
+        )
+        for s in stages:
+            stage_map[(s.building_id, s.phase.value)] = s
+        for bid, phase in pairs:
+            s = stage_map.get((bid, phase))
+            if not s or not s.doc_received_at:
+                continue
+            days = (today - s.doc_received_at).days
+            if days < 1:
+                elapsed_buckets["1일"] += 1  # 당일 접수는 1일로 합산
+            elif 1 <= days <= 7:
+                elapsed_buckets[f"{days}일"] += 1
+            elif 8 <= days <= 13:
+                elapsed_buckets["1주"] += 1
+            else:  # 14+
+                elapsed_buckets["2주이상"] += 1
+
+    return {
+        "total": total,
+        "total_area": total_area,
+        "area_over_1000": area_over_1000,
+        "high_risk": high_risk,
+        "need_review": need_review,
+        "submitted": submitted,
+        "elapsed_buckets": elapsed_buckets,
+    }
+
+
 @router.get("/my-reviews", response_model=BuildingListResponse)
 def my_review_buildings(
     page: int = Query(1, ge=1),
