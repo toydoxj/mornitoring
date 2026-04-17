@@ -55,6 +55,12 @@ interface MyStats {
   submitted_preliminary: number
   submitted_supplement: number
   elapsed_buckets: Record<string, number>
+  final_counts: {
+    pass: number
+    pass_supplement: number
+    fail: number
+    excluded: number
+  }
 }
 
 const ELAPSED_ORDER = ["1일", "2일", "3일", "4일", "5일", "6일", "7일", "1주", "2주이상"] as const
@@ -203,28 +209,36 @@ export default function DashboardPage() {
           </div>
 
           <div className="space-y-4">
-            {/* 1행: 핵심 6버킷 */}
-            <div className="grid gap-3 grid-cols-2 md:grid-cols-3 lg:grid-cols-6">
+            {/* 1행: 진행 지표 3버킷 */}
+            <div className="grid gap-3 grid-cols-1 md:grid-cols-3">
               <Bucket label="배정" value={myStats.total} tint="indigo" suffix="건" />
-              <Bucket label="검토서 대상" value={myStats.need_review} tint="red" suffix="건" />
+              <Bucket label="미제출 검토서" value={myStats.need_review} tint="red" suffix="건" />
               <SubmittedBucket
                 preliminary={myStats.submitted_preliminary}
                 supplement={myStats.submitted_supplement}
               />
-              <Bucket
-                label="연면적 합"
-                value={Math.round(myStats.total_area).toLocaleString()}
-                tint="slate"
-                suffix="㎡"
-              />
-              <Bucket label="1,000㎡ 이상" value={myStats.area_over_1000} tint="blue" suffix="건" />
-              <Bucket label="고위험군" value={myStats.high_risk} tint="orange" suffix="건" />
             </div>
 
             {/* 구분선 */}
             <div className="border-t border-slate-200" />
 
-            {/* 2행: 접수 후 경과일수 9버킷 */}
+            {/* 2행: 최종 완료 건수 4버킷 */}
+            <div>
+              <p className="mb-2 text-sm font-medium text-slate-700">
+                최종 완료 건수 <span className="text-xs text-muted-foreground">(최종 판정 엑셀 업로드로 집계)</span>
+              </p>
+              <div className="grid gap-3 grid-cols-2 md:grid-cols-4">
+                <Bucket label="적합" value={myStats.final_counts.pass} tint="green" suffix="건" />
+                <Bucket label="보완적합" value={myStats.final_counts.pass_supplement} tint="blue" suffix="건" />
+                <Bucket label="부적합" value={myStats.final_counts.fail} tint="red" suffix="건" />
+                <Bucket label="대상제외" value={myStats.final_counts.excluded} tint="slate" suffix="건" />
+              </div>
+            </div>
+
+            {/* 구분선 */}
+            <div className="border-t border-slate-200" />
+
+            {/* 3행: 접수 후 경과일수 9버킷 */}
             <div>
               <p className="mb-2 text-sm font-medium text-slate-700">
                 접수 후 경과일수 <span className="text-xs text-muted-foreground">(검토서 미제출 건)</span>

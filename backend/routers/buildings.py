@@ -465,6 +465,19 @@ def my_stats(
             else:  # 14+
                 elapsed_buckets["2주이상"] += 1
 
+    # 최종 완료 건수 (4분류) — 본인 담당 기준
+    # final_result 값은 향후 '최종 판정용 별도 엑셀 업로드'에서 기입됨
+    # 예상 키: pass (적합), pass_supplement (보완적합), fail (부적합), excluded (대상제외)
+    final_counts = {
+        "pass": 0,             # 적합
+        "pass_supplement": 0,  # 보완적합
+        "fail": 0,             # 부적합
+        "excluded": 0,         # 대상제외
+    }
+    for b in buildings:
+        if b.final_result and b.final_result in final_counts:
+            final_counts[b.final_result] += 1
+
     return {
         "total": total,
         "total_area": total_area,
@@ -475,6 +488,7 @@ def my_stats(
         "submitted_preliminary": submitted_preliminary,
         "submitted_supplement": submitted_supplement,
         "elapsed_buckets": elapsed_buckets,
+        "final_counts": final_counts,
     }
 
 
