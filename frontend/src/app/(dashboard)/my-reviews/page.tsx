@@ -228,8 +228,8 @@ export default function MyReviewsPage() {
           <TableHeader>
             <TableRow>
               <TableHead className="w-[120px]">관리번호</TableHead>
-              <TableHead className="min-w-[220px]">주소</TableHead>
-              <TableHead>건물명</TableHead>
+              <TableHead className="w-[220px]">주소</TableHead>
+              <TableHead className="w-[180px]">건물명</TableHead>
               <TableHead className="w-[100px]">연면적(㎡)</TableHead>
               <TableHead className="w-[80px]">지상층</TableHead>
               <TableHead className="w-[120px]">고위험군</TableHead>
@@ -262,8 +262,18 @@ export default function MyReviewsPage() {
                   >
                     {b.mgmt_no}
                   </TableCell>
-                  <TableCell className="text-sm">{b.full_address || "-"}</TableCell>
-                  <TableCell>{b.building_name || "-"}</TableCell>
+                  <TableCell
+                    className="text-sm max-w-[220px] truncate"
+                    title={b.full_address ?? undefined}
+                  >
+                    {b.full_address || "-"}
+                  </TableCell>
+                  <TableCell
+                    className="max-w-[180px] truncate"
+                    title={b.building_name ?? undefined}
+                  >
+                    {b.building_name || "-"}
+                  </TableCell>
                   <TableCell className="text-right">{b.gross_area?.toLocaleString() ?? "-"}</TableCell>
                   <TableCell className="text-right">{b.floors_above ?? "-"}</TableCell>
                   <TableCell className="text-sm">
