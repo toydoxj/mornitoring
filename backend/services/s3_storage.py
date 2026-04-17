@@ -93,24 +93,38 @@ def list_review_files(prefix: str = "reviews/") -> list[dict]:
 
     client = _get_s3_client()
     try:
-        response = client.list_objects_v2(
-            Bucket=settings.s3_bucket_name,
-            Prefix=prefix,
-        )
+        paginator = client.get_paginator("list_objects_v2")
         files = []
-        for obj in response.get("Contents", []):
-            key = obj["Key"]
-            parts = key.split("/")
-            # reviews/{phase_folder}/{date}/{filename}
-            if len(parts) >= 4:
-                files.append({
-                    "key": key,
-                    "phase": parts[1],
-                    "date": parts[2],
-                    "filename": parts[3],
-                    "size": obj["Size"],
-                    "last_modified": obj["LastModified"].isoformat(),
-                })
+        for page in paginator.paginate(Bucket=settings.s3_bucket_name, Prefix=prefix):
+            for obj in page.get("Contents", []):
+                key = obj["Key"]
+                parts = key.split("/")
+                # 새 형식: reviews/{phase_folder}/{date}/{filename}
+                # 구 형식: reviews/{year}/{month}/{day}/{filename}
+                if len(parts) >= 4:
+                    filename = parts[-1]
+                    if not filename:
+                        continue
+                    # 구 형식 감지 (parts[1]이 숫자면 구 형식)
+                    if parts[1].isdigit():
+                        phase = "기존"
+                        date_str = f"{parts[1]}-{parts[2]}-{parts[3]}"
+                        if len(parts) >= 5:
+                            filename = parts[4]
+                        else:
+                            continue
+                    else:
+                        phase = parts[1]
+                        date_str = parts[2]
+
+                    files.append({
+                        "key": key,
+                        "phase": phase,
+                        "date": date_str,
+                        "filename": filename,
+                        "size": obj["Size"],
+                        "last_modified": obj["LastModified"].isoformat(),
+                    })
         return files
     except ClientError:
         return []
