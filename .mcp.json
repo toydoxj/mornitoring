@@ -8,6 +8,10 @@
           "TEMPLATES_USE": "en",
           "ENABLE_GUI": "false"
         }
+      },
+      "playwright": {
+        "command": "npx",
+        "args": ["@playwright/mcp@latest"]
       }
     }
   }

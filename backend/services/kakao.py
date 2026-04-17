@@ -1,10 +1,13 @@
 """카카오 API 서비스 (로그인 + 친구에게 보내기)"""
 
 import json
+from datetime import datetime, timedelta, timezone
 
 import httpx
+from sqlalchemy.orm import Session
 
 from config import settings
+from models.user import User
 
 KAKAO_AUTH_URL = "https://kauth.kakao.com"
 KAKAO_API_URL = "https://kapi.kakao.com"
@@ -49,6 +52,21 @@ async def get_user_info(access_token: str) -> dict:
         return response.json()
 
 
+async def get_user_scopes(access_token: str) -> dict:
+    """현재 토큰에 동의된 scope 목록 조회
+
+    Returns:
+        {"id": 1234, "scopes": [{"id": "friends", "display_name": "...", "agreed": true, ...}, ...]}
+    """
+    async with httpx.AsyncClient() as client:
+        response = await client.get(
+            f"{KAKAO_API_URL}/v2/user/scopes",
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+        response.raise_for_status()
+        return response.json()
+
+
 async def refresh_token(refresh_token_str: str) -> dict:
     """토큰 갱신"""
     async with httpx.AsyncClient() as client:
@@ -62,6 +80,45 @@ async def refresh_token(refresh_token_str: str) -> dict:
         )
         response.raise_for_status()
         return response.json()
+
+
+async def ensure_valid_token(user: User, db: Session) -> str:
+    """카카오 토큰 유효성 보장. 만료 임박/만료 시 자동 갱신.
+
+    Returns:
+        유효한 access_token 문자열
+
+    Raises:
+        ValueError: refresh_token이 없거나 갱신 실패 시
+    """
+    if not user.kakao_access_token:
+        raise ValueError("카카오 연동이 되어 있지 않습니다")
+
+    now = datetime.now(timezone.utc)
+    expires_at = user.kakao_token_expires_at
+
+    # 만료 5분 전부터 갱신 대상
+    needs_refresh = expires_at is None or (expires_at - now) < timedelta(minutes=5)
+
+    if not needs_refresh:
+        return user.kakao_access_token
+
+    if not user.kakao_refresh_token:
+        raise ValueError("refresh_token이 없어 토큰을 갱신할 수 없습니다")
+
+    refreshed = await refresh_token(user.kakao_refresh_token)
+    new_access = refreshed.get("access_token")
+    if not new_access:
+        raise ValueError(f"토큰 갱신 실패: {refreshed}")
+
+    user.kakao_access_token = new_access
+    if refreshed.get("refresh_token"):
+        user.kakao_refresh_token = refreshed["refresh_token"]
+    expires_in = refreshed.get("expires_in", 21599)
+    user.kakao_token_expires_at = now + timedelta(seconds=expires_in)
+    db.commit()
+    db.refresh(user)
+    return new_access
 
 
 async def get_friends(access_token: str) -> list[dict]:

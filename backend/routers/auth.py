@@ -155,6 +155,8 @@ async def kakao_callback(code: str, db: Session = Depends(get_db)):
     if not kakao_access:
         raise HTTPException(status_code=400, detail=f"카카오 액세스 토큰 없음: {kakao_tokens}")
     kakao_refresh = kakao_tokens.get("refresh_token", "")
+    kakao_expires_in = kakao_tokens.get("expires_in", 21599)
+    kakao_token_expires_at = datetime.now(timezone.utc) + timedelta(seconds=kakao_expires_in)
 
     # 카카오 사용자 정보
     try:
@@ -173,6 +175,7 @@ async def kakao_callback(code: str, db: Session = Depends(get_db)):
     if user:
         user.kakao_access_token = kakao_access
         user.kakao_refresh_token = kakao_refresh
+        user.kakao_token_expires_at = kakao_token_expires_at
         db.commit()
         db.refresh(user)
         access_token = create_access_token({"sub": str(user.id), "role": user.role.value})
@@ -185,6 +188,7 @@ async def kakao_callback(code: str, db: Session = Depends(get_db)):
             user.kakao_id = kakao_id
             user.kakao_access_token = kakao_access
             user.kakao_refresh_token = kakao_refresh
+            user.kakao_token_expires_at = kakao_token_expires_at
             db.commit()
             db.refresh(user)
             access_token = create_access_token({"sub": str(user.id), "role": user.role.value})
@@ -200,6 +204,7 @@ async def kakao_callback(code: str, db: Session = Depends(get_db)):
         "kakao_name": kakao_name or "",
         "kakao_access_token": kakao_access,
         "kakao_refresh_token": kakao_refresh,
+        "kakao_expires_in": kakao_expires_in,
     }
 
 
@@ -209,6 +214,7 @@ class LinkAccountRequest(BaseModel):
     kakao_id: str
     kakao_access_token: str
     kakao_refresh_token: str
+    kakao_expires_in: int | None = None
 
 
 @router.post("/link-account")
@@ -223,6 +229,10 @@ def link_account(body: LinkAccountRequest, db: Session = Depends(get_db)):
     user.kakao_id = body.kakao_id
     user.kakao_access_token = body.kakao_access_token
     user.kakao_refresh_token = body.kakao_refresh_token
+    if body.kakao_expires_in:
+        user.kakao_token_expires_at = datetime.now(timezone.utc) + timedelta(
+            seconds=body.kakao_expires_in
+        )
     db.commit()
     db.refresh(user)
 

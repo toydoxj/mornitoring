@@ -12,6 +12,7 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import apiClient from "@/lib/api/client"
+import { SendNotificationDialog } from "./send-dialog"
 
 interface NotificationItem {
   id: number
@@ -43,6 +44,7 @@ export default function NotificationsPage() {
   const [page, setPage] = useState(1)
   const [filter, setFilter] = useState<"all" | "sent" | "failed">("all")
   const [isLoading, setIsLoading] = useState(true)
+  const [sendOpen, setSendOpen] = useState(false)
   const pageSize = 50
 
   const fetchData = async () => {
@@ -78,17 +80,22 @@ export default function NotificationsPage() {
           <h1 className="text-2xl font-bold">알림 발송 현황</h1>
           <p className="text-sm text-muted-foreground">총 {total}건</p>
         </div>
-        <div className="flex gap-1">
-          {(["all", "sent", "failed"] as const).map((f) => (
-            <Button
-              key={f}
-              variant={filter === f ? "default" : "outline"}
-              size="sm"
-              onClick={() => { setFilter(f); setPage(1) }}
-            >
-              {f === "all" ? "전체" : f === "sent" ? "발송 성공" : "발송 실패"}
-            </Button>
-          ))}
+        <div className="flex items-center gap-3">
+          <div className="flex gap-1">
+            {(["all", "sent", "failed"] as const).map((f) => (
+              <Button
+                key={f}
+                variant={filter === f ? "default" : "outline"}
+                size="sm"
+                onClick={() => { setFilter(f); setPage(1) }}
+              >
+                {f === "all" ? "전체" : f === "sent" ? "발송 성공" : "발송 실패"}
+              </Button>
+            ))}
+          </div>
+          <Button size="sm" onClick={() => setSendOpen(true)}>
+            새 알림 발송
+          </Button>
         </div>
       </div>
 
@@ -150,6 +157,12 @@ export default function NotificationsPage() {
           </TableBody>
         </Table>
       </div>
+
+      <SendNotificationDialog
+        open={sendOpen}
+        onOpenChange={setSendOpen}
+        onSuccess={fetchData}
+      />
 
       {totalPages > 1 && (
         <div className="flex items-center justify-center gap-2">

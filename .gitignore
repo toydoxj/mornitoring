@@ -20,3 +20,6 @@ Thumbs.db
 
 # Shrimp
 shrimp_data/
+
+# Playwright MCP logs
+.playwright-mcp/

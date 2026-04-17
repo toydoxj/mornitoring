@@ -111,9 +111,6 @@ Supabase PostgreSQL 17 (Seoul)
 | defect_type_1 | varchar | | 부적합유형-1 |
 | defect_type_2 | varchar | | 부적합유형-2 |
 | defect_type_3 | varchar | | 부적합유형-3 |
-| objection_filed | boolean | | 이의신청 여부 |
-| objection_content | text | | 이의신청 검토내용 |
-| objection_reason | text | | 이의신청 사유 |
 | s3_file_key | varchar | | S3 검토서 파일 경로 |
 | stage_remarks | text | | 비고 |
 | created_at | timestamptz | O | 생성일시 |
