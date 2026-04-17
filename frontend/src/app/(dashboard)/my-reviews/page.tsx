@@ -54,8 +54,10 @@ export default function MyReviewsPage() {
 
   // 업로드 다이얼로그 상태
   const [uploadTarget, setUploadTarget] = useState<Building | null>(null)
+  const [uploadFile, setUploadFile] = useState<File | null>(null)
   const [uploading, setUploading] = useState(false)
   const [uploadResult, setUploadResult] = useState<UploadResult | null>(null)
+  const [previewDone, setPreviewDone] = useState(false)
 
   // 문의 사유 다이얼로그
   const [reasonTarget, setReasonTarget] = useState<Building | null>(null)
@@ -99,16 +101,56 @@ export default function MyReviewsPage() {
     }
   }
 
-  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  // 1단계: 파일 선택 → 미리보기 (검증만)
+  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file || !uploadTarget) return
 
+    setUploadFile(file)
     setUploading(true)
     setUploadResult(null)
+    setPreviewDone(false)
 
     try {
       const formData = new FormData()
       formData.append("file", file)
+
+      const phase = uploadTarget.current_phase || "preliminary"
+      const { data: result } = await apiClient.post<UploadResult>(
+        `/api/reviews/upload/preview?mgmt_no=${uploadTarget.mgmt_no}&phase=${phase}`,
+        formData,
+        { headers: { "Content-Type": "multipart/form-data" } }
+      )
+      setUploadResult(result)
+      setPreviewDone(result.success)
+    } catch {
+      setUploadResult({
+        success: false,
+        message: "검증 중 오류가 발생했습니다",
+        errors: ["서버 연결을 확인해주세요"],
+        warnings: [],
+        changes: [],
+      })
+    } finally {
+      setUploading(false)
+      e.target.value = ""
+    }
+  }
+
+  // 2단계: 확인 후 업로드
+  const handleConfirmUpload = async () => {
+    if (!uploadFile || !uploadTarget) return
+
+    const hasChanges = uploadResult?.changes && uploadResult.changes.some(c => !c.label.includes("신규"))
+    if (hasChanges) {
+      if (!confirm("기존 건축물 정보가 변경됩니다. 계속하시겠습니까?")) return
+    }
+
+    setUploading(true)
+
+    try {
+      const formData = new FormData()
+      formData.append("file", uploadFile)
 
       const phase = uploadTarget.current_phase || "preliminary"
       const { data: result } = await apiClient.post<UploadResult>(
@@ -117,6 +159,8 @@ export default function MyReviewsPage() {
         { headers: { "Content-Type": "multipart/form-data" } }
       )
       setUploadResult(result)
+      setPreviewDone(false)
+      setUploadFile(null)
       if (result.success) {
         fetchData()
       }
@@ -130,8 +174,13 @@ export default function MyReviewsPage() {
       })
     } finally {
       setUploading(false)
-      e.target.value = ""
     }
+  }
+
+  const handleCancelUpload = () => {
+    setUploadFile(null)
+    setUploadResult(null)
+    setPreviewDone(false)
   }
 
   return (
@@ -232,7 +281,14 @@ export default function MyReviewsPage() {
       </div>
 
       {/* 검토서 업로드 다이얼로그 */}
-      <Dialog open={!!uploadTarget} onOpenChange={(open) => !open && setUploadTarget(null)}>
+      <Dialog open={!!uploadTarget} onOpenChange={(open) => {
+        if (!open) {
+          setUploadTarget(null)
+          setUploadFile(null)
+          setUploadResult(null)
+          setPreviewDone(false)
+        }
+      }}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>검토서 업로드</DialogTitle>
@@ -255,13 +311,13 @@ export default function MyReviewsPage() {
                 <Input
                   type="file"
                   accept=".xlsm,.xlsx,.xls"
-                  onChange={handleUpload}
-                  disabled={uploading}
+                  onChange={handleFileSelect}
+                  disabled={uploading || previewDone}
                 />
               </div>
 
               {uploading && (
-                <p className="text-sm">업로드 및 검증 중...</p>
+                <p className="text-sm">처리 중...</p>
               )}
 
               {uploadResult && (
@@ -290,12 +346,24 @@ export default function MyReviewsPage() {
                   )}
                   {uploadResult.changes && uploadResult.changes.length > 0 && (
                     <div className="rounded-md p-3 text-sm bg-blue-50 text-blue-800">
-                      <p className="font-medium">건축물 정보 변경됨</p>
+                      <p className="font-medium">건축물 정보 변경 내역</p>
                       <ul className="mt-1 list-disc pl-4 space-y-1">
                         {uploadResult.changes.map((c, i) => (
                           <li key={i}>{c.label}: {c.old_value} → {c.new_value}</li>
                         ))}
                       </ul>
+                    </div>
+                  )}
+
+                  {/* 업로드/취소 버튼 (미리보기 성공 시) */}
+                  {previewDone && (
+                    <div className="flex gap-2">
+                      <Button onClick={handleConfirmUpload} disabled={uploading} className="flex-1">
+                        {uploading ? "업로드 중..." : "업로드"}
+                      </Button>
+                      <Button variant="outline" onClick={handleCancelUpload} disabled={uploading} className="flex-1">
+                        취소
+                      </Button>
                     </div>
                   )}
                 </div>

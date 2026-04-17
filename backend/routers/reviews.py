@@ -66,6 +66,122 @@ PHASE_ORDER_MAP = {
 }
 
 
+@router.post("/upload/preview", response_model=UploadResponse)
+async def preview_upload(
+    file: UploadFile = File(...),
+    mgmt_no: str = Query(..., description="관리번호"),
+    phase: str = Query(..., description="검토 단계"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """검토서 유효성 검증 + 변경사항 미리보기 (저장하지 않음)"""
+
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="파일이 없습니다")
+
+    building = db.query(Building).filter(Building.mgmt_no == mgmt_no).first()
+    if not building:
+        raise HTTPException(status_code=404, detail=f"관리번호 {mgmt_no}을 찾을 수 없습니다")
+
+    with tempfile.NamedTemporaryFile(suffix=Path(file.filename).suffix, delete=False) as tmp:
+        content = await file.read()
+        tmp.write(content)
+        tmp_path = Path(tmp.name)
+
+    try:
+        validation = validate_review_file(
+            file_path=tmp_path, filename=file.filename,
+            expected_mgmt_no=mgmt_no, submitter_name=current_user.name,
+        )
+
+        if not validation.is_valid:
+            return UploadResponse(success=False, message="유효성 검증 실패", errors=validation.errors)
+
+        # 변경사항 감지
+        extracted_data = validation.extracted_data
+        changes = _detect_changes(building, extracted_data)
+
+        return UploadResponse(
+            success=True,
+            message="검증 통과. 변경사항을 확인하고 업로드 버튼을 눌러주세요.",
+            warnings=validation.warnings,
+            changes=changes,
+        )
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+
+def _detect_changes(building: Building, extracted_data: dict) -> list[FieldChange]:
+    """건축물 정보 변경사항 감지"""
+    BUILDING_UPDATE_MAP = {
+        "architect_firm": ("architect_firm", "건축사(소속)"),
+        "architect_name": ("architect_name", "건축사(성명)"),
+        "struct_eng_firm": ("struct_eng_firm", "책임구조기술자(소속)"),
+        "struct_eng_name": ("struct_eng_name", "책임구조기술자(성명)"),
+        "main_structure_type": ("main_structure", "주요 구조형식"),
+        "high_risk_type": ("high_risk_type", "고위험유형"),
+        "struct_drawing_qual": ("seismic_level", "내진등급"),
+    }
+    DETAIL_CATEGORY_MAP = {
+        "type_construction_method": ("detail_category1", "공법"),
+        "type_transfer_structure": ("detail_category2", "전이구조"),
+        "type_seismic_isolation": ("detail_category3", "면진&제진"),
+        "type_special_shear_wall": ("detail_category4", "특수전단벽"),
+        "type_flat_plate": ("detail_category5", "무량판"),
+        "type_cantilever": ("detail_category6", "캔틸래버"),
+        "type_long_span": ("detail_category7", "장스팬"),
+        "type_high_rise": ("detail_category8", "고층"),
+    }
+
+    changes: list[FieldChange] = []
+
+    for extract_key, (db_field, label) in {**BUILDING_UPDATE_MAP, **DETAIL_CATEGORY_MAP}.items():
+        new_val = extracted_data.get(extract_key)
+        if not new_val:
+            continue
+        old_val = getattr(building, db_field, None)
+        if old_val and old_val != new_val:
+            changes.append(FieldChange(field=db_field, label=label, old_value=str(old_val), new_value=new_val))
+        elif not old_val:
+            changes.append(FieldChange(field=db_field, label=f"{label} (신규)", old_value="-", new_value=new_val))
+
+    if extracted_data.get("type_is_piloti") and not building.detail_category9:
+        changes.append(FieldChange(field="detail_category9", label="필로티 (신규)", old_value="-", new_value="필로티"))
+
+    return changes
+
+
+def _apply_changes(building: Building, extracted_data: dict):
+    """건축물 정보 변경 적용"""
+    BUILDING_UPDATE_MAP = {
+        "architect_firm": "architect_firm",
+        "architect_name": "architect_name",
+        "struct_eng_firm": "struct_eng_firm",
+        "struct_eng_name": "struct_eng_name",
+        "main_structure_type": "main_structure",
+        "high_risk_type": "high_risk_type",
+        "struct_drawing_qual": "seismic_level",
+    }
+    DETAIL_CATEGORY_MAP = {
+        "type_construction_method": "detail_category1",
+        "type_transfer_structure": "detail_category2",
+        "type_seismic_isolation": "detail_category3",
+        "type_special_shear_wall": "detail_category4",
+        "type_flat_plate": "detail_category5",
+        "type_cantilever": "detail_category6",
+        "type_long_span": "detail_category7",
+        "type_high_rise": "detail_category8",
+    }
+
+    for extract_key, db_field in {**BUILDING_UPDATE_MAP, **DETAIL_CATEGORY_MAP}.items():
+        new_val = extracted_data.get(extract_key)
+        if new_val:
+            setattr(building, db_field, new_val)
+
+    if extracted_data.get("type_is_piloti"):
+        building.detail_category9 = "필로티"
+
+
 @router.post("/upload", response_model=UploadResponse)
 async def upload_review(
     file: UploadFile = File(...),
@@ -74,7 +190,7 @@ async def upload_review(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """검토서 업로드 + 유효성 검증 + DB 반영"""
+    """검토서 업로드 확정 (유효성 검증 + DB 저장 + 건축물 정보 변경 적용)"""
 
     if not file.filename:
         raise HTTPException(status_code=400, detail="파일이 없습니다")
@@ -171,76 +287,19 @@ async def upload_review(
         # 5. 건축물 현재 단계 업데이트
         building.current_phase = actual_phase
 
-        # 6. 검토서에서 추출한 데이터로 buildings 업데이트
-        # 빈칸 채우기 + 변경 감지
-        extracted_data = validation.extracted_data
-        BUILDING_UPDATE_MAP = {
-            "architect_firm": ("architect_firm", "건축사(소속)"),
-            "architect_name": ("architect_name", "건축사(성명)"),
-            "struct_eng_firm": ("struct_eng_firm", "책임구조기술자(소속)"),
-            "struct_eng_name": ("struct_eng_name", "책임구조기술자(성명)"),
-            "main_structure_type": ("main_structure", "주요 구조형식"),
-            "high_risk_type": ("high_risk_type", "고위험유형"),
-            "struct_drawing_qual": ("seismic_level", "내진등급"),
-        }
-        DETAIL_CATEGORY_MAP = {
-            "type_construction_method": ("detail_category1", "공법"),
-            "type_transfer_structure": ("detail_category2", "전이구조"),
-            "type_seismic_isolation": ("detail_category3", "면진&제진"),
-            "type_special_shear_wall": ("detail_category4", "특수전단벽"),
-            "type_flat_plate": ("detail_category5", "무량판"),
-            "type_cantilever": ("detail_category6", "캔틸래버"),
-            "type_long_span": ("detail_category7", "장스팬"),
-            "type_high_rise": ("detail_category8", "고층"),
-        }
-
-        changes: list[FieldChange] = []
-        warnings: list[str] = validation.warnings
-
-        # 기본 필드
-        for extract_key, (db_field, label) in BUILDING_UPDATE_MAP.items():
-            new_val = extracted_data.get(extract_key)
-            if not new_val:
-                continue
-            old_val = getattr(building, db_field, None)
-            if not old_val:
-                # 빈칸 채우기
-                setattr(building, db_field, new_val)
-            elif old_val != new_val:
-                # 변경 감지 → 경고
-                changes.append(FieldChange(field=db_field, label=label, old_value=str(old_val), new_value=new_val))
-                setattr(building, db_field, new_val)
-
-        # 유형별 상세검토
-        for extract_key, (db_field, label) in DETAIL_CATEGORY_MAP.items():
-            new_val = extracted_data.get(extract_key)
-            if not new_val:
-                continue
-            old_val = getattr(building, db_field, None)
-            if not old_val:
-                setattr(building, db_field, new_val)
-            elif old_val != new_val:
-                changes.append(FieldChange(field=db_field, label=label, old_value=str(old_val), new_value=new_val))
-                setattr(building, db_field, new_val)
-
-        # 필로티
-        if extracted_data.get("type_is_piloti"):
-            if not building.detail_category9:
-                building.detail_category9 = "필로티"
+        # 6. 건축물 정보 변경 적용
+        _apply_changes(building, validation.extracted_data)
+        changes = _detect_changes(building, validation.extracted_data)
 
         log_action(db, current_user.id, "upload", "review_stage", stage.id,
                    after_data={"mgmt_no": mgmt_no, "phase": phase})
         db.commit()
         db.refresh(stage)
 
-        change_msg = ""
-        if changes:
-            change_msg = " (변경사항 " + ", ".join(f"{c.label}: {c.old_value}→{c.new_value}" for c in changes) + ")"
-
         return UploadResponse(
             success=True,
-            message=f"검토서가 제출되었습니다 (관리번호: {mgmt_no}, 단계: {phase}){change_msg}",
-            warnings=warnings,
+            message=f"검토서가 제출되었습니다 (관리번호: {mgmt_no}, 단계: {phase})",
+            warnings=validation.warnings,
             stage_id=stage.id,
             changes=changes,
         )
