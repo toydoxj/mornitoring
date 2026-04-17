@@ -100,13 +100,16 @@ async def upload_review(
         # 2. 검토서 내용 추출
         extracted = extract_review_data(tmp_path)
 
-        # 3. PhaseType 변환
+        # 3. PhaseType 변환 (doc_received는 preliminary로 매핑)
+        actual_phase = phase
+        if phase == "doc_received":
+            actual_phase = "preliminary"
         try:
-            phase_type = PhaseType(phase)
+            phase_type = PhaseType(actual_phase)
         except ValueError:
             raise HTTPException(status_code=400, detail=f"잘못된 검토 단계: {phase}")
 
-        phase_order = PHASE_ORDER_MAP.get(phase, 0)
+        phase_order = PHASE_ORDER_MAP.get(actual_phase, 0)
 
         # 4. review_stages 생성 또는 업데이트
         stage = (
@@ -151,7 +154,7 @@ async def upload_review(
             db.add(stage)
 
         # 5. 건축물 현재 단계 업데이트
-        building.current_phase = phase
+        building.current_phase = actual_phase
 
         log_action(db, current_user.id, "upload", "review_stage", stage.id,
                    after_data={"mgmt_no": mgmt_no, "phase": phase})
