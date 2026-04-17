@@ -14,12 +14,22 @@ import {
 } from "@/components/ui/dialog"
 import apiClient from "@/lib/api/client"
 
-interface ReviewerStatus {
+type UserRole = "team_leader" | "chief_secretary" | "secretary" | "reviewer"
+
+interface UserStatus {
   user_id: number
   name: string
   email: string
+  role: UserRole
   kakao_linked: boolean
   kakao_uuid: string | null
+}
+
+const ROLE_LABELS: Record<UserRole, string> = {
+  team_leader: "팀장",
+  chief_secretary: "총괄간사",
+  secretary: "간사",
+  reviewer: "검토위원",
 }
 
 interface SendResultItem {
@@ -63,7 +73,7 @@ interface Props {
 }
 
 export function SendNotificationDialog({ open, onOpenChange, onSuccess }: Props) {
-  const [reviewers, setReviewers] = useState<ReviewerStatus[]>([])
+  const [users, setUsers] = useState<UserStatus[]>([])
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
   const [templateType, setTemplateType] = useState<string>(TEMPLATES[0].type)
   const [title, setTitle] = useState<string>(TEMPLATES[0].title)
@@ -76,9 +86,9 @@ export function SendNotificationDialog({ open, onOpenChange, onSuccess }: Props)
   useEffect(() => {
     if (!open) return
     apiClient
-      .get<ReviewerStatus[]>("/api/kakao/reviewers")
-      .then(({ data }) => setReviewers(data))
-      .catch((err) => console.error("검토위원 조회 실패:", err))
+      .get<UserStatus[]>("/api/kakao/reviewers")
+      .then(({ data }) => setUsers(data))
+      .catch((err) => console.error("사용자 조회 실패:", err))
   }, [open])
 
   useEffect(() => {
@@ -89,19 +99,19 @@ export function SendNotificationDialog({ open, onOpenChange, onSuccess }: Props)
     }
   }, [templateType])
 
-  const filteredReviewers = useMemo(
+  const filteredUsers = useMemo(
     () =>
-      reviewers.filter((r) => {
+      users.filter((r) => {
         const q = search.toLowerCase()
         return (
           r.name.toLowerCase().includes(q) ||
           r.email.toLowerCase().includes(q)
         )
       }),
-    [reviewers, search]
+    [users, search]
   )
 
-  const linkedFiltered = filteredReviewers.filter((r) => r.kakao_linked)
+  const linkedFiltered = filteredUsers.filter((r) => r.kakao_linked)
 
   const toggleId = (id: number) => {
     setSelectedIds((prev) => {
@@ -244,7 +254,7 @@ export function SendNotificationDialog({ open, onOpenChange, onSuccess }: Props)
             <div className="space-y-2">
               <div className="flex items-center justify-between">
                 <Label>
-                  수신자 선택 ({selectedIds.size}명 선택됨 / 매칭된 위원 {linkedFiltered.length}명)
+                  수신자 선택 ({selectedIds.size}명 선택됨 / 매칭된 사용자 {linkedFiltered.length}명)
                 </Label>
                 <Button size="sm" variant="ghost" onClick={toggleAll}>
                   {selectedIds.size === linkedFiltered.length ? "전체 해제" : "전체 선택"}
@@ -257,7 +267,7 @@ export function SendNotificationDialog({ open, onOpenChange, onSuccess }: Props)
               />
               <div className="max-h-[260px] overflow-y-auto rounded-md border">
                 <ul className="divide-y">
-                  {filteredReviewers.map((r) => {
+                  {filteredUsers.map((r) => {
                     const disabled = !r.kakao_linked
                     const checked = selectedIds.has(r.user_id)
                     return (
@@ -276,6 +286,9 @@ export function SendNotificationDialog({ open, onOpenChange, onSuccess }: Props)
                           onClick={(e) => e.stopPropagation()}
                         />
                         <span className="font-medium">{r.name}</span>
+                        <Badge variant="outline" className="text-xs">
+                          {ROLE_LABELS[r.role]}
+                        </Badge>
                         <span className="text-xs text-muted-foreground">{r.email}</span>
                         {!r.kakao_linked && (
                           <Badge variant="outline" className="ml-auto text-xs">

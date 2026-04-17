@@ -20,12 +20,22 @@ import {
 } from "@/components/ui/table"
 import apiClient from "@/lib/api/client"
 
-interface ReviewerStatus {
+type UserRole = "team_leader" | "chief_secretary" | "secretary" | "reviewer"
+
+interface UserStatus {
   user_id: number
   name: string
   email: string
+  role: UserRole
   kakao_linked: boolean
   kakao_uuid: string | null
+}
+
+const ROLE_LABELS: Record<UserRole, string> = {
+  team_leader: "팀장",
+  chief_secretary: "총괄간사",
+  secretary: "간사",
+  reviewer: "검토위원",
 }
 
 interface KakaoFriend {
@@ -62,21 +72,21 @@ const SCOPE_LABELS: Record<string, string> = {
 }
 
 export default function KakaoMatchPage() {
-  const [reviewers, setReviewers] = useState<ReviewerStatus[]>([])
+  const [users, setUsers] = useState<UserStatus[]>([])
   const [friends, setFriends] = useState<KakaoFriend[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [isFetchingFriends, setIsFetchingFriends] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [selectedReviewer, setSelectedReviewer] = useState<ReviewerStatus | null>(null)
+  const [selectedUser, setSelectedUser] = useState<UserStatus | null>(null)
   const [search, setSearch] = useState("")
   const [scopeStatus, setScopeStatus] = useState<ScopeStatus | null>(null)
 
-  const fetchReviewers = async () => {
+  const fetchUsers = async () => {
     try {
-      const { data } = await apiClient.get<ReviewerStatus[]>("/api/kakao/reviewers")
-      setReviewers(data)
+      const { data } = await apiClient.get<UserStatus[]>("/api/kakao/reviewers")
+      setUsers(data)
     } catch (err) {
-      console.error("검토위원 조회 실패:", err)
+      console.error("사용자 조회 실패:", err)
     } finally {
       setIsLoading(false)
     }
@@ -108,12 +118,12 @@ export default function KakaoMatchPage() {
   }
 
   useEffect(() => {
-    fetchReviewers()
+    fetchUsers()
     fetchScopeStatus()
   }, [])
 
-  const handleOpenMatch = (reviewer: ReviewerStatus) => {
-    setSelectedReviewer(reviewer)
+  const handleOpenMatch = (user: UserStatus) => {
+    setSelectedUser(user)
     setSearch("")
     if (friends.length === 0) {
       fetchFriends()
@@ -121,14 +131,14 @@ export default function KakaoMatchPage() {
   }
 
   const handleMatch = async (uuid: string) => {
-    if (!selectedReviewer) return
+    if (!selectedUser) return
     try {
       await apiClient.post("/api/kakao/match", {
-        user_id: selectedReviewer.user_id,
+        user_id: selectedUser.user_id,
         kakao_uuid: uuid,
       })
-      setSelectedReviewer(null)
-      await Promise.all([fetchReviewers(), fetchFriends()])
+      setSelectedUser(null)
+      await Promise.all([fetchUsers(), fetchFriends()])
     } catch (err) {
       const msg =
         (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
@@ -141,13 +151,13 @@ export default function KakaoMatchPage() {
     if (!confirm("매칭을 해제하시겠습니까?")) return
     try {
       await apiClient.delete(`/api/kakao/match/${userId}`)
-      await Promise.all([fetchReviewers(), fetchFriends()])
+      await Promise.all([fetchUsers(), fetchFriends()])
     } catch (err) {
       console.error("해제 실패:", err)
     }
   }
 
-  const matchedCount = reviewers.filter((r) => r.kakao_linked).length
+  const matchedCount = users.filter((r) => r.kakao_linked).length
 
   const filteredFriends = friends.filter((f) => {
     const nick = (f.profile_nickname ?? "").toLowerCase()
@@ -160,7 +170,7 @@ export default function KakaoMatchPage() {
         <div>
           <h1 className="text-2xl font-bold">카카오 친구 매칭</h1>
           <p className="text-sm text-muted-foreground">
-            검토위원 {reviewers.length}명 중 {matchedCount}명 매칭됨
+            전체 사용자 {users.length}명 중 {matchedCount}명 매칭됨
           </p>
         </div>
         <Button onClick={fetchFriends} disabled={isFetchingFriends}>
@@ -237,6 +247,7 @@ export default function KakaoMatchPage() {
             <TableRow>
               <TableHead className="w-[60px]">ID</TableHead>
               <TableHead>이름</TableHead>
+              <TableHead className="w-[100px]">역할</TableHead>
               <TableHead>이메일</TableHead>
               <TableHead className="w-[120px]">매칭 상태</TableHead>
               <TableHead className="w-[200px]">작업</TableHead>
@@ -245,21 +256,24 @@ export default function KakaoMatchPage() {
           <TableBody>
             {isLoading ? (
               <TableRow>
-                <TableCell colSpan={5} className="h-32 text-center">
+                <TableCell colSpan={6} className="h-32 text-center">
                   로딩 중...
                 </TableCell>
               </TableRow>
-            ) : reviewers.length === 0 ? (
+            ) : users.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={5} className="h-32 text-center text-muted-foreground">
-                  검토위원이 없습니다
+                <TableCell colSpan={6} className="h-32 text-center text-muted-foreground">
+                  사용자가 없습니다
                 </TableCell>
               </TableRow>
             ) : (
-              reviewers.map((r) => (
+              users.map((r) => (
                 <TableRow key={r.user_id}>
                   <TableCell>{r.user_id}</TableCell>
                   <TableCell className="font-medium">{r.name}</TableCell>
+                  <TableCell>
+                    <Badge variant="outline">{ROLE_LABELS[r.role]}</Badge>
+                  </TableCell>
                   <TableCell className="text-sm text-muted-foreground">{r.email}</TableCell>
                   <TableCell>
                     {r.kakao_linked ? (
@@ -291,11 +305,11 @@ export default function KakaoMatchPage() {
         </Table>
       </div>
 
-      <Dialog open={!!selectedReviewer} onOpenChange={(open) => !open && setSelectedReviewer(null)}>
+      <Dialog open={!!selectedUser} onOpenChange={(open) => !open && setSelectedUser(null)}>
         <DialogContent className="max-w-2xl">
           <DialogHeader>
             <DialogTitle>
-              {selectedReviewer?.name}님과 매칭할 카카오 친구 선택
+              {selectedUser?.name}님과 매칭할 카카오 친구 선택
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-3">

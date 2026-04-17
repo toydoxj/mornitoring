@@ -196,35 +196,37 @@ async def unmatch_friend(
     return {"message": "매칭이 해제되었습니다"}
 
 
-class ReviewerMatchStatus(BaseModel):
+class UserMatchStatus(BaseModel):
     user_id: int
     name: str
     email: str
+    role: UserRole
     kakao_linked: bool
     kakao_uuid: str | None = None
 
 
-@router.get("/reviewers", response_model=list[ReviewerMatchStatus])
-async def list_reviewers_match_status(
+@router.get("/reviewers", response_model=list[UserMatchStatus])
+async def list_users_match_status(
     db: Session = Depends(get_db),
     _: User = Depends(
         require_roles(UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY, UserRole.SECRETARY)
     ),
 ):
-    """검토위원별 카카오 매칭 상태 목록"""
-    reviewers = (
+    """전체 활성 사용자의 카카오 매칭 상태 목록 (역할 무관)"""
+    users = (
         db.query(User)
-        .filter(User.role == UserRole.REVIEWER, User.is_active.is_(True))
-        .order_by(User.name)
+        .filter(User.is_active.is_(True))
+        .order_by(User.role, User.name)
         .all()
     )
     return [
-        ReviewerMatchStatus(
+        UserMatchStatus(
             user_id=u.id,
             name=u.name,
             email=u.email,
+            role=u.role,
             kakao_linked=bool(u.kakao_uuid),
             kakao_uuid=u.kakao_uuid,
         )
-        for u in reviewers
+        for u in users
     ]
