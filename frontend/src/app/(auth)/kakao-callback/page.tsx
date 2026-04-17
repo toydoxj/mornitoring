@@ -9,15 +9,14 @@ import { useAuthStore } from "@/stores/authStore"
 function KakaoCallbackContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
-  const [status, setStatus] = useState("카카오 로그인 처리 중...")
+  const code = searchParams.get("code")
+  const [status, setStatus] = useState(
+    code ? "카카오 로그인 처리 중..." : "인가 코드가 없습니다"
+  )
   const fetchMe = useAuthStore((s) => s.fetchMe)
 
   useEffect(() => {
-    const code = searchParams.get("code")
-    if (!code) {
-      setStatus("인가 코드가 없습니다")
-      return
-    }
+    if (!code) return
 
     const handleCallback = async () => {
       try {
@@ -53,7 +52,7 @@ function KakaoCallbackContent() {
     }
 
     handleCallback()
-  }, [searchParams, router, fetchMe])
+  }, [code, router, fetchMe])
 
   return (
     <Card className="w-full max-w-md">
