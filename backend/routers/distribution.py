@@ -26,6 +26,55 @@ class DocReceiveResponse(BaseModel):
     notifications: list[dict]
 
 
+# 도서 접수 시 다음 단계를 결정:
+#   key = 현재 current_phase
+#   value = 접수 대상 stage phase (review_stages.phase)
+_NEXT_RECEIVE_ROUND: dict[str | None, str] = {
+    None: "preliminary",
+    "": "preliminary",
+    "doc_received": "preliminary",              # 재접수
+    "preliminary": "supplement_1",              # 예비 제출 후 → 1차 보완도서
+    "supplement_1_received": "supplement_1",    # 1차 보완도서 재접수
+    "supplement_1": "supplement_2",
+    "supplement_2_received": "supplement_2",
+    "supplement_2": "supplement_3",
+    "supplement_3_received": "supplement_3",
+    "supplement_3": "supplement_4",
+    "supplement_4_received": "supplement_4",
+    "supplement_4": "supplement_5",
+    "supplement_5_received": "supplement_5",
+    # "supplement_5" 이후는 더 이상 접수 불가
+}
+
+# stage phase → building.current_phase 접수 상태 문자열
+_STAGE_TO_RECEIVED: dict[str, str] = {
+    "preliminary": "doc_received",
+    "supplement_1": "supplement_1_received",
+    "supplement_2": "supplement_2_received",
+    "supplement_3": "supplement_3_received",
+    "supplement_4": "supplement_4_received",
+    "supplement_5": "supplement_5_received",
+}
+
+_PHASE_ORDER: dict[str, int] = {
+    "preliminary": 0,
+    "supplement_1": 1,
+    "supplement_2": 2,
+    "supplement_3": 3,
+    "supplement_4": 4,
+    "supplement_5": 5,
+}
+
+_ROUND_KOREAN: dict[str, str] = {
+    "preliminary": "예비",
+    "supplement_1": "1차 보완",
+    "supplement_2": "2차 보완",
+    "supplement_3": "3차 보완",
+    "supplement_4": "4차 보완",
+    "supplement_5": "5차 보완",
+}
+
+
 @router.post("/receive", response_model=DocReceiveResponse)
 def receive_documents(
     body: DocReceiveRequest,
@@ -34,64 +83,84 @@ def receive_documents(
         require_roles(UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY)
     ),
 ):
-    """예비도서 접수 처리
+    """도서 접수 처리 (예비/보완 1~5차 자동 판별)
 
-    - 해당 관리번호의 현재 단계를 'doc_received'로 변경
-    - review_stages에 도서접수일 기록
-    - 검토위원별 알림 데이터 생성
+    각 건물의 현재 상태를 보고 예비도서인지 몇 차 보완도서인지 자동 결정.
+    - review_stages에 해당 단계의 도서접수일 기록
+    - 건물의 current_phase를 '_received' 상태로 업데이트
+    - 검토위원 × 차수 조합별로 알림 데이터 생성
     """
     received = body.received_date or date.today()
     updated = 0
-    not_found = []
-    notifications: dict[str, list[str]] = {}
+    not_found: list[str] = []
+    # (검토자 이름, 접수 차수) → 관리번호 목록
+    notif_key: dict[tuple[str, str], list[str]] = {}
 
-    # 1. 건축물 일괄 조회 (1000건씩 분할)
+    # 1. 건축물 일괄 조회
     building_map: dict[str, Building] = {}
     for i in range(0, len(body.mgmt_nos), 1000):
-        chunk = body.mgmt_nos[i:i+1000]
+        chunk = body.mgmt_nos[i:i + 1000]
         buildings = db.query(Building).filter(Building.mgmt_no.in_(chunk)).all()
         for b in buildings:
             building_map[b.mgmt_no] = b
 
-    # 2. 기존 예비검토 stage 일괄 조회
-    building_ids = [b.id for b in building_map.values()]
-    existing_stages: dict[int, ReviewStage] = {}
-    if building_ids:
+    # 2. 차수별로 stage 매핑 준비 — 건물별로 필요한 단계가 다를 수 있음
+    # 먼저 각 건물의 접수 대상 phase를 계산
+    target_phase_by_building: dict[int, str] = {}
+    for b in building_map.values():
+        phase = _NEXT_RECEIVE_ROUND.get(b.current_phase)
+        if phase:
+            target_phase_by_building[b.id] = phase
+
+    # 3. 관련 review_stages 일괄 조회 (대상 phase 조합)
+    existing_stages: dict[tuple[int, str], ReviewStage] = {}
+    if target_phase_by_building:
+        building_ids = list(target_phase_by_building.keys())
+        phase_values = set(target_phase_by_building.values())
+        # 한번에 전체 조회 후 dict로 인덱싱
         for i in range(0, len(building_ids), 1000):
-            chunk = building_ids[i:i+1000]
+            chunk = building_ids[i:i + 1000]
             stages = db.query(ReviewStage).filter(
                 ReviewStage.building_id.in_(chunk),
-                ReviewStage.phase == PhaseType.PRELIMINARY,
+                ReviewStage.phase.in_([PhaseType(p) for p in phase_values]),
             ).all()
             for s in stages:
-                existing_stages[s.building_id] = s
+                existing_stages[(s.building_id, s.phase.value)] = s
 
-    # 3. 일괄 처리
+    # 4. 건물별 처리
     batch_count = 0
+    skipped_final: list[str] = []
     for mgmt_no in body.mgmt_nos:
         building = building_map.get(mgmt_no)
         if not building:
             not_found.append(mgmt_no)
             continue
 
-        building.current_phase = "doc_received"
+        target_phase = target_phase_by_building.get(building.id)
+        if not target_phase:
+            # 5차 보완 이후 등 더 이상 접수 불가
+            skipped_final.append(mgmt_no)
+            continue
 
-        stage = existing_stages.get(building.id)
+        # building.current_phase 업데이트
+        building.current_phase = _STAGE_TO_RECEIVED[target_phase]
+
+        key = (building.id, target_phase)
+        stage = existing_stages.get(key)
         if stage:
             stage.doc_received_at = received
         else:
             db.add(ReviewStage(
                 building_id=building.id,
-                phase=PhaseType.PRELIMINARY,
-                phase_order=0,
+                phase=PhaseType(target_phase),
+                phase_order=_PHASE_ORDER[target_phase],
                 doc_received_at=received,
             ))
 
         reviewer_name = building.assigned_reviewer_name
         if reviewer_name:
-            if reviewer_name not in notifications:
-                notifications[reviewer_name] = []
-            notifications[reviewer_name].append(mgmt_no)
+            k = (reviewer_name, target_phase)
+            notif_key.setdefault(k, []).append(mgmt_no)
 
         updated += 1
         batch_count += 1
@@ -100,15 +169,25 @@ def receive_documents(
 
     db.commit()
 
-    # 알림 목록 생성
+    # 5. 알림 목록 생성 (검토자 × 차수 별로)
     notif_list = []
-    for name, mgmt_nos_list in notifications.items():
+    for (reviewer, phase), mgmt_nos_list in notif_key.items():
+        round_label = _ROUND_KOREAN.get(phase, phase)
         notif_list.append({
-            "reviewer_name": name,
+            "reviewer_name": reviewer,
             "count": len(mgmt_nos_list),
+            "round": round_label,
+            "phase": phase,
             "mgmt_nos": mgmt_nos_list,
-            "message": f"예비검토서로 {len(mgmt_nos_list)}건이 웹하드에 업로드되었습니다. (관리번호 {', '.join(mgmt_nos_list)})",
+            "message": (
+                f"{round_label}도서 {len(mgmt_nos_list)}건이 웹하드에 "
+                f"업로드되었습니다. (관리번호 {', '.join(mgmt_nos_list)})"
+            ),
         })
+
+    # 5차 이후 접수 불가 건은 not_found에 사유와 함께 포함
+    for mgmt_no in skipped_final:
+        not_found.append(f"{mgmt_no} (5차 보완 이후 접수 불가)")
 
     return DocReceiveResponse(
         updated=updated,

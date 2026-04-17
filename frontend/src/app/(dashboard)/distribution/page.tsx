@@ -21,6 +21,8 @@ interface NotificationItem {
   count: number
   mgmt_nos: string[]
   message: string
+  round?: string
+  phase?: string
 }
 
 interface ReceiveResult {
@@ -112,9 +114,9 @@ export default function DistributionPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold">예비도서 접수/배포</h1>
+        <h1 className="text-2xl font-bold">도서 접수/배포</h1>
         <p className="text-sm text-muted-foreground">
-          접수된 설계도서의 관리번호를 입력하여 접수 처리 및 검토위원 알림을 발송합니다
+          관리번호를 입력하면 각 건물의 진행 상태에 따라 예비도서 또는 보완도서(1~5차) 접수가 자동으로 구분됩니다
         </p>
       </div>
 
@@ -216,6 +218,7 @@ export default function DistributionPage() {
                 <TableHeader>
                   <TableRow>
                     <TableHead>검토위원</TableHead>
+                    <TableHead className="w-[100px]">차수</TableHead>
                     <TableHead className="w-[60px]">건수</TableHead>
                     <TableHead>알림 내용</TableHead>
                   </TableRow>
@@ -224,6 +227,13 @@ export default function DistributionPage() {
                   {result.notifications.map((n, i) => (
                     <TableRow key={i}>
                       <TableCell className="font-medium">{n.reviewer_name}</TableCell>
+                      <TableCell>
+                        {n.round ? (
+                          <Badge variant="outline">{n.round}</Badge>
+                        ) : (
+                          "-"
+                        )}
+                      </TableCell>
                       <TableCell>{n.count}</TableCell>
                       <TableCell className="text-sm text-muted-foreground">
                         {n.message}
