@@ -163,6 +163,7 @@ def _detect_changes(building: Building, extracted_data: dict) -> list[FieldChang
         "drawing_creator_name": ("drawing_creator_name", "도면작성자(성명)"),
         "main_structure_type": ("main_structure", "주구조형식"),
         "high_risk_type": ("high_risk_type", "고위험유형"),
+        "seismic_level": ("seismic_level", "내진등급"),
         "struct_drawing_qual": ("drawing_creator_qualification", "도면작성자 자격"),
     }
     DETAIL_CATEGORY_MAP = {
@@ -204,7 +205,18 @@ def _detect_result_change(
     phase_type_value,
     extracted_result,
 ) -> "FieldChange | None":
-    """검토결과(ReviewStage.result) 변경 감지 (ReviewStage 레코드 대상)"""
+    """검토결과(ReviewStage.result) 변경 감지.
+
+    비교 기준 우선순위:
+    1. 같은 단계에 기존 result가 있으면 → 재업로드로 간주하고 그 값과 비교
+    2. 없으면 → 이전 단계(phase_order 최대) 중 result가 있는 stage와 비교
+    3. 없으면 → (신규)
+    """
+    new_label = _RESULT_KOREAN.get(extracted_result.value) if extracted_result else None
+    if not new_label:
+        return None
+
+    # 1. 같은 단계 기존 result
     current_stage = (
         db.query(ReviewStage)
         .filter(
@@ -213,20 +225,74 @@ def _detect_result_change(
         )
         .first()
     )
-    old_result = current_stage.result if current_stage else None
-    new_label = _RESULT_KOREAN.get(extracted_result.value) if extracted_result else None
-    if not new_label:
-        return None
-    if old_result and old_result == extracted_result:
-        return None
-    old_label = _RESULT_KOREAN.get(old_result.value) if old_result else None
+    current_order = PHASE_ORDER_MAP.get(phase_type_value.value, 0)
+
+    old_result = None
+    old_phase_label = ""
+    if current_stage and current_stage.result is not None:
+        old_result = current_stage.result
+        old_phase_label = "재업로드"
+    else:
+        # 2. 이전 단계 중 result 있는 stage (phase_order < current)
+        prev_stage = (
+            db.query(ReviewStage)
+            .filter(
+                ReviewStage.building_id == building_id,
+                ReviewStage.result.isnot(None),
+            )
+            .all()
+        )
+        prev_stage_sorted = sorted(
+            [s for s in prev_stage if PHASE_ORDER_MAP.get(s.phase.value, 0) < current_order],
+            key=lambda s: PHASE_ORDER_MAP.get(s.phase.value, 0),
+            reverse=True,
+        )
+        if prev_stage_sorted:
+            prev = prev_stage_sorted[0]
+            old_result = prev.result
+            old_phase_label = _PHASE_DISPLAY.get(prev.phase.value, prev.phase.value)
+
+    if old_result is None:
+        # 이전 단계 결과 없음 → 신규
+        return FieldChange(
+            field="result",
+            label="검토결과 (신규)",
+            old_value="-",
+            new_value=new_label,
+            scope="review_stage",
+        )
+
+    # 동일하면 "유지" 표시 (변경 없음이지만 정보 전달)
+    if old_result == extracted_result:
+        label_suffix = f" (이전 {old_phase_label} 동일)" if old_phase_label else " (동일)"
+        return FieldChange(
+            field="result",
+            label=f"검토결과{label_suffix}",
+            old_value=_RESULT_KOREAN.get(old_result.value, old_result.value),
+            new_value=new_label,
+            scope="review_stage",
+        )
+
+    # 변경
+    label_prefix = f"검토결과 (이전 {old_phase_label})" if old_phase_label else "검토결과"
     return FieldChange(
         field="result",
-        label="검토결과" if old_label else "검토결과 (신규)",
-        old_value=old_label or "-",
+        label=label_prefix,
+        old_value=_RESULT_KOREAN.get(old_result.value, old_result.value),
         new_value=new_label,
         scope="review_stage",
     )
+
+
+# 단계 표시용 짧은 라벨
+_PHASE_DISPLAY: dict[str, str] = {
+    "preliminary": "예비",
+    "supplement_1": "보완 1차",
+    "supplement_2": "보완 2차",
+    "supplement_3": "보완 3차",
+    "supplement_4": "보완 4차",
+    "supplement_5": "보완 5차",
+}
 
 
 def _apply_changes(building: Building, extracted_data: dict):
@@ -244,6 +310,7 @@ def _apply_changes(building: Building, extracted_data: dict):
         "drawing_creator_name": "drawing_creator_name",
         # "main_structure_type": "main_structure",  # 의도적으로 제외
         "high_risk_type": "high_risk_type",
+        "seismic_level": "seismic_level",
         "struct_drawing_qual": "drawing_creator_qualification",
     }
     DETAIL_CATEGORY_MAP = {

@@ -15,7 +15,8 @@
   F9: 도면작성자 소속 (추정 위치 — 실제 검토서 양식에 맞게 확인 필요)
   H9: 도면작성자 성명
   F11: 주요 구조형식
-  E13~F13: 구조도면 작성자 자격
+  F12: 내진등급 (특/I/II)
+  E13~F13: 구조도면 작성자 자격 (건축사/건축구조기술사/기타)
   E14~F14: 고위험 유형
   C9: 전이구조 (O/X) — 우측에 "필로티" 있으면 필로티 구분
   C8~C15: 유형별 상세검토 (공법/전이구조/면진제진/특수전단벽/무량판/캔틸래버/장스팬/고층)
@@ -277,6 +278,7 @@ def validate_review_file(
         "drawing_creator_firm": _cell_str(ws, "F9"),
         "drawing_creator_name": _cell_str(ws, "H9"),
         "main_structure_type": _cell_str(ws, "F11"),
+        "seismic_level": _cell_str(ws, "F12"),
         "struct_drawing_qual": _cell_str(ws, "F13"),
         "high_risk_type": _cell_str(ws, "F14"),
         "defect_type_1": defect_type_1,
@@ -304,6 +306,20 @@ def validate_review_file(
         result.add_warning("책임구조기술자 소속/성명이 입력되지 않았습니다.")
     if not result.extracted_data["drawing_creator_firm"] and not result.extracted_data["drawing_creator_name"]:
         result.add_warning("도면작성자 소속/성명이 입력되지 않았습니다.")
+    # 내진등급 (F12) — 특/I/II 중 하나여야 함
+    _seismic = result.extracted_data["seismic_level"]
+    if not _seismic:
+        result.add_warning("내진등급이 입력되지 않았습니다.")
+    elif _seismic not in ("특", "I", "II"):
+        result.add_warning(
+            f"내진등급이 '{_seismic}'입니다. 특/I/II 중 하나여야 합니다."
+        )
+    # 도면작성자 자격 (F13) — 건축사/건축구조기술사/기타 중 하나여야 함
+    _qual = result.extracted_data["struct_drawing_qual"]
+    if _qual and _qual not in ("건축사", "건축구조기술사", "기타"):
+        result.add_warning(
+            f"도면작성자 자격이 '{_qual}'입니다. 건축사/건축구조기술사/기타 중 하나여야 합니다."
+        )
     if not result.extracted_data["main_structure_type"]:
         result.add_warning("주요 구조형식이 입력되지 않았습니다.")
     if not result.extracted_data["high_risk_type"]:
