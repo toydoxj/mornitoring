@@ -7,6 +7,14 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Separator } from "@/components/ui/separator"
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import { Label } from "@/components/ui/label"
 import apiClient from "@/lib/api/client"
 import { useAuthStore } from "@/stores/authStore"
 import type { Building, ReviewStage, PhaseType, ResultType, InappropriateDecisionType } from "@/types"
@@ -35,6 +43,9 @@ export default function BuildingDetailPage() {
   const [newInquiry, setNewInquiry] = useState("")
   const [submittingInquiry, setSubmittingInquiry] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
+  const [phaseEditOpen, setPhaseEditOpen] = useState(false)
+  const [phaseDraft, setPhaseDraft] = useState<string>("")
+  const [savingPhase, setSavingPhase] = useState(false)
 
   const canManage = user && ["team_leader", "chief_secretary", "secretary"].includes(user.role)
   const isAssigned =
@@ -79,6 +90,30 @@ export default function BuildingDetailPage() {
       setStages(stagesRes.data)
     } catch (err) {
       console.error("단계 전환 실패:", err)
+    }
+  }
+
+  const handleSavePhase = async () => {
+    if (!building || !phaseDraft) return
+    if (phaseDraft === building.current_phase) {
+      setPhaseEditOpen(false)
+      return
+    }
+    setSavingPhase(true)
+    try {
+      const { data } = await apiClient.patch<Building>(
+        `/api/buildings/${building.id}`,
+        { current_phase: phaseDraft }
+      )
+      setBuilding(data)
+      setPhaseEditOpen(false)
+    } catch (err) {
+      const msg =
+        (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
+        ?? "단계 변경 실패"
+      alert(msg)
+    } finally {
+      setSavingPhase(false)
     }
   }
 
@@ -140,11 +175,23 @@ export default function BuildingDetailPage() {
             )}
           </h1>
         </div>
-        <div className="flex gap-2">
+        <div className="flex items-center gap-2">
           {building.current_phase && (
             <Badge variant="outline" className="text-base px-3 py-1">
               {PHASE_LABELS[building.current_phase as PhaseType] || building.current_phase}
             </Badge>
+          )}
+          {canManage && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => {
+                setPhaseDraft(building.current_phase ?? "")
+                setPhaseEditOpen(true)
+              }}
+            >
+              단계 수정
+            </Button>
           )}
           {building.final_result && (
             <Badge variant={RESULT_VARIANT[building.final_result] || "outline"} className="text-base px-3 py-1">
@@ -355,6 +402,43 @@ export default function BuildingDetailPage() {
           )}
         </CardContent>
       </Card>
+
+      {/* 현재 단계 수정 다이얼로그 (간사 이상) */}
+      <Dialog open={phaseEditOpen} onOpenChange={setPhaseEditOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>현재 단계 수정</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <p className="text-xs text-muted-foreground">
+              자동 전환과 무관하게 이 건축물의 현재 진행 단계를 수동으로 지정할 수 있습니다.
+            </p>
+            <div className="space-y-2">
+              <Label>단계 선택</Label>
+              <select
+                className="w-full rounded-md border px-3 py-2 text-sm"
+                value={phaseDraft}
+                onChange={(e) => setPhaseDraft(e.target.value)}
+              >
+                <option value="">선택 안 함</option>
+                {Object.entries(PHASE_LABELS).map(([value, label]) => (
+                  <option key={value} value={value}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPhaseEditOpen(false)} disabled={savingPhase}>
+              취소
+            </Button>
+            <Button onClick={handleSavePhase} loading={savingPhase} loadingText="저장 중...">
+              저장
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
