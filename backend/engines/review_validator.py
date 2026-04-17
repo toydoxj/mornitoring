@@ -50,11 +50,13 @@ class ValidationResult:
 
 
 def _cell_str(ws, coord: str) -> str:
-    """셀 값을 문자열로 반환"""
+    """셀 값을 문자열로 반환 (_x000D_ 등 특수문자 정리)"""
     val = ws[coord].value
     if val is None:
         return ""
-    return str(val).strip()
+    s = str(val).strip()
+    s = s.replace("_x000D_", "").replace("_x000d_", "").replace("\r", "")
+    return s
 
 
 def _find_result_row(ws, start_row: int = 79, max_row: int = 100) -> int:

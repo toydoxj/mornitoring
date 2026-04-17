@@ -29,7 +29,9 @@ def _cell_str(ws, coord: str) -> str:
     val = ws[coord].value
     if val is None:
         return ""
-    return str(val).strip()
+    s = str(val).strip()
+    s = s.replace("_x000D_", "").replace("_x000d_", "").replace("\r", "")
+    return s
 
 
 def _find_defect_type_values(ws, start_row: int = 79, max_row: int = 95) -> list[str]:
@@ -85,7 +87,8 @@ def extract_review_data(file_path: str | Path) -> dict:
             if val and "적정성 검토 결과" in str(val):
                 opinion = ws.cell(row=row, column=4).value  # D열
                 if opinion:
-                    data["review_opinion"] = str(opinion).strip()
+                    s = str(opinion).strip().replace("_x000D_", "").replace("_x000d_", "").replace("\r", "")
+                    data["review_opinion"] = s
                 break
 
         # 판정결과 부적합 유형
