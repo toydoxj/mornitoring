@@ -183,6 +183,14 @@ def export_ledger(db: Session) -> BytesIO:
         .all()
     )
 
+    # 전체 stages 일괄 조회
+    all_stages = db.query(ReviewStage).order_by(ReviewStage.phase_order).all()
+    stages_by_building: dict[int, list] = {}
+    for stage in all_stages:
+        if stage.building_id not in stages_by_building:
+            stages_by_building[stage.building_id] = []
+        stages_by_building[stage.building_id].append(stage)
+
     for row_offset, building in enumerate(buildings):
         row_num = 3 + row_offset
 
@@ -193,20 +201,17 @@ def export_ledger(db: Session) -> BytesIO:
             ws.cell(row=row_num, column=col_idx, value=_format_value(val, field_name))
 
         # 검토위원명 (B열)
-        if building.reviewer and building.reviewer.user:
+        if building.assigned_reviewer_name:
+            ws.cell(row=row_num, column=2, value=building.assigned_reviewer_name)
+        elif building.reviewer and building.reviewer.user:
             ws.cell(row=row_num, column=2, value=building.reviewer.user.name)
 
         # 최종 판정
         if building.final_result:
             ws.cell(row=row_num, column=final_col_idx, value=building.final_result)
 
-        # 검토 단계 데이터
-        stages = (
-            db.query(ReviewStage)
-            .filter(ReviewStage.building_id == building.id)
-            .order_by(ReviewStage.phase_order)
-            .all()
-        )
+        # 검토 단계 데이터 (일괄 조회에서 가져오기)
+        stages = stages_by_building.get(building.id, [])
 
         for stage in stages:
             if stage.phase == PhaseType.PRELIMINARY:
