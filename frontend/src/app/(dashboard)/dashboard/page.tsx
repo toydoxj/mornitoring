@@ -29,11 +29,17 @@ interface ReviewerStat {
 
 interface DashboardStats {
   total: number
+  // 전체 흐름 요약 (서로 겹치지 않음)
+  unassigned: number
+  assigned: number
+  docs_waiting_review: number
+  review_in_progress: number
+  completed: number
+  // 기존 호환
   doc_received: number
   not_submitted: number
   preliminary: number
   supplement: number
-  completed: number
   phase_counts: Record<string, number>
   reviewer_stats: ReviewerStat[]
 }
@@ -179,11 +185,15 @@ export default function DashboardPage() {
         <>
           <div>
             <h2 className="text-lg font-bold mb-2">전체 현황</h2>
-            <div className="grid gap-4 md:grid-cols-5">
+            <p className="text-xs text-muted-foreground mb-2">
+              각 카드는 서로 겹치지 않는 단계군입니다 (합 = 총 등록건).
+            </p>
+            <div className="grid gap-4 md:grid-cols-3 lg:grid-cols-6">
               <StatCard title="총 등록건" value={stats.total} />
-              <StatCard title="예비도서 배포" value={stats.doc_received} color="blue" />
-              <StatCard title="검토서 미접수" value={stats.not_submitted} color="red" />
-              <StatCard title="보완 진행" value={stats.supplement} />
+              <StatCard title="미배정" value={stats.unassigned} color="red" />
+              <StatCard title="배정 완료" value={stats.assigned} />
+              <StatCard title="검토서 대기" value={stats.docs_waiting_review} color="blue" />
+              <StatCard title="검토 진행중" value={stats.review_in_progress} />
               <StatCard title="최종 완료" value={stats.completed} color="green" />
             </div>
           </div>

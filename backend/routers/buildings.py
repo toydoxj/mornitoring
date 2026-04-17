@@ -158,27 +158,7 @@ def get_stats(
 
     total = db.query(Building).count()
 
-    # 예비도서 접수(배포) 건수
-    doc_received = db.query(Building).filter(Building.current_phase == "doc_received").count()
-
-    # 예비검토 중 (검토서 미접수) — doc_received인데 review_stage에 report_submitted_at이 없는 건
-    doc_received_ids = db.query(Building.id).filter(Building.current_phase == "doc_received").subquery()
-    submitted_ids = (
-        db.query(ReviewStage.building_id)
-        .filter(
-            ReviewStage.phase == PhaseType.PRELIMINARY,
-            ReviewStage.report_submitted_at.isnot(None),
-        )
-        .subquery()
-    )
-    not_submitted = (
-        db.query(Building)
-        .filter(Building.id.in_(doc_received_ids))
-        .filter(~Building.id.in_(submitted_ids))
-        .count()
-    )
-
-    # 단계별 건수
+    # 단계별 건수 (세부)
     from sqlalchemy import func as sa_func2
     phase_counts_raw = (
         db.query(Building.current_phase, sa_func2.count(Building.id))
@@ -187,14 +167,33 @@ def get_stats(
     )
     phase_counts = {phase or "none": count for phase, count in phase_counts_raw}
 
-    # 예비검토서 제출
-    preliminary = phase_counts.get("preliminary", 0)
-
-    # 보완 진행
-    supplement = sum(v for k, v in phase_counts.items() if k.startswith("supplement"))
-
+    # 전체 현황 요약 — 각 카드는 서로 겹치지 않는 단계군
+    # (총 등록건 = unassigned + assigned + docs_waiting_review + review_in_progress + completed)
+    unassigned = phase_counts.get("none", 0)
+    assigned = phase_counts.get("assigned", 0)
+    # 도서접수된 상태이지만 검토서 미제출 (예비 + 보완 1~5 received)
+    received_phases = {
+        "doc_received",
+        "supplement_1_received", "supplement_2_received",
+        "supplement_3_received", "supplement_4_received",
+        "supplement_5_received",
+    }
+    docs_waiting_review = sum(v for k, v in phase_counts.items() if k in received_phases)
+    # 검토서 제출 완료 (보완 1~5 제출 포함, 예비 제출 포함)
+    submission_phases = {
+        "preliminary",
+        "supplement_1", "supplement_2", "supplement_3",
+        "supplement_4", "supplement_5",
+    }
+    review_in_progress = sum(v for k, v in phase_counts.items() if k in submission_phases)
     # 최종 완료
     completed = db.query(Building).filter(Building.final_result.isnot(None)).count()
+
+    # 기존 필드 호환 (이미 사용 중인 명칭 유지)
+    doc_received = phase_counts.get("doc_received", 0)
+    not_submitted = docs_waiting_review  # 예비+보완 전체 미제출 (기존엔 예비만)
+    preliminary = phase_counts.get("preliminary", 0)
+    supplement = sum(v for k, v in phase_counts.items() if k.startswith("supplement"))
 
     # 위원별 현황
     from sqlalchemy import func as sa_func
@@ -255,11 +254,17 @@ def get_stats(
 
     return {
         "total": total,
+        # 전체 흐름 요약 (서로 겹치지 않고 합산하면 total)
+        "unassigned": unassigned,
+        "assigned": assigned,
+        "docs_waiting_review": docs_waiting_review,
+        "review_in_progress": review_in_progress,
+        "completed": completed,
+        # 기존 호환 필드 (프론트 기존 코드 참조)
         "doc_received": doc_received,
         "not_submitted": not_submitted,
         "preliminary": preliminary,
         "supplement": supplement,
-        "completed": completed,
         "phase_counts": phase_counts,
         "reviewer_stats": reviewer_stats,
     }
