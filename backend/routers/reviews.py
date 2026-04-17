@@ -184,54 +184,70 @@ def get_review_stages(
     return stages
 
 
-class NotSubmittedReasonRequest(BaseModel):
+class InquiryCreateRequest(BaseModel):
     mgmt_no: str
     phase: str
-    reason: str
+    content: str
 
 
-@router.post("/not-submitted-reason")
-def save_not_submitted_reason(
-    body: NotSubmittedReasonRequest,
+class InquiryUpdateRequest(BaseModel):
+    reply: str | None = None
+    status: str | None = None  # asking_agency / completed / next_phase
+
+
+@router.post("/inquiry")
+def create_inquiry(
+    body: InquiryCreateRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """검토서 미제출 사유 저장"""
+    """문의사항 등록"""
+    from models.inquiry import Inquiry
+
     building = db.query(Building).filter(Building.mgmt_no == body.mgmt_no).first()
     if not building:
         raise HTTPException(status_code=404, detail="관리번호를 찾을 수 없습니다")
 
-    try:
-        phase_type = PhaseType(body.phase)
-    except ValueError:
-        phase_type = PhaseType.PRELIMINARY
-
-    phase_order = PHASE_ORDER_MAP.get(body.phase, 0)
-
-    stage = (
-        db.query(ReviewStage)
-        .filter(ReviewStage.building_id == building.id, ReviewStage.phase == phase_type)
-        .first()
+    inquiry = Inquiry(
+        building_id=building.id,
+        mgmt_no=body.mgmt_no,
+        phase=body.phase,
+        submitter_name=current_user.name,
+        content=body.content,
     )
+    db.add(inquiry)
+    db.commit()
+    return {"message": "문의가 등록되었습니다"}
 
-    if stage:
-        stage.stage_remarks = body.reason
-    else:
-        stage = ReviewStage(
-            building_id=building.id,
-            phase=phase_type,
-            phase_order=phase_order,
-            stage_remarks=body.reason,
-            reviewer_name=current_user.name,
-        )
-        db.add(stage)
+
+@router.patch("/inquiry/{inquiry_id}")
+def update_inquiry(
+    inquiry_id: int,
+    body: InquiryUpdateRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(
+        require_roles(UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY, UserRole.SECRETARY)
+    ),
+):
+    """문의사항 답변/상태 변경"""
+    from models.inquiry import Inquiry, InquiryStatus
+
+    inquiry = db.query(Inquiry).filter(Inquiry.id == inquiry_id).first()
+    if not inquiry:
+        raise HTTPException(status_code=404, detail="문의를 찾을 수 없습니다")
+
+    if body.reply is not None:
+        inquiry.reply = body.reply
+    if body.status:
+        inquiry.status = InquiryStatus(body.status)
 
     db.commit()
-    return {"message": "미제출 사유가 저장되었습니다"}
+    return {"message": "업데이트 되었습니다"}
 
 
 @router.get("/inquiries")
 def list_inquiries(
+    status_filter: str = "active",
     page: int = Query(1, ge=1),
     size: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db),
@@ -239,31 +255,64 @@ def list_inquiries(
         require_roles(UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY, UserRole.SECRETARY)
     ),
 ):
-    """문의사항 목록 조회 (팀장/총괄간사/간사)"""
-    query = (
-        db.query(ReviewStage, Building)
-        .join(Building, ReviewStage.building_id == Building.id)
-        .filter(ReviewStage.stage_remarks.isnot(None))
-        .filter(ReviewStage.stage_remarks != "")
-        .order_by(ReviewStage.updated_at.desc())
-    )
+    """문의사항 목록 조회"""
+    from models.inquiry import Inquiry, InquiryStatus
+
+    query = db.query(Inquiry)
+
+    if status_filter == "active":
+        query = query.filter(Inquiry.status.in_([InquiryStatus.OPEN, InquiryStatus.ASKING_AGENCY]))
+    elif status_filter == "closed":
+        query = query.filter(Inquiry.status.in_([InquiryStatus.COMPLETED, InquiryStatus.NEXT_PHASE]))
 
     total = query.count()
-    items = query.offset((page - 1) * size).limit(size).all()
+    items = query.order_by(Inquiry.created_at.desc()).offset((page - 1) * size).limit(size).all()
 
     result = []
-    for stage, building in items:
+    for inq in items:
         result.append({
-            "id": stage.id,
-            "mgmt_no": building.mgmt_no,
-            "building_name": building.building_name,
-            "reviewer_name": stage.reviewer_name or building.assigned_reviewer_name,
-            "phase": stage.phase.value if stage.phase else "",
-            "inquiry": stage.stage_remarks,
-            "created_at": str(stage.updated_at or stage.created_at),
+            "id": inq.id,
+            "mgmt_no": inq.mgmt_no,
+            "phase": inq.phase,
+            "submitter_name": inq.submitter_name,
+            "content": inq.content,
+            "reply": inq.reply,
+            "status": inq.status.value,
+            "created_at": str(inq.created_at),
+            "updated_at": str(inq.updated_at),
         })
 
     return {"items": result, "total": total}
+
+
+@router.get("/inquiries/{mgmt_no}")
+def get_building_inquiries(
+    mgmt_no: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """건물별 문의사항 이력 조회"""
+    from models.inquiry import Inquiry
+
+    items = (
+        db.query(Inquiry)
+        .filter(Inquiry.mgmt_no == mgmt_no)
+        .order_by(Inquiry.created_at.desc())
+        .all()
+    )
+    return [
+        {
+            "id": inq.id,
+            "phase": inq.phase,
+            "submitter_name": inq.submitter_name,
+            "content": inq.content,
+            "reply": inq.reply,
+            "status": inq.status.value,
+            "created_at": str(inq.created_at),
+            "updated_at": str(inq.updated_at),
+        }
+        for inq in items
+    ]
 
 
 @router.get("/download/{stage_id}")

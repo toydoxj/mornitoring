@@ -75,10 +75,10 @@ export default function MyReviewsPage() {
     if (!reasonTarget || !reasonText.trim()) return
     setReasonSubmitting(true)
     try {
-      await apiClient.post("/api/reviews/not-submitted-reason", {
+      await apiClient.post("/api/reviews/inquiry", {
         mgmt_no: reasonTarget.mgmt_no,
         phase: reasonTarget.current_phase || "preliminary",
-        reason: reasonText.trim(),
+        content: reasonText.trim(),
       })
       setReasonTarget(null)
       setReasonText("")

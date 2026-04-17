@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
 import {
   Table,
   TableBody,
@@ -17,11 +18,13 @@ import { PHASE_LABELS } from "@/types"
 interface InquiryItem {
   id: number
   mgmt_no: string
-  building_name: string | null
-  reviewer_name: string | null
   phase: string
-  inquiry: string
+  submitter_name: string
+  content: string
+  reply: string | null
+  status: string
   created_at: string
+  updated_at: string
 }
 
 interface InquiryListResponse {
@@ -29,97 +32,206 @@ interface InquiryListResponse {
   total: number
 }
 
+const STATUS_LABELS: Record<string, string> = {
+  open: "접수",
+  asking_agency: "관리원문의중",
+  completed: "완료",
+  next_phase: "다음단계",
+}
+
+const STATUS_VARIANT: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
+  open: "destructive",
+  asking_agency: "secondary",
+  completed: "default",
+  next_phase: "default",
+}
+
 export default function InquiriesPage() {
-  const [data, setData] = useState<InquiryItem[]>([])
-  const [total, setTotal] = useState(0)
-  const [page, setPage] = useState(1)
+  const [activeData, setActiveData] = useState<InquiryItem[]>([])
+  const [activeTotal, setActiveTotal] = useState(0)
+  const [closedData, setClosedData] = useState<InquiryItem[]>([])
+  const [closedTotal, setClosedTotal] = useState(0)
   const [isLoading, setIsLoading] = useState(true)
-  const pageSize = 50
+  const [replyMap, setReplyMap] = useState<Record<number, string>>({})
+
+  const fetchData = async () => {
+    setIsLoading(true)
+    try {
+      const [activeRes, closedRes] = await Promise.all([
+        apiClient.get<InquiryListResponse>("/api/reviews/inquiries", { params: { status_filter: "active", size: 200 } }),
+        apiClient.get<InquiryListResponse>("/api/reviews/inquiries", { params: { status_filter: "closed", size: 200 } }),
+      ])
+      setActiveData(activeRes.data.items)
+      setActiveTotal(activeRes.data.total)
+      setClosedData(closedRes.data.items)
+      setClosedTotal(closedRes.data.total)
+
+      // 기존 답변 로드
+      const map: Record<number, string> = {}
+      for (const item of activeRes.data.items) {
+        if (item.reply) map[item.id] = item.reply
+      }
+      setReplyMap(map)
+    } catch (err) {
+      console.error("문의사항 조회 실패:", err)
+    } finally {
+      setIsLoading(false)
+    }
+  }
 
   useEffect(() => {
-    const fetchData = async () => {
-      setIsLoading(true)
-      try {
-        const { data: res } = await apiClient.get<InquiryListResponse>(
-          "/api/reviews/inquiries",
-          { params: { page, size: pageSize } }
-        )
-        setData(res.items)
-        setTotal(res.total)
-      } catch (err) {
-        console.error("문의사항 조회 실패:", err)
-      } finally {
-        setIsLoading(false)
-      }
-    }
     fetchData()
-  }, [page])
+  }, [])
 
-  const totalPages = Math.ceil(total / pageSize)
+  const handleUpdate = async (id: number, status: string) => {
+    try {
+      await apiClient.patch(`/api/reviews/inquiry/${id}`, {
+        reply: replyMap[id] || null,
+        status,
+      })
+      fetchData()
+    } catch (err) {
+      console.error("업데이트 실패:", err)
+    }
+  }
+
+  const handleReplyOnly = async (id: number) => {
+    try {
+      await apiClient.patch(`/api/reviews/inquiry/${id}`, {
+        reply: replyMap[id] || "",
+      })
+      alert("답변이 저장되었습니다")
+    } catch (err) {
+      console.error("답변 저장 실패:", err)
+    }
+  }
+
+  if (isLoading) {
+    return <div className="flex justify-center py-20 text-muted-foreground">로딩 중...</div>
+  }
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold">문의사항</h1>
-        <p className="text-sm text-muted-foreground">총 {total}건</p>
+        <p className="text-sm text-muted-foreground">
+          진행중 {activeTotal}건 / 완료 {closedTotal}건
+        </p>
       </div>
 
-      <div className="rounded-md border bg-white">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead className="w-[120px]">관리번호</TableHead>
-              <TableHead>건물명</TableHead>
-              <TableHead className="w-[80px]">검토위원</TableHead>
-              <TableHead className="w-[100px]">단계</TableHead>
-              <TableHead>문의 내용</TableHead>
-              <TableHead className="w-[150px]">등록일시</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {isLoading ? (
+      {/* 진행중 문의 */}
+      <div>
+        <h2 className="text-lg font-semibold mb-2">진행중</h2>
+        <div className="rounded-md border bg-white">
+          <Table>
+            <TableHeader>
               <TableRow>
-                <TableCell colSpan={6} className="h-32 text-center">
-                  로딩 중...
-                </TableCell>
+                <TableHead className="w-[100px]">관리번호</TableHead>
+                <TableHead className="w-[70px]">검토위원</TableHead>
+                <TableHead className="w-[80px]">단계</TableHead>
+                <TableHead>문의 내용</TableHead>
+                <TableHead className="w-[250px]">답변</TableHead>
+                <TableHead className="w-[80px]">상태</TableHead>
+                <TableHead className="w-[280px]">처리</TableHead>
               </TableRow>
-            ) : data.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={6} className="h-32 text-center text-muted-foreground">
-                  문의사항이 없습니다
-                </TableCell>
-              </TableRow>
-            ) : (
-              data.map((item) => (
-                <TableRow key={item.id}>
-                  <TableCell className="font-mono font-medium">{item.mgmt_no}</TableCell>
-                  <TableCell>{item.building_name || "-"}</TableCell>
-                  <TableCell>{item.reviewer_name || "-"}</TableCell>
-                  <TableCell>
-                    <Badge variant="outline">
-                      {PHASE_LABELS[item.phase] || item.phase}
-                    </Badge>
-                  </TableCell>
-                  <TableCell className="text-sm">{item.inquiry}</TableCell>
-                  <TableCell className="text-sm text-muted-foreground">
-                    {new Date(item.created_at).toLocaleString("ko-KR")}
+            </TableHeader>
+            <TableBody>
+              {activeData.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={7} className="h-20 text-center text-muted-foreground">
+                    진행중인 문의가 없습니다
                   </TableCell>
                 </TableRow>
-              ))
-            )}
-          </TableBody>
-        </Table>
+              ) : (
+                activeData.map((item) => (
+                  <TableRow key={item.id}>
+                    <TableCell className="font-mono text-sm">{item.mgmt_no}</TableCell>
+                    <TableCell className="text-sm">{item.submitter_name}</TableCell>
+                    <TableCell>
+                      <Badge variant="outline" className="text-xs">
+                        {PHASE_LABELS[item.phase] || item.phase}
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="text-sm">{item.content}</TableCell>
+                    <TableCell>
+                      <Input
+                        value={replyMap[item.id] ?? item.reply ?? ""}
+                        onChange={(e) => setReplyMap({ ...replyMap, [item.id]: e.target.value })}
+                        placeholder="답변 입력"
+                        className="text-sm"
+                      />
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant={STATUS_VARIANT[item.status]}>
+                        {STATUS_LABELS[item.status]}
+                      </Badge>
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex gap-1 flex-wrap">
+                        <Button size="sm" variant="outline" onClick={() => handleReplyOnly(item.id)}>
+                          답변저장
+                        </Button>
+                        <Button size="sm" variant="secondary" onClick={() => handleUpdate(item.id, "asking_agency")}>
+                          관리원문의
+                        </Button>
+                        <Button size="sm" variant="default" onClick={() => handleUpdate(item.id, "completed")}>
+                          완료
+                        </Button>
+                        <Button size="sm" variant="default" onClick={() => handleUpdate(item.id, "next_phase")}>
+                          다음단계
+                        </Button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))
+              )}
+            </TableBody>
+          </Table>
+        </div>
       </div>
 
-      {totalPages > 1 && (
-        <div className="flex items-center justify-center gap-2">
-          <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => setPage(p => p - 1)}>
-            이전
-          </Button>
-          <span className="text-sm text-muted-foreground">{page} / {totalPages}</span>
-          <Button variant="outline" size="sm" disabled={page >= totalPages} onClick={() => setPage(p => p + 1)}>
-            다음
-          </Button>
+      {/* 완료된 문의 */}
+      {closedData.length > 0 && (
+        <div>
+          <h2 className="text-lg font-semibold mb-2">완료/다음단계</h2>
+          <div className="rounded-md border bg-white">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-[100px]">관리번호</TableHead>
+                  <TableHead className="w-[70px]">검토위원</TableHead>
+                  <TableHead className="w-[80px]">단계</TableHead>
+                  <TableHead>문의 내용</TableHead>
+                  <TableHead>답변</TableHead>
+                  <TableHead className="w-[80px]">상태</TableHead>
+                  <TableHead className="w-[130px]">처리일시</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {closedData.map((item) => (
+                  <TableRow key={item.id} className="text-muted-foreground">
+                    <TableCell className="font-mono text-sm">{item.mgmt_no}</TableCell>
+                    <TableCell className="text-sm">{item.submitter_name}</TableCell>
+                    <TableCell>
+                      <Badge variant="outline" className="text-xs">
+                        {PHASE_LABELS[item.phase] || item.phase}
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="text-sm">{item.content}</TableCell>
+                    <TableCell className="text-sm">{item.reply || "-"}</TableCell>
+                    <TableCell>
+                      <Badge variant={STATUS_VARIANT[item.status]}>
+                        {STATUS_LABELS[item.status]}
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="text-sm">
+                      {new Date(item.updated_at).toLocaleString("ko-KR")}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
         </div>
       )}
     </div>

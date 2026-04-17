@@ -4,6 +4,7 @@ from models.reviewer import Reviewer
 from models.review_stage import ReviewStage
 from models.notification_log import NotificationLog
 from models.audit_log import AuditLog
+from models.inquiry import Inquiry
 
 __all__ = [
     "User",

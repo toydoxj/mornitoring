@@ -4,6 +4,7 @@ import { useEffect, useState } from "react"
 import { useParams, useRouter, useSearchParams } from "next/navigation"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Separator } from "@/components/ui/separator"
 import apiClient from "@/lib/api/client"
@@ -28,6 +29,12 @@ export default function BuildingDetailPage() {
   const backLabel = from === "my-reviews" ? "← 내 검토 대상" : "← 목록으로"
   const [building, setBuilding] = useState<Building | null>(null)
   const [stages, setStages] = useState<ReviewStage[]>([])
+  const [inquiries, setInquiries] = useState<{
+    id: number; phase: string; submitter_name: string; content: string;
+    reply: string | null; status: string; created_at: string
+  }[]>([])
+  const [newInquiry, setNewInquiry] = useState("")
+  const [submittingInquiry, setSubmittingInquiry] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
 
   const canManage = user && ["team_leader", "chief_secretary", "secretary"].includes(user.role)
@@ -41,6 +48,12 @@ export default function BuildingDetailPage() {
         ])
         setBuilding(buildingRes.data)
         setStages(stagesRes.data)
+
+        // 문의사항 조회
+        try {
+          const { data: inqData } = await apiClient.get(`/api/reviews/inquiries/${buildingRes.data.mgmt_no}`)
+          setInquiries(inqData)
+        } catch { /* 문의 없음 */ }
       } catch {
         router.push("/buildings")
       } finally {
@@ -62,6 +75,26 @@ export default function BuildingDetailPage() {
       setStages(stagesRes.data)
     } catch (err) {
       console.error("단계 전환 실패:", err)
+    }
+  }
+
+  const handleSubmitInquiry = async () => {
+    if (!building || !newInquiry.trim()) return
+    setSubmittingInquiry(true)
+    try {
+      await apiClient.post("/api/reviews/inquiry", {
+        mgmt_no: building.mgmt_no,
+        phase: building.current_phase || "preliminary",
+        content: newInquiry.trim(),
+      })
+      setNewInquiry("")
+      // 문의 새로고침
+      const { data: inqData } = await apiClient.get(`/api/reviews/inquiries/${building.mgmt_no}`)
+      setInquiries(inqData)
+    } catch {
+      alert("문의 등록 실패")
+    } finally {
+      setSubmittingInquiry(false)
     }
   }
 
@@ -190,6 +223,70 @@ export default function BuildingDetailPage() {
                       )}
                     </div>
                   </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* 문의사항 */}
+      <Card>
+        <CardHeader>
+          <CardTitle>문의사항</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {/* 문의 등록 */}
+          <div className="flex gap-2">
+            <Input
+              placeholder="문의 내용을 입력하세요"
+              value={newInquiry}
+              onChange={(e) => setNewInquiry(e.target.value)}
+              className="flex-1"
+            />
+            <Button
+              onClick={handleSubmitInquiry}
+              disabled={submittingInquiry || !newInquiry.trim()}
+            >
+              {submittingInquiry ? "등록 중..." : "문의 등록"}
+            </Button>
+          </div>
+
+          {/* 문의 이력 */}
+          {inquiries.length === 0 ? (
+            <p className="text-sm text-muted-foreground py-4 text-center">
+              문의 이력이 없습니다
+            </p>
+          ) : (
+            <div className="space-y-3">
+              {inquiries.map((inq) => (
+                <div key={inq.id} className="rounded-md border p-3 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-medium">{inq.submitter_name}</span>
+                      <Badge variant="outline" className="text-xs">
+                        {PHASE_LABELS[inq.phase] || inq.phase}
+                      </Badge>
+                      <Badge variant={
+                        inq.status === "open" ? "destructive" :
+                        inq.status === "asking_agency" ? "secondary" : "default"
+                      } className="text-xs">
+                        {inq.status === "open" ? "접수" :
+                         inq.status === "asking_agency" ? "관리원문의중" :
+                         inq.status === "completed" ? "완료" : "다음단계"}
+                      </Badge>
+                    </div>
+                    <span className="text-xs text-muted-foreground">
+                      {new Date(inq.created_at).toLocaleString("ko-KR")}
+                    </span>
+                  </div>
+                  <p className="text-sm">{inq.content}</p>
+                  {inq.reply && (
+                    <div className="rounded bg-muted p-2 text-sm">
+                      <span className="text-muted-foreground">답변: </span>
+                      {inq.reply}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
