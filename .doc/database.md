@@ -53,6 +53,16 @@ Supabase PostgreSQL 17 (Seoul)
 | architect_name | varchar | | 건축사(성명) |
 | struct_eng_firm | varchar | | 책임구조기술자(소속) |
 | struct_eng_name | varchar | | 책임구조기술자(성명) |
+| seismic_level | varchar | | 내진등급 |
+| detail_category1 | varchar | | 유형별상세검토-1 |
+| detail_category2 | varchar | | 유형별상세검토-2 |
+| detail_category3 | varchar | | 유형별상세검토-3 |
+| detail_category4 | varchar | | 유형별상세검토-4 |
+| detail_category5 | varchar | | 유형별상세검토-5 |
+| detail_category6 | varchar | | 유형별상세검토-6 |
+| detail_category7 | varchar | | 유형별상세검토-7 |
+| detail_category8 | varchar | | 유형별상세검토-8 |
+| detail_category9 | varchar | | 유형별상세검토-필로티 |
 | high_risk_type | varchar | | 고위험유형 |
 | related_tech_coop | boolean | | 관계기술자 협력대상 여부 |
 | drawing_creation | boolean | | 관계기술자 도면작성 여부 |

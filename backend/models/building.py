@@ -46,6 +46,16 @@ class Building(Base):
     architect_name: Mapped[str | None] = mapped_column(String(50))      # 건축사(성명)
     struct_eng_firm: Mapped[str | None] = mapped_column(String(100))    # 책임구조기술자(소속)
     struct_eng_name: Mapped[str | None] = mapped_column(String(50))     # 책임구조기술자(성명)
+    seismic_level: Mapped[str | None] = mapped_column(String(50))        # 내진등급
+    detail_category1: Mapped[str | None] = mapped_column(String(50))    # 유형별상세검토-1 (공법)
+    detail_category2: Mapped[str | None] = mapped_column(String(50))    # 유형별상세검토-2 (전이구조)
+    detail_category3: Mapped[str | None] = mapped_column(String(50))    # 유형별상세검토-3 (면진&제진)
+    detail_category4: Mapped[str | None] = mapped_column(String(50))    # 유형별상세검토-4 (특수전단벽)
+    detail_category5: Mapped[str | None] = mapped_column(String(50))    # 유형별상세검토-5 (무량판)
+    detail_category6: Mapped[str | None] = mapped_column(String(50))    # 유형별상세검토-6 (캔틸래버)
+    detail_category7: Mapped[str | None] = mapped_column(String(50))    # 유형별상세검토-7 (장스팬)
+    detail_category8: Mapped[str | None] = mapped_column(String(50))    # 유형별상세검토-8 (고층)
+    detail_category9: Mapped[str | None] = mapped_column(String(50))    # 유형별상세검토-필로티
     high_risk_type: Mapped[str | None] = mapped_column(String(100))     # 고위험유형
     related_tech_coop: Mapped[bool | None] = mapped_column(Boolean)     # 관계기술자 협력대상 여부
     drawing_creation: Mapped[bool | None] = mapped_column(Boolean)      # 관계기술자 도면작성 여부

@@ -40,11 +40,20 @@ class ReviewStageResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class FieldChange(BaseModel):
+    field: str
+    label: str
+    old_value: str | None = None
+    new_value: str | None = None
+
+
 class UploadResponse(BaseModel):
     success: bool
     message: str
     errors: list[str] = []
+    warnings: list[str] = []
     stage_id: int | None = None
+    changes: list[FieldChange] = []
 
 
 PHASE_ORDER_MAP = {
@@ -162,15 +171,78 @@ async def upload_review(
         # 5. 건축물 현재 단계 업데이트
         building.current_phase = actual_phase
 
+        # 6. 검토서에서 추출한 데이터로 buildings 업데이트
+        # 빈칸 채우기 + 변경 감지
+        extracted_data = validation.extracted_data
+        BUILDING_UPDATE_MAP = {
+            "architect_firm": ("architect_firm", "건축사(소속)"),
+            "architect_name": ("architect_name", "건축사(성명)"),
+            "struct_eng_firm": ("struct_eng_firm", "책임구조기술자(소속)"),
+            "struct_eng_name": ("struct_eng_name", "책임구조기술자(성명)"),
+            "main_structure_type": ("main_structure", "주요 구조형식"),
+            "high_risk_type": ("high_risk_type", "고위험유형"),
+            "struct_drawing_qual": ("seismic_level", "내진등급"),
+        }
+        DETAIL_CATEGORY_MAP = {
+            "type_construction_method": ("detail_category1", "공법"),
+            "type_transfer_structure": ("detail_category2", "전이구조"),
+            "type_seismic_isolation": ("detail_category3", "면진&제진"),
+            "type_special_shear_wall": ("detail_category4", "특수전단벽"),
+            "type_flat_plate": ("detail_category5", "무량판"),
+            "type_cantilever": ("detail_category6", "캔틸래버"),
+            "type_long_span": ("detail_category7", "장스팬"),
+            "type_high_rise": ("detail_category8", "고층"),
+        }
+
+        changes: list[FieldChange] = []
+        warnings: list[str] = validation.warnings
+
+        # 기본 필드
+        for extract_key, (db_field, label) in BUILDING_UPDATE_MAP.items():
+            new_val = extracted_data.get(extract_key)
+            if not new_val:
+                continue
+            old_val = getattr(building, db_field, None)
+            if not old_val:
+                # 빈칸 채우기
+                setattr(building, db_field, new_val)
+            elif old_val != new_val:
+                # 변경 감지 → 경고
+                changes.append(FieldChange(field=db_field, label=label, old_value=str(old_val), new_value=new_val))
+                setattr(building, db_field, new_val)
+
+        # 유형별 상세검토
+        for extract_key, (db_field, label) in DETAIL_CATEGORY_MAP.items():
+            new_val = extracted_data.get(extract_key)
+            if not new_val:
+                continue
+            old_val = getattr(building, db_field, None)
+            if not old_val:
+                setattr(building, db_field, new_val)
+            elif old_val != new_val:
+                changes.append(FieldChange(field=db_field, label=label, old_value=str(old_val), new_value=new_val))
+                setattr(building, db_field, new_val)
+
+        # 필로티
+        if extracted_data.get("type_is_piloti"):
+            if not building.detail_category9:
+                building.detail_category9 = "필로티"
+
         log_action(db, current_user.id, "upload", "review_stage", stage.id,
                    after_data={"mgmt_no": mgmt_no, "phase": phase})
         db.commit()
         db.refresh(stage)
 
+        change_msg = ""
+        if changes:
+            change_msg = " (변경사항 " + ", ".join(f"{c.label}: {c.old_value}→{c.new_value}" for c in changes) + ")"
+
         return UploadResponse(
             success=True,
-            message=f"검토서가 제출되었습니다 (관리번호: {mgmt_no}, 단계: {phase})",
+            message=f"검토서가 제출되었습니다 (관리번호: {mgmt_no}, 단계: {phase}){change_msg}",
+            warnings=warnings,
             stage_id=stage.id,
+            changes=changes,
         )
 
     finally:

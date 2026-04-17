@@ -31,10 +31,19 @@ const RESULT_VARIANT: Record<string, "default" | "secondary" | "destructive" | "
   minor: "outline",
 }
 
+interface FieldChange {
+  field: string
+  label: string
+  old_value: string | null
+  new_value: string | null
+}
+
 interface UploadResult {
   success: boolean
   message: string
   errors: string[]
+  warnings: string[]
+  changes: FieldChange[]
 }
 
 export default function MyReviewsPage() {
@@ -116,6 +125,8 @@ export default function MyReviewsPage() {
         success: false,
         message: "업로드 중 오류가 발생했습니다",
         errors: ["서버 연결을 확인해주세요"],
+        warnings: [],
+        changes: [],
       })
     } finally {
       setUploading(false)
@@ -254,16 +265,38 @@ export default function MyReviewsPage() {
               )}
 
               {uploadResult && (
-                <div className={`rounded-md p-3 text-sm ${
-                  uploadResult.success ? "bg-green-50 text-green-800" : "bg-red-50 text-red-800"
-                }`}>
-                  <p className="font-medium">{uploadResult.message}</p>
-                  {uploadResult.errors.length > 0 && (
-                    <ul className="mt-2 list-disc pl-4 space-y-1">
-                      {uploadResult.errors.map((err, i) => (
-                        <li key={i}>{err}</li>
-                      ))}
-                    </ul>
+                <div className="space-y-2">
+                  <div className={`rounded-md p-3 text-sm ${
+                    uploadResult.success ? "bg-green-50 text-green-800" : "bg-red-50 text-red-800"
+                  }`}>
+                    <p className="font-medium">{uploadResult.message}</p>
+                    {uploadResult.errors.length > 0 && (
+                      <ul className="mt-2 list-disc pl-4 space-y-1">
+                        {uploadResult.errors.map((err, i) => (
+                          <li key={i}>{err}</li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                  {uploadResult.warnings && uploadResult.warnings.length > 0 && (
+                    <div className="rounded-md p-3 text-sm bg-yellow-50 text-yellow-800">
+                      <p className="font-medium">확인 사항</p>
+                      <ul className="mt-1 list-disc pl-4 space-y-1">
+                        {uploadResult.warnings.map((w, i) => (
+                          <li key={i}>{w}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  {uploadResult.changes && uploadResult.changes.length > 0 && (
+                    <div className="rounded-md p-3 text-sm bg-blue-50 text-blue-800">
+                      <p className="font-medium">건축물 정보 변경됨</p>
+                      <ul className="mt-1 list-disc pl-4 space-y-1">
+                        {uploadResult.changes.map((c, i) => (
+                          <li key={i}>{c.label}: {c.old_value} → {c.new_value}</li>
+                        ))}
+                      </ul>
+                    </div>
                   )}
                 </div>
               )}
