@@ -36,13 +36,7 @@ export default function LoginPage() {
       if (result.mustChangePassword) {
         router.push("/change-password")
       } else {
-        // 검토위원은 내 검토 대상으로, 나머지는 통합관리대장으로
-        const user = useAuthStore.getState().user
-        if (user?.role === "reviewer") {
-          router.push("/my-reviews")
-        } else {
-          router.push("/buildings")
-        }
+        router.push("/dashboard")
       }
     } catch {
       setError("이메일 또는 비밀번호가 올바르지 않습니다")

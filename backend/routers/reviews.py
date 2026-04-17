@@ -159,8 +159,6 @@ def _detect_changes(building: Building, extracted_data: dict) -> list[FieldChang
         "architect_name": ("architect_name", "건축사(성명)"),
         "struct_eng_firm": ("struct_eng_firm", "책임구조기술자(소속)"),
         "struct_eng_name": ("struct_eng_name", "책임구조기술자(성명)"),
-        "drawing_creator_firm": ("drawing_creator_firm", "도면작성자(소속)"),
-        "drawing_creator_name": ("drawing_creator_name", "도면작성자(성명)"),
         "main_structure_type": ("main_structure", "주구조형식"),
         "high_risk_type": ("high_risk_type", "고위험유형"),
         "seismic_level": ("seismic_level", "내진등급"),
@@ -306,8 +304,6 @@ def _apply_changes(building: Building, extracted_data: dict):
         "architect_name": "architect_name",
         "struct_eng_firm": "struct_eng_firm",
         "struct_eng_name": "struct_eng_name",
-        "drawing_creator_firm": "drawing_creator_firm",
-        "drawing_creator_name": "drawing_creator_name",
         # "main_structure_type": "main_structure",  # 의도적으로 제외
         "high_risk_type": "high_risk_type",
         "seismic_level": "seismic_level",

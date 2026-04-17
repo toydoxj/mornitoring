@@ -275,8 +275,6 @@ def validate_review_file(
         "architect_name": _cell_str(ws, "H7"),
         "struct_eng_firm": _cell_str(ws, "F8"),
         "struct_eng_name": _cell_str(ws, "H8"),
-        "drawing_creator_firm": _cell_str(ws, "F9"),
-        "drawing_creator_name": _cell_str(ws, "H9"),
         "main_structure_type": _cell_str(ws, "F11"),
         "seismic_level": _cell_str(ws, "F12"),
         "struct_drawing_qual": _cell_str(ws, "F13"),
@@ -304,8 +302,6 @@ def validate_review_file(
         result.add_warning("건축사 소속/성명이 입력되지 않았습니다.")
     if not result.extracted_data["struct_eng_firm"] and not result.extracted_data["struct_eng_name"]:
         result.add_warning("책임구조기술자 소속/성명이 입력되지 않았습니다.")
-    if not result.extracted_data["drawing_creator_firm"] and not result.extracted_data["drawing_creator_name"]:
-        result.add_warning("도면작성자 소속/성명이 입력되지 않았습니다.")
     # 내진등급 (F12) — 특/I/II 중 하나여야 함
     _seismic = result.extracted_data["seismic_level"]
     if not _seismic:

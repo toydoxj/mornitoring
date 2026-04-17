@@ -40,13 +40,7 @@ function LinkAccountContent() {
 
       localStorage.setItem("access_token", data.access_token)
       await fetchMe()
-
-      const user = useAuthStore.getState().user
-      if (user?.role === "reviewer") {
-        router.push("/my-reviews")
-      } else {
-        router.push("/buildings")
-      }
+      router.push("/dashboard")
     } catch (err: unknown) {
       const axiosErr = err as { response?: { data?: { detail?: string } } }
       setError(axiosErr.response?.data?.detail || "계정 연결 실패")

@@ -16,10 +16,8 @@ export default function Home() {
     if (isLoading) return
     if (!user) {
       router.push("/login")
-    } else if (user.role === "reviewer") {
-      router.push("/my-reviews")
     } else {
-      router.push("/buildings")
+      router.push("/dashboard")
     }
   }, [user, isLoading, router])
 

@@ -37,13 +37,7 @@ function KakaoCallbackContent() {
         // 정상 로그인
         localStorage.setItem("access_token", data.access_token)
         await fetchMe()
-
-        const user = useAuthStore.getState().user
-        if (user?.role === "reviewer") {
-          router.push("/my-reviews")
-        } else {
-          router.push("/buildings")
-        }
+        router.push("/dashboard")
       } catch (err: unknown) {
         const axiosErr = err as { response?: { data?: { detail?: string } } }
         const detail = axiosErr.response?.data?.detail || "알 수 없는 오류"

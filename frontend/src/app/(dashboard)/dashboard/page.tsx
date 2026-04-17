@@ -1,6 +1,7 @@
 "use client"
 
 import { useEffect, useState } from "react"
+import { useRouter } from "next/navigation"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import {
@@ -58,10 +59,38 @@ interface MyStats {
 
 const ELAPSED_ORDER = ["1일", "2일", "3일", "4일", "5일", "6일", "7일", "1주", "2주이상"] as const
 
+interface AnnouncementItem {
+  id: number
+  author_name: string
+  title: string
+  created_at: string
+  comment_count: number
+}
+
+interface NotificationItem {
+  id: number
+  template_type: string
+  title: string
+  message: string | null
+  is_sent: boolean
+  sent_at: string | null
+  created_at: string
+  error_message: string | null
+}
+
+const TEMPLATE_LABELS: Record<string, string> = {
+  doc_received: "도서 접수",
+  review_request: "검토 요청",
+  reminder: "리마인더",
+}
+
 export default function DashboardPage() {
+  const router = useRouter()
   const user = useAuthStore((s) => s.user)
   const [stats, setStats] = useState<DashboardStats | null>(null)
   const [myStats, setMyStats] = useState<MyStats | null>(null)
+  const [announcements, setAnnouncements] = useState<AnnouncementItem[]>([])
+  const [notifications, setNotifications] = useState<NotificationItem[]>([])
   const [isLoading, setIsLoading] = useState(true)
 
   const isAdmin = user && ["team_leader", "chief_secretary", "secretary"].includes(user.role)
@@ -69,20 +98,39 @@ export default function DashboardPage() {
   useEffect(() => {
     const fetchAll = async () => {
       try {
-        // 개인 통계는 모든 로그인 사용자
         const { data: mine } = await apiClient.get<MyStats>("/api/buildings/my-stats")
         setMyStats(mine)
       } catch (err) {
         console.error("개인 통계 조회 실패:", err)
       }
 
-      // 간사 이상만 전체 통계
+      // 공지사항 최신 5건
+      try {
+        const { data } = await apiClient.get<{ items: AnnouncementItem[] }>(
+          "/api/announcements",
+          { params: { size: 5 } }
+        )
+        setAnnouncements(data.items)
+      } catch (err) {
+        console.error("공지사항 조회 실패:", err)
+      }
+
+      // 카톡 알림 최신 5건 (간사 이상만 권한)
       if (isAdmin) {
         try {
           const { data } = await apiClient.get<DashboardStats>("/api/buildings/stats")
           setStats(data)
         } catch (err) {
           console.error("전체 통계 조회 실패:", err)
+        }
+        try {
+          const { data } = await apiClient.get<{ items: NotificationItem[] }>(
+            "/api/notifications",
+            { params: { size: 5, page: 1 } }
+          )
+          setNotifications(data.items)
+        } catch (err) {
+          console.error("알림 조회 실패:", err)
         }
       }
       setIsLoading(false)
@@ -101,6 +149,93 @@ export default function DashboardPage() {
         <p className="text-sm text-muted-foreground">
           {user?.name}님, 환영합니다
         </p>
+      </div>
+
+      {/* 상단 위젯 — 공지사항 / 카톡 알림 */}
+      <div className="grid gap-4 md:grid-cols-2">
+        {/* 공지사항 */}
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between pb-3">
+            <CardTitle className="text-base">공지사항</CardTitle>
+            <button
+              className="text-xs text-primary hover:underline"
+              onClick={() => router.push("/announcements")}
+            >
+              전체 보기 →
+            </button>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            {announcements.length === 0 ? (
+              <p className="text-sm text-muted-foreground py-2">등록된 공지가 없습니다.</p>
+            ) : (
+              announcements.map((a) => (
+                <div
+                  key={a.id}
+                  className="flex items-center justify-between gap-2 rounded-md border p-2 cursor-pointer hover:bg-muted/30"
+                  onClick={() => router.push(`/announcements/${a.id}`)}
+                >
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-medium">{a.title}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {a.author_name} · {new Date(a.created_at).toLocaleDateString("ko-KR")}
+                    </p>
+                  </div>
+                  {a.comment_count > 0 && (
+                    <Badge variant="secondary" className="text-xs shrink-0">
+                      💬 {a.comment_count}
+                    </Badge>
+                  )}
+                </div>
+              ))
+            )}
+          </CardContent>
+        </Card>
+
+        {/* 카톡 알림 — 간사 이상만 */}
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between pb-3">
+            <CardTitle className="text-base">카톡 알림 최신</CardTitle>
+            {isAdmin && (
+              <button
+                className="text-xs text-primary hover:underline"
+                onClick={() => router.push("/notifications")}
+              >
+                전체 보기 →
+              </button>
+            )}
+          </CardHeader>
+          <CardContent className="space-y-2">
+            {!isAdmin ? (
+              <p className="text-sm text-muted-foreground py-2">
+                알림 조회 권한이 없습니다.
+              </p>
+            ) : notifications.length === 0 ? (
+              <p className="text-sm text-muted-foreground py-2">발송된 알림이 없습니다.</p>
+            ) : (
+              notifications.map((n) => (
+                <div
+                  key={n.id}
+                  className="flex items-center gap-2 rounded-md border p-2"
+                >
+                  <Badge
+                    variant={n.is_sent ? "default" : "destructive"}
+                    className="text-xs shrink-0"
+                  >
+                    {n.is_sent ? "성공" : "실패"}
+                  </Badge>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-medium">
+                      [{TEMPLATE_LABELS[n.template_type] ?? n.template_type}] {n.title}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      {new Date(n.sent_at ?? n.created_at).toLocaleString("ko-KR")}
+                    </p>
+                  </div>
+                </div>
+              ))
+            )}
+          </CardContent>
+        </Card>
       </div>
 
       {/* 내 담당 현황 (모든 로그인 사용자) */}

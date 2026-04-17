@@ -288,8 +288,6 @@ export default function BuildingDetailPage() {
             <div>
               <p className="mb-1 text-muted-foreground font-medium">도면작성자</p>
               <div className="space-y-1">
-                <InfoItem label="소속" value={building.drawing_creator_firm} />
-                <InfoItem label="성명" value={building.drawing_creator_name} />
                 <InfoItem label="자격" value={building.drawing_creator_qualification} />
               </div>
             </div>
