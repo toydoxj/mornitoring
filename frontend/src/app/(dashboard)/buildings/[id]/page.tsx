@@ -206,20 +206,28 @@ export default function BuildingDetailPage() {
 
                       {/* 부적합 유형 */}
                       {(stage.defect_type_1 || stage.defect_type_2 || stage.defect_type_3) && (
-                        <div className="flex flex-wrap gap-1">
-                          {[stage.defect_type_1, stage.defect_type_2, stage.defect_type_3]
-                            .filter(Boolean)
-                            .map((dt, i) => (
-                              <Badge key={i} variant="destructive" className="text-xs">
-                                {dt}
-                              </Badge>
-                            ))}
+                        <div>
+                          <dt className="text-muted-foreground mb-1">부적합 유형</dt>
+                          <div className="flex flex-wrap gap-1">
+                            {[stage.defect_type_1, stage.defect_type_2, stage.defect_type_3]
+                              .filter(Boolean)
+                              .map((dt, i) => (
+                                <Badge key={i} variant="destructive" className="text-xs">
+                                  {dt}
+                                </Badge>
+                              ))}
+                          </div>
                         </div>
                       )}
 
                       {/* 검토의견 */}
                       {stage.review_opinion && (
-                        <p className="text-muted-foreground">{stage.review_opinion}</p>
+                        <div>
+                          <dt className="text-muted-foreground mb-1">검토의견</dt>
+                          <div className="rounded-md bg-muted p-3 text-sm whitespace-pre-wrap break-words max-h-60 overflow-y-auto">
+                            {stage.review_opinion}
+                          </div>
+                        </div>
                       )}
                     </div>
                   </div>
