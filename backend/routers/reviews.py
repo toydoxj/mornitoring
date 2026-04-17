@@ -383,14 +383,36 @@ class InquiryUpdateRequest(BaseModel):
 def create_inquiry(
     body: InquiryCreateRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_roles(UserRole.REVIEWER)),
+    current_user: User = Depends(get_current_user),
 ):
-    """문의사항 등록 (검토위원 전용)"""
+    """문의사항 등록 — 해당 건물의 담당 검토자만 가능.
+
+    담당 판정:
+    - Building.reviewer_id 가 로그인 사용자의 Reviewer 레코드와 일치, 또는
+    - Building.assigned_reviewer_name 이 로그인 사용자 이름과 일치
+
+    역할(role)은 무관. 간사/총괄간사/팀장도 검토위원 역할로 배정되었으면 문의 가능.
+    """
     from models.inquiry import Inquiry
+    from models.reviewer import Reviewer
 
     building = db.query(Building).filter(Building.mgmt_no == body.mgmt_no).first()
     if not building:
         raise HTTPException(status_code=404, detail="관리번호를 찾을 수 없습니다")
+
+    # 담당 여부 확인
+    is_assigned = False
+    reviewer = db.query(Reviewer).filter(Reviewer.user_id == current_user.id).first()
+    if reviewer and building.reviewer_id == reviewer.id:
+        is_assigned = True
+    elif building.assigned_reviewer_name == current_user.name:
+        is_assigned = True
+
+    if not is_assigned:
+        raise HTTPException(
+            status_code=403,
+            detail="담당 건물에만 문의를 등록할 수 있습니다",
+        )
 
     inquiry = Inquiry(
         building_id=building.id,

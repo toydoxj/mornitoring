@@ -38,7 +38,11 @@ export default function BuildingDetailPage() {
   const [isLoading, setIsLoading] = useState(true)
 
   const canManage = user && ["team_leader", "chief_secretary", "secretary"].includes(user.role)
-  const isReviewer = user?.role === "reviewer"
+  const isAssigned =
+    !!user &&
+    !!building &&
+    (building.reviewer_name === user.name ||
+      building.assigned_reviewer_name === user.name)
 
   useEffect(() => {
     const fetchData = async () => {
@@ -245,8 +249,8 @@ export default function BuildingDetailPage() {
           <CardTitle>문의사항</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          {/* 문의 등록 — 검토위원만 가능 */}
-          {isReviewer && (
+          {/* 문의 등록 — 해당 건물의 담당 검토자만 가능 (역할 무관) */}
+          {isAssigned && (
             <div className="flex gap-2">
               <Input
                 placeholder="문의 내용을 입력하세요"
