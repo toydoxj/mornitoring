@@ -187,6 +187,7 @@ async def upload_review(
     file: UploadFile = File(...),
     mgmt_no: str = Query(..., description="관리번호"),
     phase: str = Query(..., description="검토 단계"),
+    inappropriate_review_needed: bool = Query(False, description="부적정 사례 검토 필요 여부"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -266,6 +267,7 @@ async def upload_review(
                 stage.defect_type_3 = extracted["defect_type_3"]
             if extracted["review_opinion"]:
                 stage.review_opinion = extracted["review_opinion"]
+            stage.inappropriate_review_needed = inappropriate_review_needed
             stage.s3_file_key = upload_review_file(tmp_path, mgmt_no, actual_phase, file.filename)
         else:
             # 새 단계 생성
@@ -280,6 +282,7 @@ async def upload_review(
                 defect_type_2=extracted["defect_type_2"],
                 defect_type_3=extracted["defect_type_3"],
                 review_opinion=extracted["review_opinion"],
+                inappropriate_review_needed=inappropriate_review_needed,
                 s3_file_key=upload_review_file(tmp_path, mgmt_no, actual_phase, file.filename),
             )
             db.add(stage)

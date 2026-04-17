@@ -53,6 +53,9 @@ class ReviewStage(Base):
     objection_content: Mapped[str | None] = mapped_column(Text)      # 이의신청 검토내용
     objection_reason: Mapped[str | None] = mapped_column(Text)       # 이의신청 사유
 
+    # 부적정 사례 검토 필요 여부 (업로드 시 검토자가 체크)
+    inappropriate_review_needed: Mapped[bool] = mapped_column(Boolean, default=False)
+
     # 검토서 파일
     s3_file_key: Mapped[str | None] = mapped_column(String(500))     # S3 파일 경로
 

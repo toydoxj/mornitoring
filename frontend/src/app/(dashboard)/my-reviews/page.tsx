@@ -58,6 +58,7 @@ export default function MyReviewsPage() {
   const [uploading, setUploading] = useState(false)
   const [uploadResult, setUploadResult] = useState<UploadResult | null>(null)
   const [previewDone, setPreviewDone] = useState(false)
+  const [inappropriateReviewNeeded, setInappropriateReviewNeeded] = useState(false)
 
   // 문의 사유 다이얼로그
   const [reasonTarget, setReasonTarget] = useState<Building | null>(null)
@@ -154,13 +155,14 @@ export default function MyReviewsPage() {
 
       const phase = uploadTarget.current_phase || "preliminary"
       const { data: result } = await apiClient.post<UploadResult>(
-        `/api/reviews/upload?mgmt_no=${uploadTarget.mgmt_no}&phase=${phase}`,
+        `/api/reviews/upload?mgmt_no=${uploadTarget.mgmt_no}&phase=${phase}&inappropriate_review_needed=${inappropriateReviewNeeded}`,
         formData,
         { headers: { "Content-Type": "multipart/form-data" } }
       )
       setUploadResult(result)
       setPreviewDone(false)
       setUploadFile(null)
+      setInappropriateReviewNeeded(false)
       if (result.success) {
         fetchData()
       }
@@ -181,6 +183,7 @@ export default function MyReviewsPage() {
     setUploadFile(null)
     setUploadResult(null)
     setPreviewDone(false)
+    setInappropriateReviewNeeded(false)
   }
 
   return (
@@ -287,6 +290,7 @@ export default function MyReviewsPage() {
           setUploadFile(null)
           setUploadResult(null)
           setPreviewDone(false)
+          setInappropriateReviewNeeded(false)
         }
       }}>
         <DialogContent>
@@ -353,6 +357,24 @@ export default function MyReviewsPage() {
                         ))}
                       </ul>
                     </div>
+                  )}
+
+                  {/* 부적정 사례 검토 필요 체크박스 (미리보기 성공 시) */}
+                  {previewDone && (
+                    <label className="flex items-start gap-2 rounded-md border border-orange-200 bg-orange-50 p-3 text-sm cursor-pointer hover:bg-orange-100 transition-colors">
+                      <input
+                        type="checkbox"
+                        className="mt-0.5 h-4 w-4 cursor-pointer"
+                        checked={inappropriateReviewNeeded}
+                        onChange={(e) => setInappropriateReviewNeeded(e.target.checked)}
+                      />
+                      <span className="flex-1">
+                        <span className="font-medium text-orange-900">부적정 사례 검토 필요</span>
+                        <span className="block text-xs text-orange-800 mt-0.5">
+                          본 검토 건이 부적정 사례로 별도 검토가 필요한 경우 체크해주세요.
+                        </span>
+                      </span>
+                    </label>
                   )}
 
                   {/* 업로드/취소 버튼 (미리보기 성공 시) */}
