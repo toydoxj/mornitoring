@@ -63,7 +63,7 @@ async def upload_review(
     mgmt_no: str = Query(..., description="관리번호"),
     phase: str = Query(..., description="검토 단계"),
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_roles(UserRole.REVIEWER)),
+    current_user: User = Depends(get_current_user),
 ):
     """검토서 업로드 + 유효성 검증 + DB 반영"""
 
