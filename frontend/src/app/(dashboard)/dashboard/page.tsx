@@ -193,6 +193,53 @@ export default function DashboardPage() {
         </p>
       </div>
 
+      {/* 내 담당 현황 (상단, 버킷 스타일) */}
+      {myStats && myStats.total > 0 && (
+        <div className="space-y-3">
+          <h2 className="text-lg font-bold">내 담당 현황</h2>
+
+          {/* 1행: 핵심 6버킷 */}
+          <div className="grid gap-3 grid-cols-2 md:grid-cols-3 lg:grid-cols-6">
+            <Bucket label="배정" value={myStats.total} tint="indigo" suffix="건" />
+            <Bucket label="검토서 대상" value={myStats.need_review} tint="red" suffix="건" />
+            <Bucket
+              label="제출 검토서"
+              value={myStats.submitted_preliminary + myStats.submitted_supplement}
+              suffix={`건 (예비 ${myStats.submitted_preliminary} / 보완 ${myStats.submitted_supplement})`}
+              tint="green"
+              suffixSmall
+            />
+            <Bucket
+              label="연면적 합"
+              value={Math.round(myStats.total_area).toLocaleString()}
+              tint="slate"
+              suffix="㎡"
+            />
+            <Bucket label="1,000㎡ 이상" value={myStats.area_over_1000} tint="blue" suffix="건" />
+            <Bucket label="고위험군" value={myStats.high_risk} tint="orange" suffix="건" />
+          </div>
+
+          {/* 2행: 접수 후 경과일수 9버킷 */}
+          <div>
+            <p className="mb-2 text-sm text-muted-foreground">
+              접수 후 경과일수 (검토서 미제출 건)
+            </p>
+            <div className="grid gap-2 grid-cols-3 md:grid-cols-5 lg:grid-cols-9">
+              {ELAPSED_ORDER.map((key) => {
+                const count = myStats.elapsed_buckets[key] ?? 0
+                const isLong = key === "1주" || key === "2주이상"
+                const tint: BucketTint = isLong
+                  ? "red"
+                  : count > 0
+                    ? "amber"
+                    : "slate"
+                return <Bucket key={key} label={key} value={count} tint={tint} compact />
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* 상단 위젯 — 공지사항 / 카톡 알림 / 토론방 / 나의 문의사항 */}
       <div className="grid gap-4 md:grid-cols-2">
         {/* 공지사항 */}
@@ -348,82 +395,6 @@ export default function DashboardPage() {
         </Card>
       </div>
 
-      {/* 내 담당 현황 (모든 로그인 사용자) */}
-      {myStats && myStats.total > 0 && (
-        <>
-          <div>
-            <h2 className="text-lg font-bold mb-2">내 담당 현황</h2>
-            {/* 배정 | 제출된 검토서 | 연면적 | 1000↑ | 고위험 */}
-            <div className="grid gap-4 md:grid-cols-5">
-              <StatCard title="배정" value={myStats.total} />
-
-              {/* 현재까지 제출된 검토서 — 예비 / 보완 분리 */}
-              <Card>
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-sm font-medium text-muted-foreground">
-                    현재까지 제출된 검토서
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="pt-0">
-                  <div className="flex items-baseline gap-4">
-                    <div>
-                      <p className="text-xs text-muted-foreground">예비</p>
-                      <p className="text-xl font-bold">{myStats.submitted_preliminary}건</p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-muted-foreground">보완</p>
-                      <p className="text-xl font-bold">{myStats.submitted_supplement}건</p>
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-
-              <StatCard
-                title="연면적 합"
-                value={Math.round(myStats.total_area)}
-                suffix="㎡"
-              />
-              <StatCard title="1,000㎡ 이상" value={myStats.area_over_1000} color="blue" />
-              <StatCard title="고위험군" value={myStats.high_risk} color="red" />
-            </div>
-          </div>
-
-          {/* 검토대상 | 경과일수 (검토대상 우측에 9칸) */}
-          <div className="grid gap-4 lg:grid-cols-[220px_1fr]">
-            <StatCard title="검토 대상 (미제출)" value={myStats.need_review} color="red" />
-            <Card>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium text-muted-foreground">
-                  접수 후 경과일수 (검토서 미제출 건)
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="grid gap-2 grid-cols-3 md:grid-cols-5 lg:grid-cols-9">
-                  {ELAPSED_ORDER.map((key) => {
-                    const count = myStats.elapsed_buckets[key] ?? 0
-                    const isLong = key === "1주" || key === "2주이상"
-                    return (
-                      <div
-                        key={key}
-                        className={`rounded-md border p-2 text-center ${
-                          isLong && count > 0
-                            ? "border-red-300 bg-red-50"
-                            : count > 0
-                              ? "border-orange-200 bg-orange-50"
-                              : ""
-                        }`}
-                      >
-                        <p className="text-[11px] text-muted-foreground">{key}</p>
-                        <p className="text-base font-bold">{count}</p>
-                      </div>
-                    )
-                  })}
-                </div>
-              </CardContent>
-            </Card>
-          </div>
-        </>
-      )}
 
       {/* 전체 통계 (간사 이상) */}
       {isAdmin && stats && (
@@ -534,6 +505,54 @@ export default function DashboardPage() {
           </CardContent>
         </Card>
       )}
+    </div>
+  )
+}
+
+type BucketTint = "indigo" | "red" | "green" | "blue" | "orange" | "slate" | "amber"
+
+const BUCKET_TINT: Record<BucketTint, string> = {
+  indigo: "bg-indigo-50 border-indigo-200 text-indigo-900",
+  red: "bg-red-50 border-red-200 text-red-900",
+  green: "bg-green-50 border-green-200 text-green-900",
+  blue: "bg-blue-50 border-blue-200 text-blue-900",
+  orange: "bg-orange-50 border-orange-200 text-orange-900",
+  slate: "bg-slate-50 border-slate-200 text-slate-900",
+  amber: "bg-amber-50 border-amber-200 text-amber-900",
+}
+
+function Bucket({
+  label,
+  value,
+  tint = "slate",
+  suffix,
+  suffixSmall,
+  compact,
+}: {
+  label: string
+  value: number | string
+  tint?: BucketTint
+  suffix?: string
+  suffixSmall?: boolean
+  compact?: boolean
+}) {
+  return (
+    <div
+      className={`rounded-xl border p-3 transition-all hover:shadow-sm ${BUCKET_TINT[tint]} ${
+        compact ? "text-center" : ""
+      }`}
+    >
+      <p className={`text-xs font-medium opacity-80 ${compact ? "" : "mb-1"}`}>{label}</p>
+      <div className={compact ? "" : "flex items-baseline gap-1 flex-wrap"}>
+        <p className={`font-bold ${compact ? "text-lg" : "text-2xl"}`}>
+          {typeof value === "number" ? value.toLocaleString() : value}
+        </p>
+        {suffix && !compact && (
+          <span className={suffixSmall ? "text-[11px] opacity-80" : "text-sm opacity-80"}>
+            {suffix}
+          </span>
+        )}
+      </div>
     </div>
   )
 }
