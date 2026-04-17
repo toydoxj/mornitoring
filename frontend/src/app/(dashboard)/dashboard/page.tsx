@@ -45,6 +45,8 @@ interface MyStats {
   high_risk: number
   need_review: number
   submitted: number
+  submitted_preliminary: number
+  submitted_supplement: number
   elapsed_buckets: Record<string, number>
 }
 
@@ -100,8 +102,31 @@ export default function DashboardPage() {
         <>
           <div>
             <h2 className="text-lg font-bold mb-2">내 담당 현황</h2>
-            <div className="grid gap-4 md:grid-cols-4">
+            {/* 배정 | 제출된 검토서 | 연면적 | 1000↑ | 고위험 */}
+            <div className="grid gap-4 md:grid-cols-5">
               <StatCard title="배정" value={myStats.total} />
+
+              {/* 현재까지 제출된 검토서 — 예비 / 보완 분리 */}
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-medium text-muted-foreground">
+                    현재까지 제출된 검토서
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="pt-0">
+                  <div className="flex items-baseline gap-4">
+                    <div>
+                      <p className="text-xs text-muted-foreground">예비</p>
+                      <p className="text-xl font-bold">{myStats.submitted_preliminary}건</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-muted-foreground">보완</p>
+                      <p className="text-xl font-bold">{myStats.submitted_supplement}건</p>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+
               <StatCard
                 title="연면적 합"
                 value={Math.round(myStats.total_area)}
@@ -112,40 +137,40 @@ export default function DashboardPage() {
             </div>
           </div>
 
-          <div className="grid gap-4 md:grid-cols-2">
-            <StatCard title="검토 대상 (검토서 미제출)" value={myStats.need_review} color="red" />
-            <StatCard title="검토서 제출 완료" value={myStats.submitted} color="green" />
+          {/* 검토대상 | 경과일수 (검토대상 우측에 9칸) */}
+          <div className="grid gap-4 lg:grid-cols-[220px_1fr]">
+            <StatCard title="검토 대상 (미제출)" value={myStats.need_review} color="red" />
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium text-muted-foreground">
+                  접수 후 경과일수 (검토서 미제출 건)
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="grid gap-2 grid-cols-3 md:grid-cols-5 lg:grid-cols-9">
+                  {ELAPSED_ORDER.map((key) => {
+                    const count = myStats.elapsed_buckets[key] ?? 0
+                    const isLong = key === "1주" || key === "2주이상"
+                    return (
+                      <div
+                        key={key}
+                        className={`rounded-md border p-2 text-center ${
+                          isLong && count > 0
+                            ? "border-red-300 bg-red-50"
+                            : count > 0
+                              ? "border-orange-200 bg-orange-50"
+                              : ""
+                        }`}
+                      >
+                        <p className="text-[11px] text-muted-foreground">{key}</p>
+                        <p className="text-base font-bold">{count}</p>
+                      </div>
+                    )
+                  })}
+                </div>
+              </CardContent>
+            </Card>
           </div>
-
-          {/* 접수 후 경과일수 */}
-          <Card>
-            <CardHeader>
-              <CardTitle>접수 후 경과일수 (검토서 미제출 건)</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="grid gap-2 md:grid-cols-9">
-                {ELAPSED_ORDER.map((key) => {
-                  const count = myStats.elapsed_buckets[key] ?? 0
-                  const isLong = key === "1주" || key === "2주이상"
-                  return (
-                    <div
-                      key={key}
-                      className={`rounded-md border p-3 text-center ${
-                        isLong && count > 0
-                          ? "border-red-300 bg-red-50"
-                          : count > 0
-                            ? "border-orange-200 bg-orange-50"
-                            : ""
-                      }`}
-                    >
-                      <p className="text-xs text-muted-foreground">{key}</p>
-                      <p className="text-lg font-bold">{count}</p>
-                    </div>
-                  )
-                })}
-              </div>
-            </CardContent>
-          </Card>
         </>
       )}
 

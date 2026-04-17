@@ -393,18 +393,33 @@ def my_stats(
     received_buildings = [b for b in buildings if b.current_phase in RECEIVED_PHASES]
     need_review = len(received_buildings)
 
-    # 검토서 제출 건수 — 본인 담당 건물들에서 report_submitted_at 있는 stage 수
+    # 검토서 제출 건수 — 본인 담당 건물들에서 report_submitted_at 있는 stage 수 (예비/보완 분리)
     building_ids = [b.id for b in buildings]
-    submitted = 0
+    submitted_preliminary = 0
+    submitted_supplement = 0
     if building_ids:
-        submitted = (
+        submitted_preliminary = (
             db.query(ReviewStage)
             .filter(
                 ReviewStage.building_id.in_(building_ids),
                 ReviewStage.report_submitted_at.isnot(None),
+                ReviewStage.phase == "preliminary",
             )
             .count()
         )
+        submitted_supplement = (
+            db.query(ReviewStage)
+            .filter(
+                ReviewStage.building_id.in_(building_ids),
+                ReviewStage.report_submitted_at.isnot(None),
+                ReviewStage.phase.in_([
+                    "supplement_1", "supplement_2", "supplement_3",
+                    "supplement_4", "supplement_5",
+                ]),
+            )
+            .count()
+        )
+    submitted = submitted_preliminary + submitted_supplement
 
     # 접수 후 경과일수 버킷 — 현재 '_received' 단계의 doc_received_at 기준
     RECEIVED_TO_SUBMIT_PHASE = {
@@ -451,6 +466,8 @@ def my_stats(
         "high_risk": high_risk,
         "need_review": need_review,
         "submitted": submitted,
+        "submitted_preliminary": submitted_preliminary,
+        "submitted_supplement": submitted_supplement,
         "elapsed_buckets": elapsed_buckets,
     }
 
