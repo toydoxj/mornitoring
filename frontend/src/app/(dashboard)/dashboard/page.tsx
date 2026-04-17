@@ -202,12 +202,9 @@ export default function DashboardPage() {
           <div className="grid gap-3 grid-cols-2 md:grid-cols-3 lg:grid-cols-6">
             <Bucket label="배정" value={myStats.total} tint="indigo" suffix="건" />
             <Bucket label="검토서 대상" value={myStats.need_review} tint="red" suffix="건" />
-            <Bucket
-              label="제출 검토서"
-              value={myStats.submitted_preliminary + myStats.submitted_supplement}
-              suffix={`건 (예비 ${myStats.submitted_preliminary} / 보완 ${myStats.submitted_supplement})`}
-              tint="green"
-              suffixSmall
+            <SubmittedBucket
+              preliminary={myStats.submitted_preliminary}
+              supplement={myStats.submitted_supplement}
             />
             <Bucket
               label="연면적 합"
@@ -511,14 +508,49 @@ export default function DashboardPage() {
 
 type BucketTint = "indigo" | "red" | "green" | "blue" | "orange" | "slate" | "amber"
 
-const BUCKET_TINT: Record<BucketTint, string> = {
-  indigo: "bg-indigo-50 border-indigo-200 text-indigo-900",
-  red: "bg-red-50 border-red-200 text-red-900",
-  green: "bg-green-50 border-green-200 text-green-900",
-  blue: "bg-blue-50 border-blue-200 text-blue-900",
-  orange: "bg-orange-50 border-orange-200 text-orange-900",
-  slate: "bg-slate-50 border-slate-200 text-slate-900",
-  amber: "bg-amber-50 border-amber-200 text-amber-900",
+const BUCKET_VALUE_COLOR: Record<BucketTint, string> = {
+  indigo: "text-indigo-600",
+  red: "text-red-600",
+  green: "text-emerald-600",
+  blue: "text-blue-600",
+  orange: "text-orange-600",
+  slate: "text-slate-800",
+  amber: "text-amber-600",
+}
+
+const BUCKET_ACCENT: Record<BucketTint, string> = {
+  indigo: "before:bg-indigo-500",
+  red: "before:bg-red-500",
+  green: "before:bg-emerald-500",
+  blue: "before:bg-blue-500",
+  orange: "before:bg-orange-500",
+  slate: "before:bg-slate-400",
+  amber: "before:bg-amber-500",
+}
+
+function SubmittedBucket({
+  preliminary,
+  supplement,
+}: {
+  preliminary: number
+  supplement: number
+}) {
+  const total = preliminary + supplement
+  return (
+    <div className="relative overflow-hidden rounded-xl border bg-white p-4 transition-all hover:shadow-md before:absolute before:left-0 before:top-0 before:h-full before:w-1 before:bg-emerald-500">
+      <p className="text-xs font-medium text-muted-foreground">제출 검토서</p>
+      <div className="mt-2 flex items-baseline gap-1">
+        <p className="text-3xl font-bold tracking-tight text-emerald-600">
+          {total.toLocaleString()}
+        </p>
+        <span className="text-sm text-muted-foreground">건</span>
+      </div>
+      <div className="mt-2 flex gap-3 text-xs text-muted-foreground">
+        <span>예비 <strong className="text-slate-700">{preliminary}</strong></span>
+        <span>보완 <strong className="text-slate-700">{supplement}</strong></span>
+      </div>
+    </div>
+  )
 }
 
 function Bucket({
@@ -536,19 +568,31 @@ function Bucket({
   suffixSmall?: boolean
   compact?: boolean
 }) {
-  return (
-    <div
-      className={`rounded-xl border p-3 transition-all hover:shadow-sm ${BUCKET_TINT[tint]} ${
-        compact ? "text-center" : ""
-      }`}
-    >
-      <p className={`text-xs font-medium opacity-80 ${compact ? "" : "mb-1"}`}>{label}</p>
-      <div className={compact ? "" : "flex items-baseline gap-1 flex-wrap"}>
-        <p className={`font-bold ${compact ? "text-lg" : "text-2xl"}`}>
+  if (compact) {
+    return (
+      <div className="rounded-lg border bg-white p-2 text-center transition-all hover:border-slate-300 hover:shadow-sm">
+        <p className="text-[11px] text-muted-foreground">{label}</p>
+        <p className={`mt-0.5 text-xl font-bold ${BUCKET_VALUE_COLOR[tint]}`}>
           {typeof value === "number" ? value.toLocaleString() : value}
         </p>
-        {suffix && !compact && (
-          <span className={suffixSmall ? "text-[11px] opacity-80" : "text-sm opacity-80"}>
+      </div>
+    )
+  }
+
+  return (
+    <div
+      className={`
+        relative overflow-hidden rounded-xl border bg-white p-4 transition-all hover:shadow-md
+        before:absolute before:left-0 before:top-0 before:h-full before:w-1 ${BUCKET_ACCENT[tint]}
+      `}
+    >
+      <p className="text-xs font-medium text-muted-foreground">{label}</p>
+      <div className="mt-2 flex items-baseline gap-1 flex-wrap">
+        <p className={`text-3xl font-bold tracking-tight ${BUCKET_VALUE_COLOR[tint]}`}>
+          {typeof value === "number" ? value.toLocaleString() : value}
+        </p>
+        {suffix && (
+          <span className={`${suffixSmall ? "text-[11px]" : "text-sm"} text-muted-foreground`}>
             {suffix}
           </span>
         )}
