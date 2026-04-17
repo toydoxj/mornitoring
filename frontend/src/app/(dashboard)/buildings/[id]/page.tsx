@@ -38,6 +38,7 @@ export default function BuildingDetailPage() {
   const [isLoading, setIsLoading] = useState(true)
 
   const canManage = user && ["team_leader", "chief_secretary", "secretary"].includes(user.role)
+  const isReviewer = user?.role === "reviewer"
 
   useEffect(() => {
     const fetchData = async () => {
@@ -244,21 +245,23 @@ export default function BuildingDetailPage() {
           <CardTitle>문의사항</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          {/* 문의 등록 */}
-          <div className="flex gap-2">
-            <Input
-              placeholder="문의 내용을 입력하세요"
-              value={newInquiry}
-              onChange={(e) => setNewInquiry(e.target.value)}
-              className="flex-1"
-            />
-            <Button
-              onClick={handleSubmitInquiry}
-              disabled={submittingInquiry || !newInquiry.trim()}
-            >
-              {submittingInquiry ? "등록 중..." : "문의 등록"}
-            </Button>
-          </div>
+          {/* 문의 등록 — 검토위원만 가능 */}
+          {isReviewer && (
+            <div className="flex gap-2">
+              <Input
+                placeholder="문의 내용을 입력하세요"
+                value={newInquiry}
+                onChange={(e) => setNewInquiry(e.target.value)}
+                className="flex-1"
+              />
+              <Button
+                onClick={handleSubmitInquiry}
+                disabled={submittingInquiry || !newInquiry.trim()}
+              >
+                {submittingInquiry ? "등록 중..." : "문의 등록"}
+              </Button>
+            </div>
+          )}
 
           {/* 문의 이력 */}
           {inquiries.length === 0 ? (

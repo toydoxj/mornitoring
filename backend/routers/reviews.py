@@ -383,9 +383,9 @@ class InquiryUpdateRequest(BaseModel):
 def create_inquiry(
     body: InquiryCreateRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_roles(UserRole.REVIEWER)),
 ):
-    """문의사항 등록"""
+    """문의사항 등록 (검토위원 전용)"""
     from models.inquiry import Inquiry
 
     building = db.query(Building).filter(Building.mgmt_no == body.mgmt_no).first()

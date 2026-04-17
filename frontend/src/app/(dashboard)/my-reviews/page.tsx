@@ -21,6 +21,7 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import apiClient from "@/lib/api/client"
+import { useAuthStore } from "@/stores/authStore"
 import type { Building, BuildingListResponse, PhaseType, ResultType } from "@/types"
 import { PHASE_LABELS, RESULT_LABELS } from "@/types"
 
@@ -48,6 +49,8 @@ interface UploadResult {
 
 export default function MyReviewsPage() {
   const router = useRouter()
+  const user = useAuthStore((s) => s.user)
+  const isReviewer = user?.role === "reviewer"
   const [data, setData] = useState<Building[]>([])
   const [total, setTotal] = useState(0)
   const [isLoading, setIsLoading] = useState(true)
@@ -260,17 +263,19 @@ export default function MyReviewsPage() {
                     >
                       업로드
                     </Button>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      className="text-muted-foreground"
-                      onClick={() => {
-                        setReasonTarget(b)
-                        setReasonText("")
-                      }}
-                    >
-                      문의
-                    </Button>
+                    {isReviewer && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="text-muted-foreground"
+                        onClick={() => {
+                          setReasonTarget(b)
+                          setReasonText("")
+                        }}
+                      >
+                        문의
+                      </Button>
+                    )}
                     </div>
                   </TableCell>
                 </TableRow>
