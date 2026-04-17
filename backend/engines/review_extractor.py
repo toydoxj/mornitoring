@@ -35,21 +35,25 @@ def _cell_str(ws, coord: str) -> str:
 
 
 def _find_defect_type_values(ws, start_row: int = 79, max_row: int = 95) -> list[str]:
-    """판정결과 부적합 유형 값 추출"""
-    # 적정성 검토 결과 행 찾기
-    result_row = start_row
+    """판정결과 부적합 유형 값 추출 (F열에 "판정결과" 라벨이 있는 행부터 최대 6행)"""
+    # "판정결과 부적합 유형" 라벨 행 찾기
+    label_row = None
     for row in range(start_row, max_row):
-        val = ws.cell(row=row, column=2).value
-        if val and "적정성 검토 결과" in str(val):
-            result_row = row
+        val = ws.cell(row=row, column=6).value  # F열
+        if val and "판정결과" in str(val) and "부적합" in str(val):
+            label_row = row
             break
 
-    # G열에서 부적합 유형 찾기
+    if not label_row:
+        return []
+
+    # G열에서 부적합 유형 찾기 (라벨 행부터 최대 6행까지만)
     defects = []
-    for row in range(result_row + 2, max_row):
+    for row in range(label_row, min(label_row + 6, max_row)):
         val = ws.cell(row=row, column=7).value  # G열
         if val and str(val).strip():
-            defects.append(str(val).strip())
+            s = str(val).strip().replace("_x000D_", "").replace("_x000d_", "").replace("\r", "")
+            defects.append(s)
         if len(defects) >= 3:
             break
 

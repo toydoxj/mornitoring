@@ -68,11 +68,20 @@ def _find_result_row(ws, start_row: int = 79, max_row: int = 100) -> int:
     return 79  # 기본값
 
 
-def _find_defect_type_rows(ws, start_row: int = 81, max_row: int = 95) -> list[int]:
-    """판정결과 부적합 유형 행 찾기"""
-    # G81부터 시작, G열에 값이 있는 행
-    rows = []
+def _find_defect_type_rows(ws, start_row: int = 79, max_row: int = 95) -> list[int]:
+    """판정결과 부적합 유형 행 찾기 (F열에 "판정결과" 라벨이 있는 행부터 최대 6행)"""
+    label_row = None
     for row in range(start_row, max_row):
+        val = ws.cell(row=row, column=6).value  # F열
+        if val and "판정결과" in str(val) and "부적합" in str(val):
+            label_row = row
+            break
+
+    if not label_row:
+        return []
+
+    rows = []
+    for row in range(label_row, min(label_row + 6, max_row)):
         val = ws.cell(row=row, column=7).value  # G열
         if val and str(val).strip():
             rows.append(row)
@@ -192,7 +201,7 @@ def validate_review_file(
     review_result_text = _cell_str(ws, f"D{result_row}")
 
     # 판정결과 부적합 유형 찾기
-    defect_rows = _find_defect_type_rows(ws, result_row + 2)
+    defect_rows = _find_defect_type_rows(ws)
     defect_type_1 = _cell_str(ws, f"G{defect_rows[0]}") if len(defect_rows) > 0 else ""
     defect_type_2 = _cell_str(ws, f"G{defect_rows[1]}") if len(defect_rows) > 1 else ""
     defect_type_3 = _cell_str(ws, f"G{defect_rows[2]}") if len(defect_rows) > 2 else ""
