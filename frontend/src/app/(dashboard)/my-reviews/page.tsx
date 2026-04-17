@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
 import {
   Dialog,
   DialogContent,
@@ -47,6 +48,11 @@ export default function MyReviewsPage() {
   const [uploading, setUploading] = useState(false)
   const [uploadResult, setUploadResult] = useState<UploadResult | null>(null)
 
+  // 미제출 사유 다이얼로그
+  const [reasonTarget, setReasonTarget] = useState<Building | null>(null)
+  const [reasonText, setReasonText] = useState("")
+  const [reasonSubmitting, setReasonSubmitting] = useState(false)
+
   const fetchData = async () => {
     try {
       const { data: res } = await apiClient.get<BuildingListResponse>(
@@ -64,6 +70,25 @@ export default function MyReviewsPage() {
   useEffect(() => {
     fetchData()
   }, [])
+
+  const handleReasonSubmit = async () => {
+    if (!reasonTarget || !reasonText.trim()) return
+    setReasonSubmitting(true)
+    try {
+      await apiClient.post("/api/reviews/not-submitted-reason", {
+        mgmt_no: reasonTarget.mgmt_no,
+        phase: reasonTarget.current_phase || "preliminary",
+        reason: reasonText.trim(),
+      })
+      setReasonTarget(null)
+      setReasonText("")
+      alert("미제출 사유가 저장되었습니다")
+    } catch {
+      alert("저장 실패")
+    } finally {
+      setReasonSubmitting(false)
+    }
+  }
 
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -164,6 +189,7 @@ export default function MyReviewsPage() {
                     )}
                   </TableCell>
                   <TableCell>
+                    <div className="flex gap-1">
                     <Button
                       size="sm"
                       variant="outline"
@@ -174,6 +200,18 @@ export default function MyReviewsPage() {
                     >
                       업로드
                     </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="text-muted-foreground"
+                      onClick={() => {
+                        setReasonTarget(b)
+                        setReasonText("")
+                      }}
+                    >
+                      미제출
+                    </Button>
+                    </div>
                   </TableCell>
                 </TableRow>
               ))
@@ -229,6 +267,39 @@ export default function MyReviewsPage() {
                   )}
                 </div>
               )}
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* 미제출 사유 다이얼로그 */}
+      <Dialog open={!!reasonTarget} onOpenChange={(open) => !open && setReasonTarget(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>검토서 미제출 사유</DialogTitle>
+          </DialogHeader>
+          {reasonTarget && (
+            <div className="space-y-4">
+              <div className="rounded-md bg-muted p-3 text-sm">
+                <p>관리번호: <strong>{reasonTarget.mgmt_no}</strong></p>
+                <p>건물명: {reasonTarget.building_name || "-"}</p>
+              </div>
+              <div className="space-y-2">
+                <Label>미제출 사유</Label>
+                <textarea
+                  className="w-full min-h-[100px] rounded-md border px-3 py-2 text-sm"
+                  placeholder="검토서를 제출하지 못한 사유를 입력해주세요"
+                  value={reasonText}
+                  onChange={(e) => setReasonText(e.target.value)}
+                />
+              </div>
+              <Button
+                onClick={handleReasonSubmit}
+                disabled={reasonSubmitting || !reasonText.trim()}
+                className="w-full"
+              >
+                {reasonSubmitting ? "저장 중..." : "저장"}
+              </Button>
             </div>
           )}
         </DialogContent>

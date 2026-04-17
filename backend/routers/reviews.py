@@ -184,6 +184,52 @@ def get_review_stages(
     return stages
 
 
+class NotSubmittedReasonRequest(BaseModel):
+    mgmt_no: str
+    phase: str
+    reason: str
+
+
+@router.post("/not-submitted-reason")
+def save_not_submitted_reason(
+    body: NotSubmittedReasonRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """검토서 미제출 사유 저장"""
+    building = db.query(Building).filter(Building.mgmt_no == body.mgmt_no).first()
+    if not building:
+        raise HTTPException(status_code=404, detail="관리번호를 찾을 수 없습니다")
+
+    try:
+        phase_type = PhaseType(body.phase)
+    except ValueError:
+        phase_type = PhaseType.PRELIMINARY
+
+    phase_order = PHASE_ORDER_MAP.get(body.phase, 0)
+
+    stage = (
+        db.query(ReviewStage)
+        .filter(ReviewStage.building_id == building.id, ReviewStage.phase == phase_type)
+        .first()
+    )
+
+    if stage:
+        stage.stage_remarks = body.reason
+    else:
+        stage = ReviewStage(
+            building_id=building.id,
+            phase=phase_type,
+            phase_order=phase_order,
+            stage_remarks=body.reason,
+            reviewer_name=current_user.name,
+        )
+        db.add(stage)
+
+    db.commit()
+    return {"message": "미제출 사유가 저장되었습니다"}
+
+
 @router.get("/download/{stage_id}")
 def download_review(
     stage_id: int,
