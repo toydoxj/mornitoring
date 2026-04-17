@@ -52,6 +52,10 @@ class FieldChange(BaseModel):
     label: str
     old_value: str | None = None
     new_value: str | None = None
+    # "building" = 빌딩 DB에 저장 및 업데이트
+    # "review_stage" = review_stages 테이블에 저장
+    # "reference" = 비교만 표시, DB 미반영
+    scope: str = "building"
 
 
 class UploadResponse(BaseModel):
@@ -167,15 +171,19 @@ def _detect_changes(building: Building, extracted_data: dict) -> list[FieldChang
 
     changes: list[FieldChange] = []
 
+    # main_structure(주구조형식)는 참고 비교만 — DB에 반영하지 않으므로 scope="reference"
+    REFERENCE_ONLY_FIELDS = {"main_structure"}
+
     for extract_key, (db_field, label) in {**BUILDING_UPDATE_MAP, **DETAIL_CATEGORY_MAP}.items():
         new_val = extracted_data.get(extract_key)
         if not new_val:
             continue
         old_val = getattr(building, db_field, None)
+        scope = "reference" if db_field in REFERENCE_ONLY_FIELDS else "building"
         if old_val and old_val != new_val:
-            changes.append(FieldChange(field=db_field, label=label, old_value=str(old_val), new_value=new_val))
+            changes.append(FieldChange(field=db_field, label=label, old_value=str(old_val), new_value=new_val, scope=scope))
         elif not old_val:
-            changes.append(FieldChange(field=db_field, label=f"{label} (신규)", old_value="-", new_value=new_val))
+            changes.append(FieldChange(field=db_field, label=f"{label} (신규)", old_value="-", new_value=new_val, scope=scope))
 
     if extracted_data.get("type_is_piloti") and not building.detail_category9:
         changes.append(FieldChange(field="detail_category9", label="필로티 (신규)", old_value="-", new_value="필로티"))
@@ -210,6 +218,7 @@ def _detect_result_change(
         label="검토결과" if old_label else "검토결과 (신규)",
         old_value=old_label or "-",
         new_value=new_label,
+        scope="review_stage",
     )
 
 

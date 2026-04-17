@@ -46,6 +46,7 @@ interface FieldChange {
   label: string
   old_value: string | null
   new_value: string | null
+  scope?: "building" | "review_stage" | "reference"
 }
 
 interface UploadResult {
@@ -165,7 +166,9 @@ export default function MyReviewsPage() {
   const handleConfirmUpload = async () => {
     if (!uploadFile || !uploadTarget) return
 
-    const hasChanges = uploadResult?.changes && uploadResult.changes.some(c => !c.label.includes("신규"))
+    const hasChanges = uploadResult?.changes && uploadResult.changes.some(
+      c => (!c.scope || c.scope === "building") && !c.label.includes("신규")
+    )
     if (hasChanges) {
       if (!confirm("기존 건축물 정보가 변경됩니다. 계속하시겠습니까?")) return
     }
@@ -406,16 +409,48 @@ export default function MyReviewsPage() {
                       </ul>
                     </div>
                   )}
-                  {uploadResult.changes && uploadResult.changes.length > 0 && (
-                    <div className="rounded-md p-3 text-sm bg-blue-50 text-blue-800">
-                      <p className="font-medium">건축물 정보 변경 내역</p>
-                      <ul className="mt-1 list-disc pl-4 space-y-1">
-                        {uploadResult.changes.map((c, i) => (
-                          <li key={i}>{c.label}: {c.old_value} → {c.new_value}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
+                  {uploadResult.changes && uploadResult.changes.length > 0 && (() => {
+                    const reviewChanges = uploadResult.changes.filter((c) => c.scope === "review_stage")
+                    const buildingChanges = uploadResult.changes.filter((c) => !c.scope || c.scope === "building")
+                    const referenceChanges = uploadResult.changes.filter((c) => c.scope === "reference")
+                    return (
+                      <div className="space-y-2">
+                        {reviewChanges.length > 0 && (
+                          <div className="rounded-md p-3 text-sm bg-green-50 text-green-900">
+                            <p className="font-medium">검토서 단계 변경</p>
+                            <p className="text-xs mb-1 text-green-700">→ review_stages 테이블에 저장됩니다</p>
+                            <ul className="mt-1 list-disc pl-4 space-y-1">
+                              {reviewChanges.map((c, i) => (
+                                <li key={i}>{c.label}: {c.old_value} → {c.new_value}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+                        {buildingChanges.length > 0 && (
+                          <div className="rounded-md p-3 text-sm bg-blue-50 text-blue-800">
+                            <p className="font-medium">건축물 정보 변경 내역</p>
+                            <p className="text-xs mb-1 text-blue-600">→ buildings 테이블에 저장됩니다</p>
+                            <ul className="mt-1 list-disc pl-4 space-y-1">
+                              {buildingChanges.map((c, i) => (
+                                <li key={i}>{c.label}: {c.old_value} → {c.new_value}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+                        {referenceChanges.length > 0 && (
+                          <div className="rounded-md p-3 text-sm bg-amber-50 text-amber-900 border border-amber-200">
+                            <p className="font-medium">참고 비교 (DB 미반영)</p>
+                            <p className="text-xs mb-1 text-amber-700">→ 값 차이를 참고용으로만 표시하며 실제로는 저장/변경되지 않습니다</p>
+                            <ul className="mt-1 list-disc pl-4 space-y-1">
+                              {referenceChanges.map((c, i) => (
+                                <li key={i}>{c.label}: {c.old_value} → {c.new_value}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })()}
 
                   {/* 부적정 사례 검토 필요 체크박스 (미리보기 성공 시) */}
                   {previewDone && (
