@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/table"
 import apiClient from "@/lib/api/client"
 import { useAuthStore } from "@/stores/authStore"
+import { PHASE_LABELS } from "@/types"
 
 interface ReviewerStat {
   name: string
@@ -33,6 +34,7 @@ interface DashboardStats {
   preliminary: number
   supplement: number
   completed: number
+  phase_counts: Record<string, number>
   reviewer_stats: ReviewerStat[]
 }
 
@@ -76,6 +78,31 @@ export default function DashboardPage() {
         <StatCard title="보완 진행" value={stats.supplement} />
         <StatCard title="최종 완료" value={stats.completed} color="green" />
       </div>
+
+      {/* 단계별 현황 */}
+      <Card>
+        <CardHeader>
+          <CardTitle>단계별 현황</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="grid gap-3 md:grid-cols-4">
+            {Object.entries(PHASE_LABELS).map(([key, label]) => {
+              const count = stats.phase_counts[key] || 0
+              if (count === 0 && !["doc_received", "preliminary", "none"].includes(key)) return null
+              return (
+                <div key={key} className="flex items-center justify-between rounded-md border p-3">
+                  <span className="text-sm">{label}</span>
+                  <span className="text-lg font-bold">{count}</span>
+                </div>
+              )
+            })}
+            <div className="flex items-center justify-between rounded-md border p-3">
+              <span className="text-sm">미접수</span>
+              <span className="text-lg font-bold">{stats.phase_counts["none"] || 0}</span>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
 
       {/* 위원별 현황 */}
       {stats.reviewer_stats.length > 0 && (

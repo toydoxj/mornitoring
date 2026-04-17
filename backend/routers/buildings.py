@@ -143,11 +143,20 @@ def get_stats(
         .count()
     )
 
-    # 예비검토 완료
-    preliminary = db.query(Building).filter(Building.current_phase == "preliminary").count()
+    # 단계별 건수
+    from sqlalchemy import func as sa_func2
+    phase_counts_raw = (
+        db.query(Building.current_phase, sa_func2.count(Building.id))
+        .group_by(Building.current_phase)
+        .all()
+    )
+    phase_counts = {phase or "none": count for phase, count in phase_counts_raw}
+
+    # 예비검토서 제출
+    preliminary = phase_counts.get("preliminary", 0)
 
     # 보완 진행
-    supplement = db.query(Building).filter(Building.current_phase.like("supplement%")).count()
+    supplement = sum(v for k, v in phase_counts.items() if k.startswith("supplement"))
 
     # 최종 완료
     completed = db.query(Building).filter(Building.final_result.isnot(None)).count()
@@ -212,6 +221,7 @@ def get_stats(
         "preliminary": preliminary,
         "supplement": supplement,
         "completed": completed,
+        "phase_counts": phase_counts,
         "reviewer_stats": reviewer_stats,
     }
 

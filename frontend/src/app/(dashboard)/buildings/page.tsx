@@ -349,10 +349,14 @@ export default function BuildingsPage() {
           <option value="">전체 단계</option>
           <option value="none">미접수</option>
           <option value="doc_received">예비도서 접수</option>
-          <option value="preliminary">예비검토</option>
-          <option value="supplement_1">1차 보완</option>
-          <option value="supplement_2">2차 보완</option>
-          <option value="supplement_3">3차 보완</option>
+          <option value="preliminary">예비검토서 제출</option>
+          <option value="supplement_1_received">보완도서(1차) 접수</option>
+          <option value="supplement_1">보완검토서(1차) 제출</option>
+          <option value="supplement_2_received">보완도서(2차) 접수</option>
+          <option value="supplement_2">보완검토서(2차) 제출</option>
+          <option value="supplement_3_received">보완도서(3차) 접수</option>
+          <option value="supplement_3">보완검토서(3차) 제출</option>
+          <option value="completed">완료</option>
         </select>
 
         <select

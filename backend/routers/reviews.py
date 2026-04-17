@@ -100,10 +100,16 @@ async def upload_review(
         # 2. 검토서 내용 추출
         extracted = extract_review_data(tmp_path)
 
-        # 3. PhaseType 변환 (doc_received는 preliminary로 매핑)
-        actual_phase = phase
-        if phase == "doc_received":
-            actual_phase = "preliminary"
+        # 3. PhaseType 변환 (접수 단계는 검토서 제출 단계로 매핑)
+        RECEIVED_TO_SUBMIT = {
+            "doc_received": "preliminary",
+            "supplement_1_received": "supplement_1",
+            "supplement_2_received": "supplement_2",
+            "supplement_3_received": "supplement_3",
+            "supplement_4_received": "supplement_4",
+            "supplement_5_received": "supplement_5",
+        }
+        actual_phase = RECEIVED_TO_SUBMIT.get(phase, phase)
         try:
             phase_type = PhaseType(actual_phase)
         except ValueError:

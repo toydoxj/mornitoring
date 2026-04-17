@@ -76,14 +76,21 @@ export const ROLE_LABELS: Record<UserRole, string> = {
 }
 
 // 단계 한글 라벨
+// 흐름: 예비도서 접수 → 예비검토서 제출 → 보완도서(1차) 접수 → 보완검토서(1차) 제출 → ...
 export const PHASE_LABELS: Record<string, string> = {
   doc_received: "예비도서 접수",
-  preliminary: "예비검토",
-  supplement_1: "1차 보완",
-  supplement_2: "2차 보완",
-  supplement_3: "3차 보완",
-  supplement_4: "4차 보완",
-  supplement_5: "5차 보완",
+  preliminary: "예비검토서 제출",
+  supplement_1_received: "보완도서(1차) 접수",
+  supplement_1: "보완검토서(1차) 제출",
+  supplement_2_received: "보완도서(2차) 접수",
+  supplement_2: "보완검토서(2차) 제출",
+  supplement_3_received: "보완도서(3차) 접수",
+  supplement_3: "보완검토서(3차) 제출",
+  supplement_4_received: "보완도서(4차) 접수",
+  supplement_4: "보완검토서(4차) 제출",
+  supplement_5_received: "보완도서(5차) 접수",
+  supplement_5: "보완검토서(5차) 제출",
+  completed: "완료",
 }
 
 // 결과 한글 라벨
