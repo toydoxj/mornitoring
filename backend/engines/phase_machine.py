@@ -31,10 +31,10 @@ PHASE_SEQUENCE = [
 ]
 
 # 보완이 필요한 결과 (다음 단계로 진행)
-REQUIRES_SUPPLEMENT = {ResultType.SUPPLEMENT, ResultType.FAIL}
+REQUIRES_SUPPLEMENT = {ResultType.SUPPLEMENT, ResultType.FAIL, ResultType.RECALCULATE}
 
 # 완료 결과
-COMPLETED_RESULTS = {ResultType.PASS, ResultType.MINOR}
+COMPLETED_RESULTS = {ResultType.PASS, ResultType.MINOR, ResultType.SIMPLE_ERROR}
 
 
 def get_next_phase(current_phase: str) -> str | None:

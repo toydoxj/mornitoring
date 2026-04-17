@@ -32,6 +32,9 @@ import { useAuthStore } from "@/stores/authStore"
 
 const RESULT_VARIANT: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
   pass: "default",
+  simple_error: "secondary",
+  recalculate: "destructive",
+  // 레거시
   supplement: "secondary",
   fail: "destructive",
   minor: "outline",

@@ -51,7 +51,13 @@ export type PhaseType =
   | "supplement_4"
   | "supplement_5"
 
-export type ResultType = "pass" | "supplement" | "fail" | "minor"
+export type ResultType =
+  | "pass"
+  | "simple_error"
+  | "recalculate"
+  | "supplement"  // legacy
+  | "fail"        // legacy
+  | "minor"       // legacy
 
 export interface ReviewStage {
   id: number
@@ -97,6 +103,8 @@ export const PHASE_LABELS: Record<string, string> = {
 // 결과 한글 라벨
 export const RESULT_LABELS: Record<ResultType, string> = {
   pass: "적합",
+  simple_error: "단순오류",
+  recalculate: "재계산",
   supplement: "보완",
   fail: "부적합",
   minor: "경미",
