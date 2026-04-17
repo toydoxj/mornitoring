@@ -1,7 +1,7 @@
 """검토서 업로드/조회 라우터"""
 
 import tempfile
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query
@@ -45,7 +45,6 @@ class ReviewStageResponse(BaseModel):
     s3_file_key: str | None = None
     inappropriate_review_needed: bool = False
     inappropriate_decision: str | None = None
-    inappropriate_note: str | None = None
 
     model_config = {"from_attributes": True}
 
@@ -157,6 +156,8 @@ def _detect_changes(building: Building, extracted_data: dict) -> list[FieldChang
         "architect_name": ("architect_name", "건축사(성명)"),
         "struct_eng_firm": ("struct_eng_firm", "책임구조기술자(소속)"),
         "struct_eng_name": ("struct_eng_name", "책임구조기술자(성명)"),
+        "drawing_creator_firm": ("drawing_creator_firm", "도면작성자(소속)"),
+        "drawing_creator_name": ("drawing_creator_name", "도면작성자(성명)"),
         "main_structure_type": ("main_structure", "주구조형식"),
         "high_risk_type": ("high_risk_type", "고위험유형"),
         "struct_drawing_qual": ("seismic_level", "내진등급"),
@@ -236,6 +237,8 @@ def _apply_changes(building: Building, extracted_data: dict):
         "architect_name": "architect_name",
         "struct_eng_firm": "struct_eng_firm",
         "struct_eng_name": "struct_eng_name",
+        "drawing_creator_firm": "drawing_creator_firm",
+        "drawing_creator_name": "drawing_creator_name",
         # "main_structure_type": "main_structure",  # 의도적으로 제외
         "high_risk_type": "high_risk_type",
         "struct_drawing_qual": "seismic_level",
@@ -703,7 +706,9 @@ class InappropriateReviewItem(BaseModel):
     current_phase: str | None = None
     latest_result: str | None = None
     inappropriate_decision: str | None = None
-    inappropriate_note: str | None = None
+    latest_note: str | None = None
+    latest_note_author: str | None = None
+    note_count: int = 0
     phase: str
 
 
@@ -765,8 +770,25 @@ def list_inappropriate_reviews(
         if building.id not in latest_by_building:
             latest_by_building[building.id] = (stage, building)
 
+    # 각 stage의 최신 의견과 개수 조회
+    stage_ids = [s.id for s, _ in latest_by_building.values()]
+    latest_note_by_stage: dict[int, InappropriateNote] = {}
+    note_count_by_stage: dict[int, int] = {}
+    if stage_ids:
+        notes = (
+            db.query(InappropriateNote)
+            .filter(InappropriateNote.stage_id.in_(stage_ids))
+            .order_by(InappropriateNote.stage_id, InappropriateNote.created_at.desc())
+            .all()
+        )
+        for n in notes:
+            note_count_by_stage[n.stage_id] = note_count_by_stage.get(n.stage_id, 0) + 1
+            if n.stage_id not in latest_note_by_stage:
+                latest_note_by_stage[n.stage_id] = n
+
     items = []
     for stage, b in latest_by_building.values():
+        latest_note = latest_note_by_stage.get(stage.id)
         items.append(
             InappropriateReviewItem(
                 stage_id=stage.id,
@@ -786,7 +808,9 @@ def list_inappropriate_reviews(
                     if stage.inappropriate_decision
                     else "pending"
                 ),
-                inappropriate_note=stage.inappropriate_note,
+                latest_note=latest_note.content if latest_note else None,
+                latest_note_author=latest_note.author_name if latest_note else None,
+                note_count=note_count_by_stage.get(stage.id, 0),
                 phase=stage.phase.value,
             )
         )
@@ -794,8 +818,7 @@ def list_inappropriate_reviews(
 
 
 class InappropriateDecisionRequest(BaseModel):
-    decision: str | None = None  # pending / confirmed_serious / confirmed_simple / excluded
-    note: str | None = None      # 간사진 의견 (None이면 변경 안 함, 빈 문자열이면 비우기)
+    decision: str  # pending / confirmed_serious / confirmed_simple / excluded
 
 
 @router.patch("/inappropriate/{stage_id}")
@@ -807,39 +830,112 @@ def set_inappropriate_decision(
         require_roles(UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY, UserRole.SECRETARY)
     ),
 ):
-    """부적합 검토 판정/의견 변경 (간사 이상).
+    """부적합 검토 판정 변경 (간사 이상)."""
+    try:
+        new_decision = InappropriateDecision(body.decision)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="잘못된 판정값")
 
-    decision과 note는 각각 독립적으로 변경 가능 (둘 다 선택적).
-    """
     stage = db.query(ReviewStage).filter(ReviewStage.id == stage_id).first()
     if not stage:
         raise HTTPException(status_code=404, detail="검토 단계를 찾을 수 없습니다")
     if not stage.inappropriate_review_needed:
         raise HTTPException(status_code=400, detail="부적합 검토 대상이 아닙니다")
 
-    changed: dict = {}
-    if body.decision is not None:
-        try:
-            new_decision = InappropriateDecision(body.decision)
-        except ValueError:
-            raise HTTPException(status_code=400, detail="잘못된 판정값")
-        stage.inappropriate_decision = new_decision
-        changed["decision"] = new_decision.value
-
-    if body.note is not None:
-        stage.inappropriate_note = body.note if body.note else None
-        changed["note"] = stage.inappropriate_note
-
-    if not changed:
-        raise HTTPException(status_code=400, detail="변경할 값이 없습니다")
-
+    stage.inappropriate_decision = new_decision
     log_action(
-        db, current_user.id, "inappropriate_update", "review_stage", stage.id,
-        after_data=changed,
+        db, current_user.id, "inappropriate_decision", "review_stage", stage.id,
+        after_data={"decision": new_decision.value},
     )
     db.commit()
-    return {
-        "stage_id": stage.id,
-        "decision": stage.inappropriate_decision.value if stage.inappropriate_decision else "pending",
-        "note": stage.inappropriate_note,
-    }
+    return {"stage_id": stage.id, "decision": new_decision.value}
+
+
+# --- 간사진 의견 (다중, 작성자 기록) ---
+
+from models.inappropriate_note import InappropriateNote  # noqa: E402
+
+
+class InappropriateNoteResponse(BaseModel):
+    id: int
+    stage_id: int
+    author_id: int
+    author_name: str
+    content: str
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class InappropriateNoteCreate(BaseModel):
+    content: str
+
+
+@router.get("/inappropriate/{stage_id}/notes", response_model=list[InappropriateNoteResponse])
+def list_inappropriate_notes(
+    stage_id: int,
+    db: Session = Depends(get_db),
+    _: User = Depends(
+        require_roles(UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY, UserRole.SECRETARY)
+    ),
+):
+    """부적합 stage의 간사진 의견 목록 (최신순)"""
+    notes = (
+        db.query(InappropriateNote)
+        .filter(InappropriateNote.stage_id == stage_id)
+        .order_by(InappropriateNote.created_at.desc())
+        .all()
+    )
+    return notes
+
+
+@router.post("/inappropriate/{stage_id}/notes", response_model=InappropriateNoteResponse)
+def create_inappropriate_note(
+    stage_id: int,
+    body: InappropriateNoteCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(
+        require_roles(UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY, UserRole.SECRETARY)
+    ),
+):
+    """간사진 의견 추가"""
+    content = (body.content or "").strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="내용을 입력하세요")
+
+    stage = db.query(ReviewStage).filter(ReviewStage.id == stage_id).first()
+    if not stage:
+        raise HTTPException(status_code=404, detail="검토 단계를 찾을 수 없습니다")
+    if not stage.inappropriate_review_needed:
+        raise HTTPException(status_code=400, detail="부적합 검토 대상이 아닙니다")
+
+    note = InappropriateNote(
+        stage_id=stage_id,
+        author_id=current_user.id,
+        author_name=current_user.name,
+        content=content,
+    )
+    db.add(note)
+    db.commit()
+    db.refresh(note)
+    return note
+
+
+@router.delete("/inappropriate/notes/{note_id}", status_code=204)
+def delete_inappropriate_note(
+    note_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(
+        require_roles(UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY, UserRole.SECRETARY)
+    ),
+):
+    """의견 삭제 (작성자 본인 또는 팀장/총괄간사)"""
+    note = db.query(InappropriateNote).filter(InappropriateNote.id == note_id).first()
+    if not note:
+        raise HTTPException(status_code=404, detail="의견을 찾을 수 없습니다")
+    is_owner = note.author_id == current_user.id
+    is_admin = current_user.role in (UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY)
+    if not is_owner and not is_admin:
+        raise HTTPException(status_code=403, detail="삭제 권한이 없습니다")
+    db.delete(note)
+    db.commit()

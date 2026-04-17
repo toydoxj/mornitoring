@@ -65,8 +65,8 @@ class ReviewStage(Base):
     inappropriate_decision: Mapped[InappropriateDecision | None] = mapped_column(
         Enum(InappropriateDecision), default=None
     )
-    # 간사진 의견 (판정 근거/메모)
-    inappropriate_note: Mapped[str | None] = mapped_column(Text)
+    # 부적합 판정에 대한 간사진 의견은 InappropriateNote 테이블에 다중 저장
+    # (이전의 단일 inappropriate_note 컬럼은 제거)
 
     # 검토서 파일
     s3_file_key: Mapped[str | None] = mapped_column(String(500))     # S3 파일 경로

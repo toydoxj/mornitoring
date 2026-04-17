@@ -12,6 +12,8 @@
   H7: 건축사 성명
   F8: 책임구조기술자 소속
   H8: 책임구조기술자 성명
+  F9: 도면작성자 소속 (추정 위치 — 실제 검토서 양식에 맞게 확인 필요)
+  H9: 도면작성자 성명
   F11: 주요 구조형식
   E13~F13: 구조도면 작성자 자격
   E14~F14: 고위험 유형
@@ -246,6 +248,8 @@ def validate_review_file(
         "architect_name": _cell_str(ws, "H7"),
         "struct_eng_firm": _cell_str(ws, "F8"),
         "struct_eng_name": _cell_str(ws, "H8"),
+        "drawing_creator_firm": _cell_str(ws, "F9"),
+        "drawing_creator_name": _cell_str(ws, "H9"),
         "main_structure_type": _cell_str(ws, "F11"),
         "struct_drawing_qual": _cell_str(ws, "F13"),
         "high_risk_type": _cell_str(ws, "F14"),
@@ -272,6 +276,8 @@ def validate_review_file(
         result.add_warning("건축사 소속/성명이 입력되지 않았습니다.")
     if not result.extracted_data["struct_eng_firm"] and not result.extracted_data["struct_eng_name"]:
         result.add_warning("책임구조기술자 소속/성명이 입력되지 않았습니다.")
+    if not result.extracted_data["drawing_creator_firm"] and not result.extracted_data["drawing_creator_name"]:
+        result.add_warning("도면작성자 소속/성명이 입력되지 않았습니다.")
     if not result.extracted_data["main_structure_type"]:
         result.add_warning("주요 구조형식이 입력되지 않았습니다.")
     if not result.extracted_data["high_risk_type"]:

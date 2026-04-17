@@ -41,7 +41,9 @@ interface InappropriateItem {
   current_phase: string | null
   latest_result: string | null
   inappropriate_decision: Decision
-  inappropriate_note: string | null
+  latest_note: string | null
+  latest_note_author: string | null
+  note_count: number
   phase: string
 }
 
@@ -177,12 +179,15 @@ export default function InappropriateReviewPage() {
                       <div className="truncate" title={b.building_name ?? undefined}>
                         {b.full_address || "-"}
                       </div>
-                      {b.inappropriate_note && (
+                      {b.latest_note && (
                         <div
                           className="mt-1 truncate text-xs text-muted-foreground"
-                          title={b.inappropriate_note}
+                          title={b.latest_note}
                         >
-                          💬 {b.inappropriate_note}
+                          💬 [{b.latest_note_author}] {b.latest_note}
+                          {b.note_count > 1 && (
+                            <span className="ml-1 text-orange-600">+{b.note_count - 1}</span>
+                          )}
                         </div>
                       )}
                     </TableCell>

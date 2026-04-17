@@ -79,6 +79,13 @@ class BuildingResponse(BaseModel):
     is_special_structure: bool | None = None
     is_high_rise: bool | None = None
     is_multi_use: bool | None = None
+    architect_firm: str | None = None
+    architect_name: str | None = None
+    struct_eng_firm: str | None = None
+    struct_eng_name: str | None = None
+    drawing_creator_firm: str | None = None
+    drawing_creator_name: str | None = None
+    seismic_level: str | None = None
     current_phase: str | None = None
     final_result: str | None = None
     reviewer_id: int | None = None

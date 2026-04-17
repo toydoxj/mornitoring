@@ -64,6 +64,15 @@ export default function BuildingDetailPage() {
         setBuilding(buildingRes.data)
         setStages(stagesRes.data)
 
+        // 부적합 체크된 단계의 의견 선로딩
+        const inappropriateStages = stagesRes.data.filter((s) => s.inappropriate_review_needed)
+        for (const s of inappropriateStages) {
+          try {
+            const { data: notes } = await apiClient.get(`/api/reviews/inappropriate/${s.id}/notes`)
+            setNotesByStage((prev) => ({ ...prev, [s.id]: notes }))
+          } catch { /* 의견 없음 */ }
+        }
+
         // 문의사항 조회
         try {
           const { data: inqData } = await apiClient.get(`/api/reviews/building-inquiries/${buildingRes.data.mgmt_no}`)
@@ -78,23 +87,57 @@ export default function BuildingDetailPage() {
     fetchData()
   }, [params.id, router])
 
-  const [noteDraft, setNoteDraft] = useState<Record<number, string>>({})
+  interface NoteItem {
+    id: number
+    stage_id: number
+    author_id: number
+    author_name: string
+    content: string
+    created_at: string
+  }
+  const [notesByStage, setNotesByStage] = useState<Record<number, NoteItem[]>>({})
+  const [newNoteDraft, setNewNoteDraft] = useState<Record<number, string>>({})
   const [savingNote, setSavingNote] = useState<number | null>(null)
 
-  const handleSaveNote = async (stageId: number) => {
-    const note = noteDraft[stageId] ?? ""
+  const fetchNotes = async (stageId: number) => {
+    try {
+      const { data } = await apiClient.get<NoteItem[]>(
+        `/api/reviews/inappropriate/${stageId}/notes`
+      )
+      setNotesByStage((prev) => ({ ...prev, [stageId]: data }))
+    } catch {
+      // 무시
+    }
+  }
+
+  const handleAddNote = async (stageId: number) => {
+    const content = (newNoteDraft[stageId] ?? "").trim()
+    if (!content) return
     setSavingNote(stageId)
     try {
-      await apiClient.patch(`/api/reviews/inappropriate/${stageId}`, { note })
-      const { data: stagesRes } = await apiClient.get<ReviewStage[]>(`/api/reviews/stages/${params.id}`)
-      setStages(stagesRes)
+      await apiClient.post(`/api/reviews/inappropriate/${stageId}/notes`, { content })
+      setNewNoteDraft((prev) => ({ ...prev, [stageId]: "" }))
+      await fetchNotes(stageId)
     } catch (err) {
       const msg =
         (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
-        ?? "저장 실패"
+        ?? "등록 실패"
       alert(msg)
     } finally {
       setSavingNote(null)
+    }
+  }
+
+  const handleDeleteNote = async (stageId: number, noteId: number) => {
+    if (!confirm("이 의견을 삭제하시겠습니까?")) return
+    try {
+      await apiClient.delete(`/api/reviews/inappropriate/notes/${noteId}`)
+      await fetchNotes(stageId)
+    } catch (err) {
+      const msg =
+        (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
+        ?? "삭제 실패"
+      alert(msg)
     }
   }
 
@@ -211,7 +254,7 @@ export default function BuildingDetailPage() {
         <CardHeader>
           <CardTitle>건축물 기본정보</CardTitle>
         </CardHeader>
-        <CardContent>
+        <CardContent className="space-y-5">
           <div className="grid grid-cols-2 gap-4 text-sm md:grid-cols-4">
             <InfoItem label="시도" value={building.sido} />
             <InfoItem label="시군구" value={building.sigungu} />
@@ -222,6 +265,33 @@ export default function BuildingDetailPage() {
             <InfoItem label="지상층수" value={building.floors_above?.toString()} />
             <InfoItem label="지하층수" value={building.floors_below?.toString()} />
             <InfoItem label="고위험유형" value={building.high_risk_type} />
+            <InfoItem label="내진등급" value={building.seismic_level} />
+          </div>
+
+          <Separator />
+
+          <div className="grid grid-cols-1 gap-4 text-sm md:grid-cols-3">
+            <div>
+              <p className="mb-1 text-muted-foreground font-medium">건축사사무소</p>
+              <div className="space-y-1">
+                <InfoItem label="소속" value={building.architect_firm} />
+                <InfoItem label="성명" value={building.architect_name} />
+              </div>
+            </div>
+            <div>
+              <p className="mb-1 text-muted-foreground font-medium">책임구조기술자 사무소</p>
+              <div className="space-y-1">
+                <InfoItem label="소속" value={building.struct_eng_firm} />
+                <InfoItem label="성명" value={building.struct_eng_name} />
+              </div>
+            </div>
+            <div>
+              <p className="mb-1 text-muted-foreground font-medium">도면작성자</p>
+              <div className="space-y-1">
+                <InfoItem label="소속" value={building.drawing_creator_firm} />
+                <InfoItem label="성명" value={building.drawing_creator_name} />
+              </div>
+            </div>
           </div>
         </CardContent>
       </Card>
@@ -327,27 +397,76 @@ export default function BuildingDetailPage() {
                             </div>
                           </div>
 
-                          {/* 간사진 의견 */}
+                          {/* 간사진 의견 (다중, 작성자 기록) */}
                           <div>
-                            <dt className="text-sm font-medium text-orange-900 mb-1">
+                            <dt className="text-sm font-medium text-orange-900 mb-2">
                               간사진 의견
+                              {notesByStage[stage.id]?.length > 0 && (
+                                <span className="ml-2 text-xs text-orange-700">
+                                  ({notesByStage[stage.id].length})
+                                </span>
+                              )}
                             </dt>
+
+                            {/* 의견 리스트 */}
+                            <div className="space-y-2 mb-3">
+                              {(notesByStage[stage.id] ?? []).map((n) => {
+                                const isOwner = user?.id === n.author_id
+                                const isAdmin = user && ["team_leader", "chief_secretary"].includes(user.role)
+                                return (
+                                  <div
+                                    key={n.id}
+                                    className="rounded-md border border-orange-200 bg-white p-3 text-sm"
+                                  >
+                                    <div className="flex items-start justify-between gap-2">
+                                      <div className="flex items-center gap-2">
+                                        <span className="font-medium">{n.author_name}</span>
+                                        <span className="text-xs text-muted-foreground">
+                                          {new Date(n.created_at).toLocaleString("ko-KR")}
+                                        </span>
+                                      </div>
+                                      {(isOwner || isAdmin) && (
+                                        <Button
+                                          size="icon-xs"
+                                          variant="ghost"
+                                          onClick={() => handleDeleteNote(stage.id, n.id)}
+                                          aria-label="삭제"
+                                        >
+                                          ×
+                                        </Button>
+                                      )}
+                                    </div>
+                                    <p className="mt-1 whitespace-pre-wrap break-words">
+                                      {n.content}
+                                    </p>
+                                  </div>
+                                )
+                              })}
+                              {(!notesByStage[stage.id] || notesByStage[stage.id].length === 0) && (
+                                <p className="text-xs text-muted-foreground">
+                                  아직 등록된 의견이 없습니다.
+                                </p>
+                              )}
+                            </div>
+
+                            {/* 새 의견 입력 */}
                             <textarea
-                              className="w-full min-h-[80px] rounded-md border border-orange-200 bg-white px-3 py-2 text-sm"
-                              placeholder="판정 근거·검토 메모를 작성하세요"
-                              value={noteDraft[stage.id] ?? stage.inappropriate_note ?? ""}
+                              className="w-full min-h-[60px] rounded-md border border-orange-200 bg-white px-3 py-2 text-sm"
+                              placeholder="새 의견을 작성하세요"
+                              value={newNoteDraft[stage.id] ?? ""}
                               onChange={(e) =>
-                                setNoteDraft({ ...noteDraft, [stage.id]: e.target.value })
+                                setNewNoteDraft({ ...newNoteDraft, [stage.id]: e.target.value })
                               }
                             />
                             <div className="flex justify-end mt-2">
                               <Button
                                 size="sm"
-                                onClick={() => handleSaveNote(stage.id)}
+                                onClick={() => handleAddNote(stage.id)}
+                                disabled={!(newNoteDraft[stage.id] ?? "").trim()}
                                 loading={savingNote === stage.id}
-                                loadingText="저장 중..."
+                                loadingText="등록 중..."
                               >
-                                의견 저장
+                                의견 등록
                               </Button>
                             </div>
                           </div>

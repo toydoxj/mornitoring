@@ -5,6 +5,7 @@ from models.review_stage import ReviewStage
 from models.notification_log import NotificationLog
 from models.audit_log import AuditLog
 from models.inquiry import Inquiry
+from models.inappropriate_note import InappropriateNote
 
 __all__ = [
     "User",
@@ -13,4 +14,6 @@ __all__ = [
     "ReviewStage",
     "NotificationLog",
     "AuditLog",
+    "Inquiry",
+    "InappropriateNote",
 ]

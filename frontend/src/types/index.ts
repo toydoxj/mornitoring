@@ -34,6 +34,13 @@ export interface Building {
   is_special_structure?: boolean | null
   is_high_rise?: boolean | null
   is_multi_use?: boolean | null
+  architect_firm?: string | null
+  architect_name?: string | null
+  struct_eng_firm?: string | null
+  struct_eng_name?: string | null
+  drawing_creator_firm?: string | null
+  drawing_creator_name?: string | null
+  seismic_level?: string | null
   current_phase: string | null
   final_result: string | null
   reviewer_id: number | null
@@ -83,7 +90,6 @@ export interface ReviewStage {
   defect_type_3: string | null
   inappropriate_review_needed?: boolean
   inappropriate_decision?: InappropriateDecisionType | null
-  inappropriate_note?: string | null
 }
 
 // 역할 한글 라벨
