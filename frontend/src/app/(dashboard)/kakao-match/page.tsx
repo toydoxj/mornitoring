@@ -19,6 +19,7 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import apiClient from "@/lib/api/client"
+import { useAuthStore } from "@/stores/authStore"
 
 type UserRole = "team_leader" | "chief_secretary" | "secretary" | "reviewer"
 
@@ -72,6 +73,7 @@ const SCOPE_LABELS: Record<string, string> = {
 }
 
 export default function KakaoMatchPage() {
+  const currentUser = useAuthStore((s) => s.user)
   const [users, setUsers] = useState<UserStatus[]>([])
   const [friends, setFriends] = useState<KakaoFriend[]>([])
   const [isLoading, setIsLoading] = useState(true)
@@ -267,22 +269,32 @@ export default function KakaoMatchPage() {
                 </TableCell>
               </TableRow>
             ) : (
-              users.map((r) => (
+              users.map((r) => {
+                const isSelf = currentUser?.id === r.user_id
+                return (
                 <TableRow key={r.user_id}>
                   <TableCell>{r.user_id}</TableCell>
-                  <TableCell className="font-medium">{r.name}</TableCell>
+                  <TableCell className="font-medium">
+                    {r.name}
+                    {isSelf && <span className="ml-2 text-xs text-muted-foreground">(본인)</span>}
+                  </TableCell>
                   <TableCell>
                     <Badge variant="outline">{ROLE_LABELS[r.role]}</Badge>
                   </TableCell>
                   <TableCell className="text-sm text-muted-foreground">{r.email}</TableCell>
                   <TableCell>
-                    {r.kakao_linked ? (
+                    {isSelf ? (
+                      <Badge variant="secondary">자동 처리</Badge>
+                    ) : r.kakao_linked ? (
                       <Badge>매칭됨</Badge>
                     ) : (
                       <Badge variant="outline">미매칭</Badge>
                     )}
                   </TableCell>
                   <TableCell>
+                    {isSelf ? (
+                      <span className="text-xs text-muted-foreground">나에게 보내기 자동 사용</span>
+                    ) : (
                     <div className="flex gap-2">
                       <Button size="sm" variant="outline" onClick={() => handleOpenMatch(r)}>
                         {r.kakao_linked ? "변경" : "매칭"}
@@ -297,9 +309,11 @@ export default function KakaoMatchPage() {
                         </Button>
                       )}
                     </div>
+                    )}
                   </TableCell>
                 </TableRow>
-              ))
+                )
+              })
             )}
           </TableBody>
         </Table>

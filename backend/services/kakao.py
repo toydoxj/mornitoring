@@ -152,6 +152,44 @@ async def get_friends(access_token: str) -> list[dict]:
     return friends
 
 
+async def send_message_to_self(
+    access_token: str,
+    title: str,
+    description: str,
+    link_url: str = "",
+) -> dict:
+    """나에게 메시지 보내기 (UUID 불필요, 친구 관계 불필요)
+
+    Returns:
+        성공 시 {"result_code": 0}, 실패 시 {"error": code, "detail": ...}
+    """
+    template_object = {
+        "object_type": "text",
+        "text": f"[{title}]\n{description}",
+        "link": {
+            "web_url": link_url or "https://ksea-m.vercel.app",
+            "mobile_web_url": link_url or "https://ksea-m.vercel.app",
+        },
+    }
+
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            f"{KAKAO_API_URL}/v2/api/talk/memo/default/send",
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": "application/x-www-form-urlencoded",
+            },
+            data={
+                "template_object": json.dumps(template_object),
+            },
+        )
+
+        if response.status_code == 200:
+            return response.json()
+        else:
+            return {"error": response.status_code, "detail": response.text}
+
+
 async def send_message_to_friends(
     access_token: str,
     receiver_uuids: list[str],

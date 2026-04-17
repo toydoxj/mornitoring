@@ -13,6 +13,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import apiClient from "@/lib/api/client"
+import { useAuthStore } from "@/stores/authStore"
 
 type UserRole = "team_leader" | "chief_secretary" | "secretary" | "reviewer"
 
@@ -73,6 +74,7 @@ interface Props {
 }
 
 export function SendNotificationDialog({ open, onOpenChange, onSuccess }: Props) {
+  const currentUser = useAuthStore((s) => s.user)
   const [users, setUsers] = useState<UserStatus[]>([])
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
   const [templateType, setTemplateType] = useState<string>(TEMPLATES[0].type)
@@ -111,7 +113,10 @@ export function SendNotificationDialog({ open, onOpenChange, onSuccess }: Props)
     [users, search]
   )
 
-  const linkedFiltered = filteredUsers.filter((r) => r.kakao_linked)
+  // 본인은 "나에게 보내기"로 자동 처리되므로 kakao_linked 무관하게 발송 가능
+  const sendableFiltered = filteredUsers.filter(
+    (r) => r.kakao_linked || r.user_id === currentUser?.id
+  )
 
   const toggleId = (id: number) => {
     setSelectedIds((prev) => {
@@ -123,10 +128,10 @@ export function SendNotificationDialog({ open, onOpenChange, onSuccess }: Props)
   }
 
   const toggleAll = () => {
-    if (selectedIds.size === linkedFiltered.length) {
+    if (selectedIds.size === sendableFiltered.length) {
       setSelectedIds(new Set())
     } else {
-      setSelectedIds(new Set(linkedFiltered.map((r) => r.user_id)))
+      setSelectedIds(new Set(sendableFiltered.map((r) => r.user_id)))
     }
   }
 
@@ -254,10 +259,10 @@ export function SendNotificationDialog({ open, onOpenChange, onSuccess }: Props)
             <div className="space-y-2">
               <div className="flex items-center justify-between">
                 <Label>
-                  수신자 선택 ({selectedIds.size}명 선택됨 / 매칭된 사용자 {linkedFiltered.length}명)
+                  수신자 선택 ({selectedIds.size}명 선택됨 / 발송 가능 {sendableFiltered.length}명)
                 </Label>
                 <Button size="sm" variant="ghost" onClick={toggleAll}>
-                  {selectedIds.size === linkedFiltered.length ? "전체 해제" : "전체 선택"}
+                  {selectedIds.size === sendableFiltered.length ? "전체 해제" : "전체 선택"}
                 </Button>
               </div>
               <Input
@@ -268,7 +273,8 @@ export function SendNotificationDialog({ open, onOpenChange, onSuccess }: Props)
               <div className="max-h-[260px] overflow-y-auto rounded-md border">
                 <ul className="divide-y">
                   {filteredUsers.map((r) => {
-                    const disabled = !r.kakao_linked
+                    const isSelf = r.user_id === currentUser?.id
+                    const disabled = !r.kakao_linked && !isSelf
                     const checked = selectedIds.has(r.user_id)
                     return (
                       <li
@@ -285,16 +291,23 @@ export function SendNotificationDialog({ open, onOpenChange, onSuccess }: Props)
                           onChange={() => toggleId(r.user_id)}
                           onClick={(e) => e.stopPropagation()}
                         />
-                        <span className="font-medium">{r.name}</span>
+                        <span className="font-medium">
+                          {r.name}
+                          {isSelf && <span className="ml-1 text-xs text-muted-foreground">(본인)</span>}
+                        </span>
                         <Badge variant="outline" className="text-xs">
                           {ROLE_LABELS[r.role]}
                         </Badge>
                         <span className="text-xs text-muted-foreground">{r.email}</span>
-                        {!r.kakao_linked && (
+                        {isSelf ? (
+                          <Badge variant="secondary" className="ml-auto text-xs">
+                            나에게 보내기
+                          </Badge>
+                        ) : !r.kakao_linked ? (
                           <Badge variant="outline" className="ml-auto text-xs">
                             미매칭
                           </Badge>
-                        )}
+                        ) : null}
                       </li>
                     )
                   })}

@@ -11,7 +11,7 @@ from database import get_db
 from models.notification_log import NotificationLog
 from models.user import User, UserRole
 from routers.auth import require_roles
-from services.kakao import ensure_valid_token, send_message_to_friends
+from services.kakao import ensure_valid_token, send_message_to_friends, send_message_to_self
 
 router = APIRouter()
 
@@ -111,6 +111,7 @@ async def send_notifications(
 
     # 발송 대상 분류
     valid_targets: list[tuple[int, str, str]] = []  # (recipient_id, name, kakao_uuid)
+    self_target: tuple[int, str] | None = None  # (recipient_id, name) — 본인
     skipped_results: list[SendResultItem] = []
 
     for rid in body.recipient_ids:
@@ -120,6 +121,10 @@ async def send_notifications(
                 recipient_id=rid, recipient_name="(없음)",
                 is_sent=False, error="수신자를 찾을 수 없습니다",
             ))
+            continue
+        # 본인은 "나에게 보내기" API로 별도 처리 (UUID 불필요)
+        if rid == current_user.id:
+            self_target = (rid, user.name)
             continue
         if not user.kakao_uuid:
             skipped_results.append(SendResultItem(
@@ -136,6 +141,33 @@ async def send_notifications(
         valid_targets.append((rid, user.name, user.kakao_uuid))
 
     sent_results: list[SendResultItem] = []
+
+    # 본인에게 "나에게 보내기" 발송
+    if self_target is not None:
+        self_rid, self_name = self_target
+        self_result = await send_message_to_self(
+            access_token=access_token,
+            title=body.title,
+            description=body.message,
+            link_url=body.link_url or "",
+        )
+        self_is_sent = "error" not in self_result
+        self_error = None if self_is_sent else self_result.get("detail", "발송 실패")
+        db.add(NotificationLog(
+            recipient_id=self_rid,
+            channel="kakao_memo",
+            template_type=body.template_type,
+            title=body.title,
+            message=body.message,
+            related_building_id=body.related_building_id,
+            is_sent=self_is_sent,
+            sent_at=datetime.now(timezone.utc) if self_is_sent else None,
+            error_message=self_error,
+        ))
+        sent_results.append(SendResultItem(
+            recipient_id=self_rid, recipient_name=self_name,
+            is_sent=self_is_sent, error=self_error,
+        ))
 
     # 5명씩 배치 호출
     for i in range(0, len(valid_targets), BATCH_SIZE):
