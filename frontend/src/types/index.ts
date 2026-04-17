@@ -35,6 +35,10 @@ export interface Building {
   reviewer_name: string | null
   assigned_reviewer_name: string | null
   reviewer_registered: boolean
+  // 내 검토대상 파생 필드
+  full_address?: string | null
+  latest_result?: string | null
+  latest_inappropriate?: boolean
 }
 
 export interface BuildingListResponse {

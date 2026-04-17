@@ -82,6 +82,10 @@ class BuildingResponse(BaseModel):
     reviewer_name: str | None = None
     assigned_reviewer_name: str | None = None
     reviewer_registered: bool = False
+    # 내 검토대상 테이블용 파생 필드
+    full_address: str | None = None
+    latest_result: str | None = None
+    latest_inappropriate: bool = False
 
     model_config = {"from_attributes": True}
 
@@ -90,6 +94,23 @@ def _get_registered_names(db: Session) -> set[str]:
     """등록된 사용자 이름 목록 조회"""
     users = db.query(User.name).all()
     return {u[0] for u in users}
+
+
+def _build_full_address(b: Building) -> str | None:
+    """시도 + 시군구 + 법정동 + (본번[-부번]) + 특수지번 을 공백으로 연결"""
+    parts: list[str] = []
+    for v in (b.sido, b.sigungu, b.beopjeongdong):
+        if v:
+            parts.append(str(v))
+    main = b.main_lot_no or ""
+    sub = b.sub_lot_no or ""
+    if main and sub:
+        parts.append(f"{main}-{sub}")
+    elif main:
+        parts.append(str(main))
+    if b.special_lot_no:
+        parts.append(str(b.special_lot_no))
+    return " ".join(parts) if parts else None
 
 
 def _to_response(building: Building, registered_names: set[str]) -> dict:
@@ -103,6 +124,10 @@ def _to_response(building: Building, registered_names: set[str]) -> dict:
     elif building.assigned_reviewer_name:
         data["reviewer_name"] = building.assigned_reviewer_name
         data["reviewer_registered"] = building.assigned_reviewer_name in registered_names
+    data["full_address"] = _build_full_address(building)
+    # 최근 제출된 stage 판정/부적정 플래그 (호출부에서 셋업, 기본값 제공)
+    data.setdefault("latest_result", None)
+    data.setdefault("latest_inappropriate", False)
     return data
 
 
@@ -322,6 +347,8 @@ def my_review_buildings(
     current_user: User = Depends(require_roles(UserRole.REVIEWER, UserRole.SECRETARY, UserRole.CHIEF_SECRETARY)),
 ):
     """내가 배정된 검토 대상 건축물 목록 (검토위원/간사/총괄간사)"""
+    from models.review_stage import ReviewStage
+
     # reviewer_id 또는 assigned_reviewer_name으로 매칭
     reviewer = db.query(Reviewer).filter(Reviewer.user_id == current_user.id).first()
 
@@ -334,7 +361,32 @@ def my_review_buildings(
     total = query.count()
     buildings = query.order_by(Building.mgmt_no).offset((page - 1) * size).limit(size).all()
     registered_names = _get_registered_names(db)
-    items = [_to_response(b, registered_names) for b in buildings]
+
+    # 각 건물별 최근 제출 stage (phase_order 최대, 제출일 존재) 조회
+    building_ids = [b.id for b in buildings]
+    latest_by_building: dict[int, ReviewStage] = {}
+    if building_ids:
+        stages = (
+            db.query(ReviewStage)
+            .filter(
+                ReviewStage.building_id.in_(building_ids),
+                ReviewStage.report_submitted_at.isnot(None),
+            )
+            .order_by(ReviewStage.building_id, ReviewStage.phase_order.desc())
+            .all()
+        )
+        for s in stages:
+            if s.building_id not in latest_by_building:
+                latest_by_building[s.building_id] = s
+
+    items = []
+    for b in buildings:
+        data = _to_response(b, registered_names)
+        latest = latest_by_building.get(b.id)
+        if latest:
+            data["latest_result"] = latest.result.value if latest.result else None
+            data["latest_inappropriate"] = bool(latest.inappropriate_review_needed)
+        items.append(data)
     return BuildingListResponse(items=items, total=total)
 
 

@@ -223,30 +223,33 @@ export default function MyReviewsPage() {
         </p>
       </div>
 
-      <div className="rounded-md border bg-white">
+      <div className="rounded-md border bg-white overflow-x-auto">
         <Table>
           <TableHeader>
             <TableRow>
               <TableHead className="w-[120px]">관리번호</TableHead>
+              <TableHead className="min-w-[220px]">주소</TableHead>
               <TableHead>건물명</TableHead>
-              <TableHead>주소</TableHead>
               <TableHead className="w-[100px]">연면적(㎡)</TableHead>
               <TableHead className="w-[80px]">지상층</TableHead>
-              <TableHead className="w-[100px]">현재 단계</TableHead>
-              <TableHead className="w-[90px]">최종 판정</TableHead>
-              <TableHead className="w-[120px]">검토서</TableHead>
+              <TableHead className="w-[120px]">고위험군</TableHead>
+              <TableHead className="w-[80px] text-center">부적합</TableHead>
+              <TableHead className="w-[120px]">현재단계</TableHead>
+              <TableHead className="w-[90px]">최근판정</TableHead>
+              <TableHead className="w-[100px]">검토서</TableHead>
+              <TableHead className="w-[80px]">문의</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {isLoading ? (
               <TableRow>
-                <TableCell colSpan={8} className="h-32 text-center">
+                <TableCell colSpan={11} className="h-32 text-center">
                   로딩 중...
                 </TableCell>
               </TableRow>
             ) : data.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={8} className="h-32 text-center text-muted-foreground">
+                <TableCell colSpan={11} className="h-32 text-center text-muted-foreground">
                   배정된 검토 대상이 없습니다
                 </TableCell>
               </TableRow>
@@ -259,28 +262,39 @@ export default function MyReviewsPage() {
                   >
                     {b.mgmt_no}
                   </TableCell>
+                  <TableCell className="text-sm">{b.full_address || "-"}</TableCell>
                   <TableCell>{b.building_name || "-"}</TableCell>
-                  <TableCell>
-                    {[b.sido, b.sigungu, b.beopjeongdong].filter(Boolean).join(" ") || "-"}
+                  <TableCell className="text-right">{b.gross_area?.toLocaleString() ?? "-"}</TableCell>
+                  <TableCell className="text-right">{b.floors_above ?? "-"}</TableCell>
+                  <TableCell className="text-sm">
+                    {b.high_risk_type ? (
+                      <Badge variant="outline" className="text-xs">{b.high_risk_type}</Badge>
+                    ) : (
+                      "-"
+                    )}
                   </TableCell>
-                  <TableCell>{b.gross_area?.toLocaleString() ?? "-"}</TableCell>
-                  <TableCell>{b.floors_above ?? "-"}</TableCell>
-                  <TableCell>
+                  <TableCell className="text-center">
+                    {b.latest_inappropriate ? (
+                      <Badge variant="destructive">해당</Badge>
+                    ) : (
+                      <span className="text-muted-foreground">-</span>
+                    )}
+                  </TableCell>
+                  <TableCell className="text-sm">
                     {b.current_phase
                       ? PHASE_LABELS[b.current_phase as PhaseType] || b.current_phase
                       : "-"}
                   </TableCell>
                   <TableCell>
-                    {b.final_result ? (
-                      <Badge variant={RESULT_VARIANT[b.final_result] || "outline"}>
-                        {RESULT_LABELS[b.final_result as ResultType] || b.final_result}
+                    {b.latest_result ? (
+                      <Badge variant={RESULT_VARIANT[b.latest_result] || "outline"}>
+                        {RESULT_LABELS[b.latest_result as ResultType] || b.latest_result}
                       </Badge>
                     ) : (
-                      "-"
+                      <span className="text-muted-foreground">-</span>
                     )}
                   </TableCell>
                   <TableCell>
-                    <div className="flex gap-1">
                     <Button
                       size="sm"
                       variant="outline"
@@ -291,6 +305,8 @@ export default function MyReviewsPage() {
                     >
                       업로드
                     </Button>
+                  </TableCell>
+                  <TableCell>
                     <Button
                       size="sm"
                       variant="ghost"
@@ -302,7 +318,6 @@ export default function MyReviewsPage() {
                     >
                       문의
                     </Button>
-                    </div>
                   </TableCell>
                 </TableRow>
               ))
