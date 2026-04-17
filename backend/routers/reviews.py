@@ -141,7 +141,7 @@ async def upload_review(
                 stage.defect_type_3 = extracted["defect_type_3"]
             if extracted["review_opinion"]:
                 stage.review_opinion = extracted["review_opinion"]
-            stage.s3_file_key = upload_review_file(tmp_path, mgmt_no, phase, file.filename)
+            stage.s3_file_key = upload_review_file(tmp_path, mgmt_no, actual_phase, file.filename)
         else:
             # 새 단계 생성
             stage = ReviewStage(
@@ -155,7 +155,7 @@ async def upload_review(
                 defect_type_2=extracted["defect_type_2"],
                 defect_type_3=extracted["defect_type_3"],
                 review_opinion=extracted["review_opinion"],
-                s3_file_key=upload_review_file(tmp_path, mgmt_no, phase, file.filename),
+                s3_file_key=upload_review_file(tmp_path, mgmt_no, actual_phase, file.filename),
             )
             db.add(stage)
 
