@@ -85,6 +85,83 @@ export default function ReviewFilesPage() {
     }
   }
 
+  const [deletingGroup, setDeletingGroup] = useState<string | null>(null)
+
+  const handleDownloadThenDelete = async (phase: string, date: string) => {
+    const targetFiles = files.filter((f) => f.phase === phase && f.date === date)
+    if (targetFiles.length === 0) return
+    const confirmed = confirm(
+      `${phase} ${date} 검토서 ${targetFiles.length}건을 모두 다운로드한 뒤 삭제합니다.\n` +
+      `다운로드 시작 후 짧은 대기 시간을 두고 삭제가 진행됩니다. 계속할까요?`,
+    )
+    if (!confirmed) return
+
+    const groupKey = `${phase}|||${date}`
+    setDeletingGroup(groupKey)
+    try {
+      // 1) 다운로드 순차 트리거 — 브라우저 동시 다운로드 제한 회피용 짧은 간격
+      for (const f of targetFiles) {
+        try {
+          const { data } = await apiClient.get("/api/reviews/files/download", { params: { key: f.key } })
+          if (data.download_url) {
+            const link = document.createElement("a")
+            link.href = data.download_url
+            link.download = f.filename
+            link.click()
+          }
+        } catch {
+          // 개별 다운로드 실패는 무시 — 삭제는 계속 진행 (사용자 판단)
+        }
+        await new Promise((r) => setTimeout(r, 200))
+      }
+      // 2) 브라우저 다운로드가 큐잉될 시간을 주고 삭제 진행
+      await new Promise((r) => setTimeout(r, 1500))
+      const failed: string[] = []
+      for (const f of targetFiles) {
+        try {
+          await apiClient.delete("/api/reviews/files", { params: { key: f.key } })
+        } catch {
+          failed.push(f.filename)
+        }
+      }
+      if (failed.length > 0) {
+        alert(`일부 파일 삭제 실패 (${failed.length}건):\n${failed.slice(0, 10).join("\n")}${failed.length > 10 ? "\n..." : ""}`)
+      }
+      fetchFiles()
+    } finally {
+      setDeletingGroup(null)
+    }
+  }
+
+  const handleDeleteAll = async (phase: string, date: string) => {
+    const targetFiles = files.filter((f) => f.phase === phase && f.date === date)
+    if (targetFiles.length === 0) return
+    const confirmed = confirm(
+      `${phase} ${date} 검토서 ${targetFiles.length}건을 모두 삭제할까요?\n` +
+      `관련 검토 결과 이력은 유지되지만 S3 파일은 완전히 제거됩니다.`,
+    )
+    if (!confirmed) return
+
+    const groupKey = `${phase}|||${date}`
+    setDeletingGroup(groupKey)
+    const failed: string[] = []
+    try {
+      for (const f of targetFiles) {
+        try {
+          await apiClient.delete("/api/reviews/files", { params: { key: f.key } })
+        } catch {
+          failed.push(f.filename)
+        }
+      }
+      if (failed.length > 0) {
+        alert(`일부 파일 삭제 실패 (${failed.length}건):\n${failed.slice(0, 10).join("\n")}${failed.length > 10 ? "\n..." : ""}`)
+      }
+      fetchFiles()
+    } finally {
+      setDeletingGroup(null)
+    }
+  }
+
   // 날짜+단계별 그룹핑
   const groups: Record<string, ReviewFile[]> = {}
   for (const f of files) {
@@ -143,6 +220,24 @@ export default function ReviewFilesPage() {
                     onClick={() => handleDownloadAll(phase, date)}
                   >
                     전체 다운로드
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => handleDownloadThenDelete(phase, date)}
+                    loading={deletingGroup === `${phase}|||${date}`}
+                    loadingText="처리 중..."
+                  >
+                    다운로드 후 삭제
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="destructive"
+                    onClick={() => handleDeleteAll(phase, date)}
+                    loading={deletingGroup === `${phase}|||${date}`}
+                    loadingText="삭제 중..."
+                  >
+                    전체 삭제
                   </Button>
                 </div>
               </div>
