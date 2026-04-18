@@ -38,11 +38,26 @@ class UserResponse(BaseModel):
     is_active: bool
     must_change_password: bool = False
     kakao_linked: bool = False
+    # 카카오 동의 캐시 (로그인 시 자동 진단 결과)
+    kakao_scopes_ok: bool | None = None
+    # 동의 부족 시 본인이 클릭하여 추가 동의받을 카카오 OAuth URL
+    kakao_reauthorize_url: str | None = None
 
     model_config = {"from_attributes": True}
 
     @classmethod
     def from_user(cls, user: "User") -> "UserResponse":
+        from config import settings as _settings
+        reauthorize_url: str | None = None
+        if user.kakao_id and user.kakao_scopes_ok is False:
+            scope_param = "profile_nickname,friends,talk_message"
+            reauthorize_url = (
+                f"https://kauth.kakao.com/oauth/authorize"
+                f"?client_id={_settings.kakao_rest_api_key}"
+                f"&redirect_uri={_settings.kakao_redirect_uri}"
+                f"&response_type=code"
+                f"&scope={scope_param}"
+            )
         return cls(
             id=user.id,
             name=user.name,
@@ -52,6 +67,8 @@ class UserResponse(BaseModel):
             is_active=user.is_active,
             must_change_password=user.must_change_password,
             kakao_linked=bool(user.kakao_id),
+            kakao_scopes_ok=user.kakao_scopes_ok,
+            kakao_reauthorize_url=reauthorize_url,
         )
 
 

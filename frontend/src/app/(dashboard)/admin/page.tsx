@@ -516,9 +516,15 @@ export default function AdminPage() {
       )
       setDiagnosis(data)
     } catch (err) {
+      const axiosErr = err as {
+        response?: { status?: number; data?: { detail?: string } }
+        message?: string
+      }
+      const detail = axiosErr.response?.data?.detail
+      const status = axiosErr.response?.status
       const msg =
-        (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
-        ?? "진단 실패"
+        detail
+        ?? (status ? `진단 실패 (HTTP ${status})` : `진단 실패: ${axiosErr.message ?? "네트워크 오류"}`)
       setDiagnosis({
         user_id: user.id,
         user_name: user.name,
@@ -1305,7 +1311,25 @@ export default function AdminPage() {
                   <code className="text-xs">{diagnosis.kakao_id}</code>
                 </div>
               )}
-              {diagnosis.error ? (
+              {!diagnosis.oauth_linked ? (
+                // 본인 OAuth 미완료 — 친구 매칭이 돼 있어도 동의 진단은 본인 토큰이 필요
+                <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-amber-900 text-sm space-y-2">
+                  <p className="font-medium">본 서비스에 카카오 로그인이 필요합니다</p>
+                  <p className="text-xs">
+                    카카오 친구 메시지 발송은 가능하지만, <strong>본인 동의 항목 진단</strong>은
+                    사용자가 본 서비스에 직접 카카오 로그인(OAuth)한 후에만 가능합니다.
+                  </p>
+                  <p className="text-xs">
+                    👉 사용자에게 안내: <code>https://ksea-m.vercel.app/login</code> 에서 카카오 로그인 1회 완료
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    카카오 매칭됐다면 <strong>&ldquo;동의 안내&rdquo;</strong> 버튼으로 카카오 메시지로 안내 가능합니다.
+                  </p>
+                  {diagnosis.error && (
+                    <p className="text-xs text-amber-700 mt-1">서버 응답: {diagnosis.error}</p>
+                  )}
+                </div>
+              ) : diagnosis.error ? (
                 <div className="rounded-md border border-red-200 bg-red-50 p-3 text-red-700">
                   {diagnosis.error}
                 </div>
