@@ -98,7 +98,11 @@ export default function AdminPage() {
 
   // 엑셀 일괄 등록
   const [bulkUploading, setBulkUploading] = useState(false)
-  const [bulkResult, setBulkResult] = useState<{ created: number; skipped: number } | null>(null)
+  const [bulkResult, setBulkResult] = useState<{
+    created: number
+    skipped: number
+    accounts?: { email: string; name: string; initial_password: string }[]
+  } | null>(null)
 
   // 수정 다이얼로그
   const [editTarget, setEditTarget] = useState<User | null>(null)
@@ -168,10 +172,11 @@ export default function AdminPage() {
     setSubmitting(true)
     setError("")
     try {
-      await apiClient.post("/api/users", formData)
+      const { data } = await apiClient.post<{ initial_password: string }>("/api/users", formData)
       setCreateOpen(false)
       setFormData({ name: "", email: "", role: "reviewer", phone: "" })
       fetchUsers()
+      alert(`등록 완료\n초기 비밀번호: ${data.initial_password}\n(사용자에게 전달하고, 최초 로그인 시 변경하도록 안내하세요)`)
     } catch (err: unknown) {
       const axiosErr = err as { response?: { data?: { detail?: string } } }
       setError(axiosErr.response?.data?.detail || "등록 실패")
@@ -227,10 +232,12 @@ export default function AdminPage() {
   }
 
   const handleResetPassword = async (userId: number, userName: string) => {
-    if (!confirm(`${userName}의 비밀번호를 초기화(ksea)하시겠습니까?`)) return
+    if (!confirm(`${userName}의 비밀번호를 초기화하시겠습니까?`)) return
     try {
-      await apiClient.post(`/api/users/${userId}/reset-password`)
-      alert(`${userName}의 비밀번호가 초기화되었습니다`)
+      const { data } = await apiClient.post<{ initial_password: string }>(
+        `/api/users/${userId}/reset-password`
+      )
+      alert(`${userName}의 비밀번호가 초기화되었습니다\n초기 비밀번호: ${data.initial_password}\n(사용자에게 전달하세요)`)
     } catch (err) {
       console.error("초기화 실패:", err)
     }
@@ -359,9 +366,24 @@ export default function AdminPage() {
             </span>
           </label>
           {bulkResult && (
-            <span className="text-xs text-muted-foreground">
-              등록 {bulkResult.created}명 / 스킵 {bulkResult.skipped}명
-            </span>
+            <div className="w-full space-y-2">
+              <span className="text-xs text-muted-foreground">
+                등록 {bulkResult.created}명 / 스킵 {bulkResult.skipped}명
+              </span>
+              {bulkResult.accounts && bulkResult.accounts.length > 0 && (
+                <textarea
+                  readOnly
+                  className="w-full rounded-md border p-2 text-xs font-mono"
+                  rows={Math.min(bulkResult.accounts.length + 1, 12)}
+                  value={
+                    "이메일\t이름\t초기비밀번호\n" +
+                    bulkResult.accounts
+                      .map((a) => `${a.email}\t${a.name}\t${a.initial_password}`)
+                      .join("\n")
+                  }
+                />
+              )}
+            </div>
           )}
           <Button onClick={() => setCreateOpen(true)}>사용자 등록</Button>
         </div>
@@ -572,7 +594,7 @@ export default function AdminPage() {
               />
             </div>
             <p className="text-sm text-muted-foreground">
-              초기 비밀번호는 <strong>ksea</strong>로 설정됩니다. 최초 로그인 시 변경됩니다.
+              등록 완료 시 일회용 초기 비밀번호가 화면에 표시됩니다. 사용자에게 전달하고 최초 로그인 시 변경하도록 안내해주세요.
             </p>
             {error && <p className="text-sm text-red-500">{error}</p>}
             <Button type="submit" className="w-full" loading={submitting} loadingText="등록 중...">

@@ -10,6 +10,7 @@ function KakaoCallbackContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const code = searchParams.get("code")
+  const state = searchParams.get("state")
   const [status, setStatus] = useState(
     code ? "카카오 로그인 처리 중..." : "인가 코드가 없습니다"
   )
@@ -20,7 +21,9 @@ function KakaoCallbackContent() {
 
     const handleCallback = async () => {
       try {
-        const { data } = await apiClient.get(`/api/auth/kakao/callback?code=${code}`)
+        const params = new URLSearchParams({ code })
+        if (state) params.set("state", state)
+        const { data } = await apiClient.get(`/api/auth/kakao/callback?${params.toString()}`)
 
         // 계정 연결 필요
         if (data.need_link) {
@@ -46,7 +49,7 @@ function KakaoCallbackContent() {
     }
 
     handleCallback()
-  }, [code, router, fetchMe])
+  }, [code, state, router, fetchMe])
 
   return (
     <Card className="w-full max-w-md">

@@ -78,9 +78,11 @@ async def import_excel(
 @router.get("/export")
 def export_excel(
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(
+        require_roles(UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY, UserRole.SECRETARY)
+    ),
 ):
-    """DB 데이터를 통합관리대장 형식의 엑셀로 export"""
+    """DB 데이터를 통합관리대장 형식의 엑셀로 export (팀장/총괄간사/간사)"""
     output = export_ledger(db)
     return StreamingResponse(
         output,

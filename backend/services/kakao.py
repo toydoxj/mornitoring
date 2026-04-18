@@ -1,9 +1,11 @@
 """카카오 API 서비스 (로그인 + 친구에게 보내기)"""
 
 import json
+import secrets
 from datetime import datetime, timedelta, timezone
 
 import httpx
+from jose import JWTError, jwt
 from sqlalchemy.orm import Session
 
 from config import settings
@@ -13,14 +15,37 @@ KAKAO_AUTH_URL = "https://kauth.kakao.com"
 KAKAO_API_URL = "https://kapi.kakao.com"
 
 
+def generate_oauth_state() -> str:
+    """CSRF 방어용 state JWT 생성 (10분 유효)."""
+    exp = datetime.now(timezone.utc) + timedelta(minutes=10)
+    return jwt.encode(
+        {"nonce": secrets.token_urlsafe(16), "exp": int(exp.timestamp())},
+        settings.jwt_secret_key,
+        algorithm=settings.jwt_algorithm,
+    )
+
+
+def verify_oauth_state(state: str) -> bool:
+    """state JWT 검증 — 서명·만료 확인."""
+    if not state:
+        return False
+    try:
+        jwt.decode(state, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm])
+        return True
+    except JWTError:
+        return False
+
+
 def get_authorize_url() -> str:
-    """카카오 로그인 인가 URL 생성"""
+    """카카오 로그인 인가 URL 생성 (CSRF state 포함)."""
+    state = generate_oauth_state()
     return (
         f"{KAKAO_AUTH_URL}/oauth/authorize"
         f"?client_id={settings.kakao_rest_api_key}"
         f"&redirect_uri={settings.kakao_redirect_uri}"
         f"&response_type=code"
         f"&scope=profile_nickname,friends,talk_message"
+        f"&state={state}"
     )
 
 

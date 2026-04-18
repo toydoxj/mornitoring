@@ -1,5 +1,6 @@
 """사용자 관리 라우터"""
 
+import secrets
 import tempfile
 from pathlib import Path
 
@@ -16,7 +17,11 @@ from routers.auth import get_current_user, get_password_hash, require_roles
 
 router = APIRouter()
 
-DEFAULT_PASSWORD = "ksea"
+
+def _generate_initial_password() -> str:
+    """일회용 초기 비밀번호 생성 (12자 URL-safe). 구두/이메일로 전달 가능."""
+    return secrets.token_urlsafe(9)
+
 
 ROLE_MAP = {
     "팀장": UserRole.TEAM_LEADER,
@@ -61,6 +66,29 @@ class UserResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class UserCreateResponse(UserResponse):
+    """사용자 신규 생성 응답 — 일회용 초기 비밀번호 포함."""
+    initial_password: str
+
+
+class BulkImportAccount(BaseModel):
+    email: str
+    name: str
+    initial_password: str
+
+
+class BulkImportResponse(BaseModel):
+    created: int
+    skipped: int
+    errors: list[str] = []
+    accounts: list[BulkImportAccount] = []
+
+
+class ResetPasswordResponse(BaseModel):
+    message: str
+    initial_password: str
+
+
 class UserListResponse(BaseModel):
     items: list[UserResponse]
     total: int
@@ -98,7 +126,7 @@ def list_users(
     return UserListResponse(items=items, total=total)
 
 
-@router.post("", response_model=UserResponse, status_code=201)
+@router.post("", response_model=UserCreateResponse, status_code=201)
 def create_user(
     body: UserCreate,
     db: Session = Depends(get_db),
@@ -106,25 +134,37 @@ def create_user(
         require_roles(UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY)
     ),
 ):
-    """사용자 등록 (팀장/총괄간사만)"""
+    """사용자 등록 (팀장/총괄간사). 일회용 초기 비밀번호를 응답으로 반환."""
     if db.query(User).filter(User.email == body.email).first():
         raise HTTPException(status_code=409, detail="이미 등록된 이메일입니다")
 
+    initial_password = _generate_initial_password()
     user = User(
         name=body.name,
         email=body.email,
         role=body.role,
         phone=body.phone,
-        password_hash=get_password_hash(DEFAULT_PASSWORD),
+        password_hash=get_password_hash(initial_password),
         must_change_password=True,
     )
     db.add(user)
     db.commit()
     db.refresh(user)
-    return user
+    return UserCreateResponse(
+        id=user.id,
+        name=user.name,
+        email=user.email,
+        role=user.role,
+        phone=user.phone,
+        is_active=user.is_active,
+        kakao_linked=bool(user.kakao_id),
+        kakao_matched=bool(user.kakao_uuid),
+        kakao_uuid=user.kakao_uuid,
+        initial_password=initial_password,
+    )
 
 
-@router.post("/import-excel")
+@router.post("/import-excel", response_model=BulkImportResponse)
 async def import_users_excel(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
@@ -132,7 +172,7 @@ async def import_users_excel(
         require_roles(UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY)
     ),
 ):
-    """사용자 일괄 등록 (엑셀)
+    """사용자 일괄 등록 (엑셀). 각 신규 계정의 일회용 초기 비밀번호를 응답에 포함.
 
     엑셀 형식: A열=이름, B열=이메일, C열=역할(팀장/총괄간사/간사/검토위원), D열=전화번호(선택)
     """
@@ -150,7 +190,8 @@ async def import_users_excel(
 
         created = 0
         skipped = 0
-        errors = []
+        errors: list[str] = []
+        accounts: list[BulkImportAccount] = []
 
         for row_idx, row in enumerate(ws.iter_rows(min_row=2), start=2):
             name = str(row[0].value).strip() if row[0].value else None
@@ -169,20 +210,26 @@ async def import_users_excel(
                 skipped += 1
                 continue
 
+            initial_password = _generate_initial_password()
             user = User(
                 name=name,
                 email=email,
                 role=role,
                 phone=phone,
-                password_hash=get_password_hash(DEFAULT_PASSWORD),
+                password_hash=get_password_hash(initial_password),
                 must_change_password=True,
             )
             db.add(user)
+            accounts.append(BulkImportAccount(
+                email=email, name=name, initial_password=initial_password,
+            ))
             created += 1
 
         db.commit()
         wb.close()
-        return {"created": created, "skipped": skipped, "errors": errors}
+        return BulkImportResponse(
+            created=created, skipped=skipped, errors=errors, accounts=accounts,
+        )
 
     finally:
         tmp_path.unlink(missing_ok=True)
@@ -249,7 +296,7 @@ def delete_user(
     db.commit()
 
 
-@router.post("/{user_id}/reset-password")
+@router.post("/{user_id}/reset-password", response_model=ResetPasswordResponse)
 def reset_password(
     user_id: int,
     db: Session = Depends(get_db),
@@ -257,12 +304,16 @@ def reset_password(
         require_roles(UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY)
     ),
 ):
-    """비밀번호 초기화 (팀장/총괄간사)"""
+    """비밀번호 초기화 (팀장/총괄간사). 일회용 초기 비밀번호를 응답으로 반환."""
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다")
 
-    user.password_hash = get_password_hash(DEFAULT_PASSWORD)
+    initial_password = _generate_initial_password()
+    user.password_hash = get_password_hash(initial_password)
     user.must_change_password = True
     db.commit()
-    return {"message": f"{user.name}의 비밀번호가 초기화되었습니다"}
+    return ResetPasswordResponse(
+        message=f"{user.name}의 비밀번호가 초기화되었습니다",
+        initial_password=initial_password,
+    )

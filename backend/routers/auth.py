@@ -1,5 +1,6 @@
 """인증 라우터 (JWT + 카카오 OAuth2)"""
 
+import logging
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -15,6 +16,7 @@ from models.user import User, UserRole
 
 router = APIRouter()
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
+logger = logging.getLogger(__name__)
 
 
 # --- Pydantic 스키마 ---
@@ -141,15 +143,24 @@ def kakao_login():
 
 
 @router.get("/kakao/callback")
-async def kakao_callback(code: str, db: Session = Depends(get_db)):
+async def kakao_callback(
+    code: str,
+    state: str | None = None,
+    db: Session = Depends(get_db),
+):
     """카카오 인가 코드 → 토큰 교환 → 사용자 조회/생성 → JWT 발급"""
-    from services.kakao import exchange_code, get_user_info
+    from services.kakao import exchange_code, get_user_info, verify_oauth_state
+
+    # CSRF 방어: state JWT 검증
+    if not verify_oauth_state(state or ""):
+        raise HTTPException(status_code=400, detail="유효하지 않은 로그인 요청입니다")
 
     # 카카오 토큰 교환
     try:
         kakao_tokens = await exchange_code(code)
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"카카오 토큰 교환 실패: {str(e)}")
+    except Exception:
+        logger.exception("카카오 토큰 교환 실패")
+        raise HTTPException(status_code=400, detail="카카오 로그인 처리 중 오류가 발생했습니다")
 
     kakao_access = kakao_tokens.get("access_token")
     if not kakao_access:
@@ -161,8 +172,9 @@ async def kakao_callback(code: str, db: Session = Depends(get_db)):
     # 카카오 사용자 정보
     try:
         kakao_user = await get_user_info(kakao_access)
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"카카오 사용자 정보 조회 실패: {str(e)}")
+    except Exception:
+        logger.exception("카카오 사용자 정보 조회 실패")
+        raise HTTPException(status_code=400, detail="카카오 로그인 처리 중 오류가 발생했습니다")
     kakao_id = str(kakao_user["id"])
     # 닉네임: properties.nickname 또는 kakao_account.profile.nickname
     kakao_name = (
@@ -244,8 +256,8 @@ def change_password(
     if not verify_password(body.current_password, current_user.password_hash):
         raise HTTPException(status_code=400, detail="현재 비밀번호가 올바르지 않습니다")
 
-    if len(body.new_password) < 4:
-        raise HTTPException(status_code=400, detail="새 비밀번호는 4자 이상이어야 합니다")
+    if len(body.new_password) < 8:
+        raise HTTPException(status_code=400, detail="새 비밀번호는 8자 이상이어야 합니다")
 
     current_user.password_hash = get_password_hash(body.new_password)
     current_user.must_change_password = False
