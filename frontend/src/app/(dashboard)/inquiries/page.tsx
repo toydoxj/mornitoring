@@ -1,6 +1,7 @@
 "use client"
 
 import { useEffect, useState } from "react"
+import Link from "next/link"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -17,6 +18,7 @@ import { PHASE_LABELS } from "@/types"
 
 interface InquiryItem {
   id: number
+  building_id: number
   mgmt_no: string
   phase: string
   submitter_name: string
@@ -145,7 +147,14 @@ export default function InquiriesPage() {
               ) : (
                 activeData.map((item) => (
                   <TableRow key={item.id}>
-                    <TableCell className="font-mono text-sm">{item.mgmt_no}</TableCell>
+                    <TableCell className="font-mono text-sm">
+                      <Link
+                        href={`/buildings/${item.building_id}`}
+                        className="text-primary hover:underline"
+                      >
+                        {item.mgmt_no}
+                      </Link>
+                    </TableCell>
                     <TableCell className="text-sm">{item.submitter_name}</TableCell>
                     <TableCell>
                       <Badge variant="outline" className="text-xs">
@@ -210,7 +219,14 @@ export default function InquiriesPage() {
               <TableBody>
                 {closedData.map((item) => (
                   <TableRow key={item.id} className="text-muted-foreground">
-                    <TableCell className="font-mono text-sm">{item.mgmt_no}</TableCell>
+                    <TableCell className="font-mono text-sm">
+                      <Link
+                        href={`/buildings/${item.building_id}`}
+                        className="text-primary hover:underline"
+                      >
+                        {item.mgmt_no}
+                      </Link>
+                    </TableCell>
                     <TableCell className="text-sm">{item.submitter_name}</TableCell>
                     <TableCell>
                       <Badge variant="outline" className="text-xs">

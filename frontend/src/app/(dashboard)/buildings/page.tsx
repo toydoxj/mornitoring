@@ -65,6 +65,8 @@ export default function BuildingsPage() {
   const pageSize = 50
 
   const canManage = user && ["team_leader", "chief_secretary", "secretary"].includes(user.role)
+  // 통합관리대장 업로드는 총괄간사에게만 허용
+  const canUploadLedger = user?.role === "chief_secretary"
 
   const handleExport = async () => {
     try {
@@ -304,7 +306,7 @@ export default function BuildingsPage() {
               검토위원 배정
             </Button>
           )}
-          {canManage && (
+          {canUploadLedger && (
             <Dialog open={uploadOpen} onOpenChange={setUploadOpen}>
               <Button onClick={() => setUploadOpen(true)}>엑셀 업로드</Button>
               <DialogContent>

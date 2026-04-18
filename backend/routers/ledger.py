@@ -11,6 +11,7 @@ from database import get_db
 from dependencies import stream_upload_to_tempfile
 from models.user import User, UserRole
 from routers.auth import get_current_user, require_roles
+from services.audit import log_action
 from engines.ledger_import import import_ledger
 from engines.ledger_import_2025 import import_ledger_2025
 from engines.ledger_import_unified import import_ledger_unified
@@ -49,11 +50,9 @@ def _detect_format(file_path: Path) -> str:
 async def import_excel(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
-    current_user: User = Depends(
-        require_roles(UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY, UserRole.SECRETARY)
-    ),
+    current_user: User = Depends(require_roles(UserRole.CHIEF_SECRETARY)),
 ):
-    """통합관리대장 엑셀 파일을 DB에 import (형식 자동 감지)"""
+    """통합관리대장 엑셀 파일을 DB에 import (총괄간사 전용, 형식 자동 감지)"""
     if not file.filename or not file.filename.endswith((".xlsx", ".xls")):
         raise HTTPException(status_code=400, detail="엑셀 파일(.xlsx)만 업로드 가능합니다")
 
@@ -67,6 +66,12 @@ async def import_excel(
             result = import_ledger_2025(tmp_path, db)
         else:
             result = import_ledger(tmp_path, db)
+        summary = result if isinstance(result, dict) else {"result": str(result)}
+        log_action(
+            db, current_user.id, "upload", "ledger",
+            after_data={"filename": file.filename, "format": fmt, **summary},
+        )
+        db.commit()
         return result
     finally:
         tmp_path.unlink(missing_ok=True)
