@@ -2,16 +2,64 @@
 
 import asyncio
 import logging
+import time
+import uuid
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from config import settings
 from database import SessionLocal
+from logging_config import log_event, setup_logging
 from routers import auth, users, buildings, ledger, assignments, reviews, audit, distribution, notifications, kakao, announcements, discussions
 
+setup_logging()
 logger = logging.getLogger(__name__)
+
+
+class RequestLoggingMiddleware(BaseHTTPMiddleware):
+    """요청 단위 요약 로깅 + X-Request-ID 부여.
+
+    바디는 절대 남기지 않는다. 4xx는 warning, 5xx는 error로 자동 분류.
+    Render 등 클라우드 로그에서 `event=request status=5` 같이 grep 가능.
+    """
+
+    async def dispatch(self, request: Request, call_next):
+        request_id = uuid.uuid4().hex[:12]
+        request.state.request_id = request_id
+        start = time.perf_counter()
+        try:
+            response = await call_next(request)
+        except Exception:
+            duration_ms = int((time.perf_counter() - start) * 1000)
+            log_event(
+                "error",
+                "request_unhandled_exception",
+                method=request.method,
+                path=request.url.path,
+                duration_ms=duration_ms,
+                request_id=request_id,
+            )
+            raise
+        duration_ms = int((time.perf_counter() - start) * 1000)
+        status = response.status_code
+        response.headers["X-Request-ID"] = request_id
+        # health check 200은 노이즈라 로깅 생략 (헤더는 항상 부여)
+        if request.url.path == "/api/health" and 200 <= status < 300:
+            return response
+        level = "error" if status >= 500 else ("warning" if status >= 400 else "info")
+        log_event(
+            level,
+            "request",
+            method=request.method,
+            path=request.url.path,
+            status=status,
+            duration_ms=duration_ms,
+            request_id=request_id,
+        )
+        return response
 
 # 만료/소비된 카카오 연결 세션 청소 주기 (30분)
 LINK_SESSION_PURGE_INTERVAL_SECONDS = 1800
@@ -27,13 +75,14 @@ async def _purge_expired_link_sessions_loop() -> None:
             try:
                 deleted = purge_expired_link_sessions(db)
                 if deleted:
-                    logger.info("kakao_link_sessions 정리: %d행 삭제", deleted)
+                    log_event("info", "kakao_link_session_purge", deleted=deleted)
             finally:
                 db.close()
         except asyncio.CancelledError:
             raise
         except Exception:
             logger.exception("kakao_link_sessions 정리 실패")
+            log_event("error", "kakao_link_session_purge_failed")
 
 
 @asynccontextmanager
@@ -55,6 +104,9 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+
+# 요청 로깅 (CORS보다 먼저 add → 실제 처리 시 가장 바깥에서 감쌈)
+app.add_middleware(RequestLoggingMiddleware)
 
 # CORS 설정 (프론트엔드 연동) — 허용 origin은 .env의 CORS_ORIGINS로 관리
 app.add_middleware(

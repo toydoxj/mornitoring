@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from config import settings
 from database import get_db
+from logging_config import log_event
 from models.user import User, UserRole
 
 router = APIRouter()
@@ -125,8 +126,10 @@ def login(
     """이메일/비밀번호 로그인"""
     user = db.query(User).filter(User.email == form_data.username).first()
     if not user or not user.password_hash:
+        log_event("warning", "auth_login_failed", email=form_data.username, reason="user_not_found")
         raise HTTPException(status_code=401, detail="이메일 또는 비밀번호가 올바르지 않습니다")
     if not verify_password(form_data.password, user.password_hash):
+        log_event("warning", "auth_login_failed", email=form_data.username, reason="bad_password")
         raise HTTPException(status_code=401, detail="이메일 또는 비밀번호가 올바르지 않습니다")
 
     access_token = create_access_token({"sub": str(user.id), "role": user.role.value})
@@ -159,6 +162,7 @@ async def kakao_callback(
 
     # CSRF 방어: state JWT 검증
     if not verify_oauth_state(state or ""):
+        log_event("warning", "kakao_callback_invalid_state")
         raise HTTPException(status_code=400, detail="유효하지 않은 로그인 요청입니다")
 
     # 카카오 토큰 교환
@@ -166,6 +170,7 @@ async def kakao_callback(
         kakao_tokens = await exchange_code(code)
     except Exception:
         logger.exception("카카오 토큰 교환 실패")
+        log_event("error", "kakao_token_exchange_failed")
         raise HTTPException(status_code=400, detail="카카오 로그인 처리 중 오류가 발생했습니다")
 
     kakao_access = kakao_tokens.get("access_token")
@@ -180,6 +185,7 @@ async def kakao_callback(
         kakao_user = await get_user_info(kakao_access)
     except Exception:
         logger.exception("카카오 사용자 정보 조회 실패")
+        log_event("error", "kakao_user_info_failed")
         raise HTTPException(status_code=400, detail="카카오 로그인 처리 중 오류가 발생했습니다")
     kakao_id = str(kakao_user["id"])
     # 닉네임: properties.nickname 또는 kakao_account.profile.nickname
@@ -245,12 +251,15 @@ def link_account(body: LinkAccountRequest, db: Session = Depends(get_db)):
 
     session = lock_link_session(db, body.link_session_id)
     if session is None:
+        log_event("warning", "link_account_invalid_session")
         raise invalid_session
 
     user = db.query(User).filter(User.email == body.email).first()
     if not user or not user.password_hash:
+        log_event("warning", "link_account_bad_credentials", email=body.email, reason="user_not_found")
         raise invalid_credentials
     if not verify_password(body.password, user.password_hash):
+        log_event("warning", "link_account_bad_credentials", email=body.email, reason="bad_password")
         raise invalid_credentials
 
     # 이미 다른 카카오 계정이 연결된 사용자

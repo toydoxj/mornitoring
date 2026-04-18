@@ -116,7 +116,7 @@ export default function InappropriateReviewPage() {
       <div>
         <h1 className="text-2xl font-bold">부적합 대상 검토</h1>
         <p className="text-sm text-muted-foreground">
-          검토위원이 "부적정 사례 검토 필요" 체크한 검토 건 ({items.length}건)
+          검토위원이 &ldquo;부적정 사례 검토 필요&rdquo; 체크한 검토 건 ({items.length}건)
         </p>
       </div>
 

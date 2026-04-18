@@ -11,6 +11,7 @@ from database import get_db
 from models.notification_log import NotificationLog
 from models.user import User, UserRole
 from routers.auth import require_roles
+from logging_config import log_event
 from services.kakao import ensure_valid_token, send_message_to_friends, send_message_to_self
 
 router = APIRouter()
@@ -153,6 +154,12 @@ async def send_notifications(
         )
         self_is_sent = "error" not in self_result
         self_error = None if self_is_sent else self_result.get("detail", "발송 실패")
+        if not self_is_sent:
+            log_event(
+                "error", "kakao_message_self_failed",
+                recipient_id=self_rid,
+                reason=self_result.get("error", "unknown"),
+            )
         db.add(NotificationLog(
             recipient_id=self_rid,
             channel="kakao_memo",
@@ -199,6 +206,10 @@ async def send_notifications(
                     failure_msg_by_uuid.get(uuid)
                     or api_error_msg
                     or "발송 실패"
+                )
+                log_event(
+                    "error", "kakao_message_friend_failed",
+                    recipient_id=rid, reason=error_msg,
                 )
 
             log = NotificationLog(
