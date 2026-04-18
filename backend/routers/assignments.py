@@ -1,6 +1,5 @@
 """검토위원 배정 라우터"""
 
-import tempfile
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
@@ -8,7 +7,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from database import get_db
-from dependencies import read_upload_limited
+from dependencies import stream_upload_to_tempfile
 from models.building import Building
 from models.reviewer import Reviewer
 from models.user import User, UserRole
@@ -106,10 +105,7 @@ async def preview_assignment_excel(
     if not file.filename or not file.filename.endswith((".xlsx", ".xls")):
         raise HTTPException(status_code=400, detail="엑셀 파일(.xlsx)만 업로드 가능합니다")
 
-    content = await read_upload_limited(file, max_mb=10)
-    with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
-        tmp.write(content)
-        tmp_path = Path(tmp.name)
+    tmp_path = await stream_upload_to_tempfile(file, max_mb=10, suffix=".xlsx")
 
     try:
         return preview_assignment(tmp_path, db)
@@ -129,10 +125,7 @@ async def apply_assignment_excel(
     if not file.filename or not file.filename.endswith((".xlsx", ".xls")):
         raise HTTPException(status_code=400, detail="엑셀 파일(.xlsx)만 업로드 가능합니다")
 
-    content = await read_upload_limited(file, max_mb=10)
-    with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
-        tmp.write(content)
-        tmp_path = Path(tmp.name)
+    tmp_path = await stream_upload_to_tempfile(file, max_mb=10, suffix=".xlsx")
 
     try:
         return apply_assignment(tmp_path, db)

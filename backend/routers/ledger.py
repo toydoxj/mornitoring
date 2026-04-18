@@ -1,6 +1,5 @@
 """통합관리대장 엑셀 Import/Export 라우터"""
 
-import tempfile
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException
@@ -9,7 +8,7 @@ from openpyxl import load_workbook
 from sqlalchemy.orm import Session
 
 from database import get_db
-from dependencies import read_upload_limited
+from dependencies import stream_upload_to_tempfile
 from models.user import User, UserRole
 from routers.auth import get_current_user, require_roles
 from engines.ledger_import import import_ledger
@@ -58,10 +57,7 @@ async def import_excel(
     if not file.filename or not file.filename.endswith((".xlsx", ".xls")):
         raise HTTPException(status_code=400, detail="엑셀 파일(.xlsx)만 업로드 가능합니다")
 
-    content = await read_upload_limited(file, max_mb=20)  # 통합관리대장은 큼
-    with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
-        tmp.write(content)
-        tmp_path = Path(tmp.name)
+    tmp_path = await stream_upload_to_tempfile(file, max_mb=20, suffix=".xlsx")  # 통합관리대장은 큼
 
     try:
         fmt = _detect_format(tmp_path)

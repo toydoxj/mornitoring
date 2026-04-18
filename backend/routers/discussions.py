@@ -10,7 +10,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from database import get_db
-from dependencies import read_upload_limited
+from dependencies import stream_upload_to_tempfile
 from models.discussion import Discussion, DiscussionComment, DiscussionAttachment
 from models.user import User, UserRole
 from routers.auth import get_current_user
@@ -298,11 +298,8 @@ async def upload_attachment(
     if not file.filename:
         raise HTTPException(status_code=400, detail="파일이 없습니다")
 
-    content = await read_upload_limited(file, max_mb=20)  # 첨부 (이미지/문서)
     suffix = Path(file.filename).suffix
-    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-        tmp.write(content)
-        tmp_path = Path(tmp.name)
+    tmp_path = await stream_upload_to_tempfile(file, max_mb=20, suffix=suffix)
     try:
         unique = uuid.uuid4().hex[:8]
         s3_key = f"discussions/{discussion_id}/{unique}_{file.filename}"

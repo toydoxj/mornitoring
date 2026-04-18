@@ -115,7 +115,13 @@ async def get_current_user(
     except JWTError:
         raise credentials_exception
 
-    user = db.query(User).filter(User.id == int(sub)).first()
+    # JWT는 유효해도 sub가 형식 이상(예: 숫자 변환 실패)인 케이스 방어 — 500 대신 401
+    try:
+        user_id = int(sub)
+    except (TypeError, ValueError):
+        raise credentials_exception
+
+    user = db.query(User).filter(User.id == user_id).first()
     if user is None or not user.is_active:
         raise credentials_exception
     return user

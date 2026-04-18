@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from database import get_db
-from dependencies import read_upload_limited
+from dependencies import stream_upload_to_tempfile
 from models.building import Building
 from models.review_stage import ReviewStage, PhaseType
 from models.reviewer import Reviewer
@@ -115,10 +115,9 @@ async def preview_upload(
     # 비용 큰 파일 파싱 전에 fail-fast로 권한 검증
     _ensure_reviewer_can_access_building(building, current_user, db)
 
-    content = await read_upload_limited(file, max_mb=10)
-    with tempfile.NamedTemporaryFile(suffix=Path(file.filename).suffix, delete=False) as tmp:
-        tmp.write(content)
-        tmp_path = Path(tmp.name)
+    tmp_path = await stream_upload_to_tempfile(
+        file, max_mb=10, suffix=Path(file.filename).suffix
+    )
 
     try:
         # 업로드 단계 매핑 (receive → submit)
@@ -370,10 +369,9 @@ async def upload_review(
     _ensure_reviewer_can_access_building(building, current_user, db)
 
     # 임시 파일 저장
-    content = await read_upload_limited(file, max_mb=10)
-    with tempfile.NamedTemporaryFile(suffix=Path(file.filename).suffix, delete=False) as tmp:
-        tmp.write(content)
-        tmp_path = Path(tmp.name)
+    tmp_path = await stream_upload_to_tempfile(
+        file, max_mb=10, suffix=Path(file.filename).suffix
+    )
 
     try:
         # 1. PhaseType 변환 (접수 단계 → 검토서 제출 단계)
