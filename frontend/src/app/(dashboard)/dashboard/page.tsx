@@ -218,59 +218,62 @@ export default function DashboardPage() {
         </p>
       </div>
 
-      {/* 단계별 검토 (간사 이상) */}
+      {/* 단계별 집계 / 현황 — 한 줄 2박스 (xl 이상), 그 이하는 세로 */}
       {isAdmin && stats && (
-        <>
-          <Card>
+        <div className="grid gap-4 xl:grid-cols-5">
+          <Card className="xl:col-span-3">
             <CardHeader>
-              <CardTitle>단계별 검토</CardTitle>
+              <CardTitle>단계별 집계</CardTitle>
             </CardHeader>
             <CardContent>
               <FlowStages stats={stats} />
             </CardContent>
           </Card>
 
-          {/* 현황: 검토서 미접수 / 업로드된 검토서 / 문의사항 */}
-          <div>
-            <h2 className="text-lg font-bold mb-2">현황</h2>
-            <div className="grid gap-4 md:grid-cols-3">
-              <BreakdownCard
-                title="검토서 미접수"
-                total={stats.docs_waiting_review_preliminary + stats.docs_waiting_review_supplement}
-                accent="blue"
-                items={[
-                  { label: "예비", value: stats.docs_waiting_review_preliminary },
-                  { label: "보완", value: stats.docs_waiting_review_supplement },
-                ]}
-              />
-              <BreakdownCard
-                title="업로드된 검토서"
-                total={stats.uploaded_reports_preliminary + stats.uploaded_reports_supplement}
-                accent="slate"
-                onClick={canManageReports ? () => router.push("/review-files") : undefined}
-                items={[
-                  { label: "예비", value: stats.uploaded_reports_preliminary },
-                  { label: "보완", value: stats.uploaded_reports_supplement },
-                ]}
-              />
-              <BreakdownCard
-                title="문의사항"
-                total={
-                  stats.inquiry_counts.open +
-                  stats.inquiry_counts.asking_agency +
-                  stats.inquiry_counts.completed
-                }
-                accent="amber"
-                onClick={() => router.push("/inquiries")}
-                items={[
-                  { label: "접수", value: stats.inquiry_counts.open },
-                  { label: "관리원문의", value: stats.inquiry_counts.asking_agency },
-                  { label: "완료", value: stats.inquiry_counts.completed },
-                ]}
-              />
-            </div>
-          </div>
-        </>
+          <Card className="xl:col-span-2">
+            <CardHeader>
+              <CardTitle>현황</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="grid gap-3 sm:grid-cols-3 xl:grid-cols-3">
+                <BreakdownCard
+                  title="검토서 미접수"
+                  total={stats.docs_waiting_review_preliminary + stats.docs_waiting_review_supplement}
+                  accent="blue"
+                  items={[
+                    { label: "예비", value: stats.docs_waiting_review_preliminary },
+                    { label: "보완", value: stats.docs_waiting_review_supplement },
+                  ]}
+                />
+                <BreakdownCard
+                  title="업로드된 검토서"
+                  total={stats.uploaded_reports_preliminary + stats.uploaded_reports_supplement}
+                  accent="slate"
+                  onClick={canManageReports ? () => router.push("/review-files") : undefined}
+                  items={[
+                    { label: "예비", value: stats.uploaded_reports_preliminary },
+                    { label: "보완", value: stats.uploaded_reports_supplement },
+                  ]}
+                />
+                <BreakdownCard
+                  title="문의사항"
+                  total={
+                    stats.inquiry_counts.open +
+                    stats.inquiry_counts.asking_agency +
+                    stats.inquiry_counts.completed
+                  }
+                  accent="amber"
+                  onClick={() => router.push("/inquiries")}
+                  items={[
+                    { label: "접수", value: stats.inquiry_counts.open },
+                    { label: "관리원문의", value: stats.inquiry_counts.asking_agency },
+                    { label: "완료", value: stats.inquiry_counts.completed },
+                  ]}
+                />
+              </div>
+            </CardContent>
+          </Card>
+        </div>
       )}
 
       {/* 내 담당 현황 (상단, 버킷 스타일) */}
