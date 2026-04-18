@@ -103,6 +103,12 @@ export default function AdminPage() {
     skipped: number
     accounts?: { email: string; name: string; initial_password: string }[]
   } | null>(null)
+  const [credentialDialog, setCredentialDialog] = useState<{
+    title: string
+    userName: string
+    initialPassword: string
+  } | null>(null)
+  const [credentialCopied, setCredentialCopied] = useState(false)
 
   // 수정 다이얼로그
   const [editTarget, setEditTarget] = useState<User | null>(null)
@@ -172,11 +178,18 @@ export default function AdminPage() {
     setSubmitting(true)
     setError("")
     try {
-      const { data } = await apiClient.post<{ initial_password: string }>("/api/users", formData)
+      const { data } = await apiClient.post<{ name: string; initial_password: string }>(
+        "/api/users", formData
+      )
       setCreateOpen(false)
+      const createdName = data.name
       setFormData({ name: "", email: "", role: "reviewer", phone: "" })
       fetchUsers()
-      alert(`등록 완료\n초기 비밀번호: ${data.initial_password}\n(사용자에게 전달하고, 최초 로그인 시 변경하도록 안내하세요)`)
+      setCredentialDialog({
+        title: "사용자 등록 완료",
+        userName: createdName,
+        initialPassword: data.initial_password,
+      })
     } catch (err: unknown) {
       const axiosErr = err as { response?: { data?: { detail?: string } } }
       setError(axiosErr.response?.data?.detail || "등록 실패")
@@ -237,7 +250,11 @@ export default function AdminPage() {
       const { data } = await apiClient.post<{ initial_password: string }>(
         `/api/users/${userId}/reset-password`
       )
-      alert(`${userName}의 비밀번호가 초기화되었습니다\n초기 비밀번호: ${data.initial_password}\n(사용자에게 전달하세요)`)
+      setCredentialDialog({
+        title: "비밀번호 초기화 완료",
+        userName,
+        initialPassword: data.initial_password,
+      })
     } catch (err) {
       console.error("초기화 실패:", err)
     }
@@ -601,6 +618,55 @@ export default function AdminPage() {
               등록
             </Button>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* 초기 비밀번호 표시 다이얼로그 (등록/리셋 공통) */}
+      <Dialog
+        open={!!credentialDialog}
+        onOpenChange={(open) => {
+          if (!open) {
+            setCredentialDialog(null)
+            setCredentialCopied(false)
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{credentialDialog?.title}</DialogTitle>
+          </DialogHeader>
+          {credentialDialog && (
+            <div className="space-y-3">
+              <p className="text-sm">
+                <strong>{credentialDialog.userName}</strong>의 초기 비밀번호입니다.
+                사용자에게 안전한 채널로 전달해주세요.
+              </p>
+              <div className="flex items-center gap-2 rounded-md border bg-muted p-2">
+                <code className="flex-1 font-mono text-base tracking-wider">
+                  {credentialDialog.initialPassword}
+                </code>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={async () => {
+                    try {
+                      await navigator.clipboard.writeText(credentialDialog.initialPassword)
+                      setCredentialCopied(true)
+                      setTimeout(() => setCredentialCopied(false), 1500)
+                    } catch {
+                      setCredentialCopied(false)
+                    }
+                  }}
+                >
+                  {credentialCopied ? "복사됨" : "복사"}
+                </Button>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                최초 로그인 시 사용자가 반드시 비밀번호를 변경해야 합니다.
+                이 창을 닫으면 비밀번호를 다시 볼 수 없으니 먼저 복사하세요.
+              </p>
+            </div>
+          )}
         </DialogContent>
       </Dialog>
 

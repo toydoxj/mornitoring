@@ -18,9 +18,20 @@ from routers.auth import get_current_user, get_password_hash, require_roles
 router = APIRouter()
 
 
+# 혼동 문자(l/i, 0/o, 1) 제외한 알파벳·숫자
+_PW_LETTERS = "abcdefghjkmnpqrstuvwxyz"  # 23자 (i, l 제외)
+_PW_DIGITS = "23456789"                   # 8자 (0, 1 제외)
+
+
 def _generate_initial_password() -> str:
-    """일회용 초기 비밀번호 생성 (12자 URL-safe). 구두/이메일로 전달 가능."""
-    return secrets.token_urlsafe(9)
+    """일회용 초기 비밀번호 (영문 소문자 4 + 숫자 4 = 8자).
+
+    전달·입력 편의 위해 혼동 문자(i/l, 0/o, 1) 제외.
+    엔트로피 약 2^30으로 must_change_password=True 전제 하에 충분.
+    """
+    letters = "".join(secrets.choice(_PW_LETTERS) for _ in range(4))
+    digits = "".join(secrets.choice(_PW_DIGITS) for _ in range(4))
+    return letters + digits
 
 
 ROLE_MAP = {
