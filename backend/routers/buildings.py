@@ -394,20 +394,22 @@ def my_stats(
         )
     ),
 ):
-    """개인 대시보드 통계 (본인 담당 건물 기준)."""
+    """개인 대시보드 통계 (본인 담당 건물 기준).
+
+    담당 매칭은 `reviewer_id`만 사용한다. 이름 기반 OR 매칭은 동명이인
+    위험 + 권한 체크 일관성을 위해 제거됨. 관리자(SECRETARY/CHIEF/TEAM_LEADER)도
+    Reviewer 행이 없으면 빈 결과를 반환한다(본인 담당이 없으면 자연스러운 결과).
+    """
     from datetime import date as _date
     from models.review_stage import ReviewStage
 
-    # 담당 건물 조회 (reviewer_id 또는 assigned_reviewer_name)
     reviewer = db.query(Reviewer).filter(Reviewer.user_id == current_user.id).first()
-    if reviewer:
-        query = db.query(Building).filter(
-            (Building.reviewer_id == reviewer.id)
-            | (Building.assigned_reviewer_name == current_user.name)
-        )
+    if reviewer is None:
+        buildings: list[Building] = []
     else:
-        query = db.query(Building).filter(Building.assigned_reviewer_name == current_user.name)
-    buildings = query.all()
+        buildings = (
+            db.query(Building).filter(Building.reviewer_id == reviewer.id).all()
+        )
 
     total = len(buildings)
     total_area = float(sum((float(b.gross_area) if b.gross_area else 0.0) for b in buildings))
@@ -529,18 +531,18 @@ def my_review_buildings(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_roles(UserRole.REVIEWER, UserRole.SECRETARY, UserRole.CHIEF_SECRETARY)),
 ):
-    """내가 배정된 검토 대상 건축물 목록 (검토위원/간사/총괄간사)"""
+    """내가 배정된 검토 대상 건축물 목록 (검토위원/간사/총괄간사).
+
+    담당 매칭은 `reviewer_id`만 사용한다. 이름 기반 매칭은 동명이인 위험으로 제거.
+    Reviewer 행이 없는 사용자는 빈 결과.
+    """
     from models.review_stage import ReviewStage
 
-    # reviewer_id 또는 assigned_reviewer_name으로 매칭
     reviewer = db.query(Reviewer).filter(Reviewer.user_id == current_user.id).first()
+    if reviewer is None:
+        return BuildingListResponse(items=[], total=0)
 
-    if reviewer:
-        query = db.query(Building).filter(
-            (Building.reviewer_id == reviewer.id) | (Building.assigned_reviewer_name == current_user.name)
-        )
-    else:
-        query = db.query(Building).filter(Building.assigned_reviewer_name == current_user.name)
+    query = db.query(Building).filter(Building.reviewer_id == reviewer.id)
     total = query.count()
     buildings = query.order_by(Building.mgmt_no).offset((page - 1) * size).limit(size).all()
     registered_names = _get_registered_names(db)
