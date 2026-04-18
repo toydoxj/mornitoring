@@ -30,7 +30,7 @@ from services.kakao import (
 )
 
 
-TriggerType = Literal["d_minus_1", "overdue"]
+TriggerType = Literal["d_minus_1", "overdue", "within_3_days"]
 TEMPLATE_TYPE = "reminder"
 
 _ROUND_LABEL: dict[str, str] = {
@@ -76,6 +76,11 @@ def collect_targets(
         )
     elif trigger == "overdue":
         base_query = base_query.filter(ReviewStage.report_due_date < anchor)
+    elif trigger == "within_3_days":
+        # D-3 이내(과거 overdue 포함) 미제출 전체 — 리마인드 페이지 기본 조회
+        base_query = base_query.filter(
+            ReviewStage.report_due_date <= anchor + timedelta(days=3)
+        )
     else:  # pragma: no cover - 타입 힌트로 방어되지만 안전망
         return []
 
@@ -93,21 +98,36 @@ def collect_targets(
     ]
 
 
+def _delta_label(days_until: int) -> str:
+    if days_until > 0:
+        return f"D-{days_until}"
+    if days_until == 0:
+        return "D-day"
+    return "초과"
+
+
 def _compose_message(
-    trigger: TriggerType, targets: list[ReminderTarget]
+    trigger: TriggerType,
+    targets: list[ReminderTarget],
+    today: date | None = None,
 ) -> tuple[str, str]:
+    reference = today or date.today()
     if trigger == "d_minus_1":
         title = "검토서 요청 D-1 안내"
         lead = "검토서 제출 예정일이 내일입니다."
-    else:
+    elif trigger == "overdue":
         title = "검토서 요청 기한 초과"
         lead = "제출 예정일이 지났습니다. 빠른 검토서 제출을 부탁드립니다."
+    else:  # within_3_days
+        title = "검토서 제출 요청 안내"
+        lead = "제출 예정일이 다가오거나 지난 검토서입니다. 빠른 제출을 부탁드립니다."
 
     lines = [lead]
     for t in targets:
+        badge = _delta_label((t.report_due_date - reference).days)
         lines.append(
             f"- {t.mgmt_no} ({_ROUND_LABEL.get(t.phase, t.phase)}) "
-            f"예정일 {t.report_due_date.strftime('%Y-%m-%d')}"
+            f"예정일 {t.report_due_date.strftime('%Y-%m-%d')} [{badge}]"
         )
     return title, "\n".join(lines)
 
@@ -128,9 +148,17 @@ async def send_review_reminders(
     *,
     dry_run: bool = False,
     today: date | None = None,
+    recipient_user_ids: list[int] | None = None,
 ) -> dict:
-    """담당 검토위원별로 묶어 리마인드 발송. dry_run=True 면 대상만 반환."""
+    """담당 검토위원별로 묶어 리마인드 발송. dry_run=True 면 대상만 반환.
+
+    `recipient_user_ids` 가 주어지면 해당 검토위원에게만 발송 대상을 좁힌다.
+    None 이면 조건에 맞는 모든 검토위원에게 발송.
+    """
     targets = collect_targets(db, trigger, today)
+    if recipient_user_ids is not None:
+        allow = set(recipient_user_ids)
+        targets = [t for t in targets if t.reviewer_user_id in allow]
     grouped = _group_by_reviewer(targets)
 
     if dry_run or not targets:
@@ -157,7 +185,7 @@ async def send_review_reminders(
         access_token = await ensure_valid_token(sender, db)
     except ValueError as exc:
         for uid, ts in grouped.items():
-            title, message = _compose_message(trigger, ts)
+            title, message = _compose_message(trigger, ts, today)
             db.add(NotificationLog(
                 recipient_id=uid,
                 channel="kakao",

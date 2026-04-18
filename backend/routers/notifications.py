@@ -240,8 +240,10 @@ async def send_notifications(
 
 
 class ReviewReminderRequest(BaseModel):
-    trigger: str  # "d_minus_1" | "overdue"
+    trigger: str  # "d_minus_1" | "overdue" | "within_3_days"
     dry_run: bool = False
+    # 지정 시 해당 user_id 의 검토위원에게만 발송 (리마인드 페이지 체크박스 선택 발송)
+    recipient_user_ids: list[int] | None = None
 
 
 @router.post("/review-reminder")
@@ -249,7 +251,7 @@ async def send_review_reminder_endpoint(
     body: ReviewReminderRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(
-        require_roles(UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY)
+        require_roles(UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY, UserRole.SECRETARY)
     ),
 ):
     """검토위원 리마인드 알림 수동 발송.
@@ -257,17 +259,21 @@ async def send_review_reminder_endpoint(
     trigger 값:
       - `d_minus_1`: 내일이 예정일인 미제출 건
       - `overdue`: 예정일이 지났는데 미제출인 건
+      - `within_3_days`: D-3 이내(초과 포함) 미제출 — 리마인드 페이지 기본 조회
 
     `dry_run=true` 이면 대상자 프리뷰만 반환하고 실제 발송·로그 기록은 하지 않는다.
+    `recipient_user_ids` 로 대상 검토위원을 좁힐 수 있다(체크박스 기반 선택 발송).
     동일 함수는 `scripts/send_review_reminders.py` (cron)에서도 재사용된다.
     """
     from services.review_reminder import send_review_reminders
 
-    if body.trigger not in {"d_minus_1", "overdue"}:
+    if body.trigger not in {"d_minus_1", "overdue", "within_3_days"}:
         raise HTTPException(status_code=400, detail="trigger 값이 올바르지 않습니다")
 
     return await send_review_reminders(
-        db, current_user, body.trigger, dry_run=body.dry_run
+        db, current_user, body.trigger,
+        dry_run=body.dry_run,
+        recipient_user_ids=body.recipient_user_ids,
     )
 
 

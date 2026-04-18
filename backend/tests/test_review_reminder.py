@@ -65,6 +65,38 @@ def test_collect_targets_overdue_excludes_submitted(db_session, make_reviewer):
     assert mgmts == ["R-0100"]
 
 
+def test_collect_targets_within_3_days_includes_overdue_and_future(db_session, make_reviewer):
+    _, reviewer, _ = make_reviewer()
+    today = date(2026, 4, 19)
+    _seed_stage(db_session, reviewer_id=reviewer.id, mgmt_no="W-001", due=today - timedelta(days=1))  # overdue
+    _seed_stage(db_session, reviewer_id=reviewer.id, mgmt_no="W-002", due=today)                     # D-day
+    _seed_stage(db_session, reviewer_id=reviewer.id, mgmt_no="W-003", due=today + timedelta(days=3)) # D-3
+    _seed_stage(db_session, reviewer_id=reviewer.id, mgmt_no="W-004", due=today + timedelta(days=4)) # 범위 밖
+
+    mgmts = sorted(t.mgmt_no for t in collect_targets(db_session, "within_3_days", today=today))
+    assert mgmts == ["W-001", "W-002", "W-003"]
+
+
+@pytest.mark.asyncio
+async def test_send_review_reminders_respects_recipient_filter(db_session, make_user, make_reviewer):
+    sender, _ = make_user(UserRole.CHIEF_SECRETARY, name="발신자")
+    _, reviewer_a, _ = make_reviewer()
+    _, reviewer_b, _ = make_reviewer()
+    today = date(2026, 4, 19)
+    tomorrow = today + timedelta(days=1)
+    _seed_stage(db_session, reviewer_id=reviewer_a.id, mgmt_no="F-001", due=tomorrow)
+    _seed_stage(db_session, reviewer_id=reviewer_b.id, mgmt_no="F-002", due=tomorrow)
+
+    result = await send_review_reminders(
+        db_session, sender, "d_minus_1",
+        dry_run=True, today=today,
+        recipient_user_ids=[reviewer_a.user_id],
+    )
+    assert result["target_count"] == 1
+    assert len(result["by_reviewer"]) == 1
+    assert result["by_reviewer"][0]["mgmt_nos"] == ["F-001"]
+
+
 @pytest.mark.asyncio
 async def test_send_review_reminders_dry_run_groups_by_reviewer(db_session, make_user, make_reviewer):
     sender, _ = make_user(UserRole.CHIEF_SECRETARY, name="발신자")

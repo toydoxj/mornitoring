@@ -485,6 +485,78 @@ def create_building(
     return building
 
 
+@router.get("/reviewer-schedule")
+def reviewer_schedule(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(
+        require_roles(UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY, UserRole.SECRETARY)
+    ),
+):
+    """검토위원별 일정관리 요약 — 대시보드 "검토위원별 일정관리" 테이블 데이터.
+
+    `review_stages.report_submitted_at IS NULL AND report_due_date IS NOT NULL` 인 건을
+    검토위원별로 그룹핑하고, 오늘 기준 D-3/D-2/D-1/D-day/초과 카운트를 집계한다.
+    D+4 이상 예정이거나 일정이 없는 건은 in_progress 에만 합산된다.
+    """
+    from datetime import date, timedelta
+    from models.review_stage import ReviewStage
+    from models.reviewer import Reviewer
+
+    today = date.today()
+    rows = (
+        db.query(ReviewStage, Building, User)
+        .join(Building, ReviewStage.building_id == Building.id)
+        .join(Reviewer, Building.reviewer_id == Reviewer.id)
+        .join(User, Reviewer.user_id == User.id)
+        .filter(
+            ReviewStage.report_submitted_at.is_(None),
+            ReviewStage.report_due_date.isnot(None),
+            User.is_active.is_(True),
+        )
+        .all()
+    )
+
+    by_user: dict[int, dict] = {}
+    for stage, _building, user in rows:
+        info = by_user.setdefault(user.id, {
+            "reviewer_user_id": user.id,
+            "reviewer_name": user.name,
+            "kakao_matched": bool(user.kakao_uuid),
+            "in_progress": 0,
+            "d_minus_3": 0,
+            "d_minus_2": 0,
+            "d_minus_1": 0,
+            "d_day": 0,
+            "overdue": 0,
+        })
+        info["in_progress"] += 1
+        delta = (stage.report_due_date - today).days
+        if delta == 3:
+            info["d_minus_3"] += 1
+        elif delta == 2:
+            info["d_minus_2"] += 1
+        elif delta == 1:
+            info["d_minus_1"] += 1
+        elif delta == 0:
+            info["d_day"] += 1
+        elif delta < 0:
+            info["overdue"] += 1
+        # delta > 3 은 in_progress 만 증가, 별도 열 없음
+
+    return sorted(
+        by_user.values(),
+        key=lambda x: (
+            -x["overdue"],
+            -x["d_day"],
+            -x["d_minus_1"],
+            -x["d_minus_2"],
+            -x["d_minus_3"],
+            -x["in_progress"],
+            x["reviewer_name"],
+        ),
+    )
+
+
 @router.get("/my-stats")
 def my_stats(
     db: Session = Depends(get_db),
