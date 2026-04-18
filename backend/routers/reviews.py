@@ -601,7 +601,7 @@ def create_inquiry(
 
 
 @router.patch("/inquiry/{inquiry_id}")
-def update_inquiry(
+async def update_inquiry(
     inquiry_id: int,
     body: InquiryUpdateRequest,
     db: Session = Depends(get_db),
@@ -614,12 +614,19 @@ def update_inquiry(
     `new_phase`가 주어지면 해당 건물의 current_phase를 갱신하고, 본 문의 상태는
     자동으로 COMPLETED 로 설정된다. 건물 단계 변경 권한은 상위 라우터의
     require_roles 와 동일한 관리자군(팀장/총괄간사/간사)에서 이미 강제된다.
+
+    inquiry가 이번 호출로 COMPLETED 로 전환되는 순간 작성자(검토위원)에게
+    카카오톡 답변 완료 알림을 전송한다. 알림 실패는 inquiry 저장을 막지 않는다.
     """
     from models.inquiry import Inquiry, InquiryStatus
+    from services.inquiry_notify import notify_inquiry_reply
 
     inquiry = db.query(Inquiry).filter(Inquiry.id == inquiry_id).first()
     if not inquiry:
         raise HTTPException(status_code=404, detail="문의를 찾을 수 없습니다")
+
+    previous_status = inquiry.status
+    phase_changed = False
 
     if body.reply is not None:
         inquiry.reply = body.reply
@@ -635,11 +642,23 @@ def update_inquiry(
             raise HTTPException(status_code=404, detail="건축물을 찾을 수 없습니다")
         if building.current_phase != new_phase:
             building.current_phase = new_phase
+            phase_changed = True
         inquiry.status = InquiryStatus.COMPLETED
     elif body.status:
         inquiry.status = InquiryStatus(body.status)
 
     db.commit()
+    db.refresh(inquiry)
+
+    if (
+        previous_status != InquiryStatus.COMPLETED
+        and inquiry.status == InquiryStatus.COMPLETED
+    ):
+        await notify_inquiry_reply(
+            db, current_user, inquiry, phase_changed=phase_changed
+        )
+        db.commit()
+
     return {"message": "업데이트 되었습니다"}
 
 
