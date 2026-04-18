@@ -138,6 +138,8 @@ export default function DashboardPage() {
   const [totalTasks, setTotalTasks] = useState(0)
 
   const isAdmin = user && ["team_leader", "chief_secretary", "secretary"].includes(user.role)
+  // 검토서 관리 페이지 이동 권한: 팀장/총괄간사만 (간사는 카드 비클릭)
+  const canManageReports = !!user && ["team_leader", "chief_secretary"].includes(user.role)
 
   useEffect(() => {
     // 각 섹션은 독립적이므로 병렬 호출 + 개별 에러 격리로 첫 페인트 속도를 크게 줄인다.
@@ -436,7 +438,7 @@ export default function DashboardPage() {
                 title="업로드된 검토서"
                 total={stats.uploaded_reports_preliminary + stats.uploaded_reports_supplement}
                 accent="slate"
-                onClick={() => router.push("/review-files")}
+                onClick={canManageReports ? () => router.push("/review-files") : undefined}
                 items={[
                   { label: "예비", value: stats.uploaded_reports_preliminary },
                   { label: "보완", value: stats.uploaded_reports_supplement },
