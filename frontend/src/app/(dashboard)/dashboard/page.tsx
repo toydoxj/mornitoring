@@ -4,6 +4,14 @@ import { useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table"
 import apiClient from "@/lib/api/client"
 import { useAuthStore } from "@/stores/authStore"
 
@@ -92,6 +100,18 @@ interface NotificationItem {
   error_message: string | null
 }
 
+interface ReviewerSchedule {
+  reviewer_user_id: number
+  reviewer_name: string
+  kakao_matched: boolean
+  in_progress: number
+  d_minus_3: number
+  d_minus_2: number
+  d_minus_1: number
+  d_day: number
+  overdue: number
+}
+
 interface MyInquiryItem {
   id: number
   building_id: number
@@ -123,6 +143,7 @@ export default function DashboardPage() {
   const [discussions, setDiscussions] = useState<PostItem[]>([])
   const [notifications, setNotifications] = useState<NotificationItem[]>([])
   const [myInquiries, setMyInquiries] = useState<MyInquiryItem[]>([])
+  const [reviewerSchedule, setReviewerSchedule] = useState<ReviewerSchedule[]>([])
   const [isLoading, setIsLoading] = useState(true)
   // 병렬 호출 진행률 표시용
   const [loadedCount, setLoadedCount] = useState(0)
@@ -167,6 +188,11 @@ export default function DashboardPage() {
           trackProgress(apiClient.get<DashboardStats>("/api/buildings/stats"))
             .then(({ data }) => setStats(data))
             .catch((err) => console.error("전체 통계 조회 실패:", err))
+        )
+        tasks.push(
+          trackProgress(apiClient.get<ReviewerSchedule[]>("/api/buildings/reviewer-schedule"))
+            .then(({ data }) => setReviewerSchedule(data))
+            .catch((err) => console.error("검토위원 일정 조회 실패:", err))
         )
       }
 
@@ -465,6 +491,67 @@ export default function DashboardPage() {
         </Card>
       </div>
 
+      {/* 검토위원별 일정관리 (관리자 전용) */}
+      {isAdmin && reviewerSchedule.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle>검토위원별 일정관리</CardTitle>
+            <p className="mt-1 text-xs text-muted-foreground">
+              검토서 미제출 건을 오늘 기준으로 D-3 ~ 초과로 분류. 긴급도 높은 순.
+            </p>
+          </CardHeader>
+          <CardContent>
+            <div className="rounded-md border max-h-[500px] overflow-y-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>검토위원</TableHead>
+                    <TableHead className="w-[90px] text-center">미제출</TableHead>
+                    <TableHead className="w-[60px] text-center">D-3</TableHead>
+                    <TableHead className="w-[60px] text-center">D-2</TableHead>
+                    <TableHead className="w-[60px] text-center">D-1</TableHead>
+                    <TableHead className="w-[70px] text-center">D-day</TableHead>
+                    <TableHead className="w-[70px] text-center">초과</TableHead>
+                    <TableHead className="w-[70px] text-center">카카오</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {reviewerSchedule.map((r) => (
+                    <TableRow key={r.reviewer_user_id}>
+                      <TableCell className="font-medium">{r.reviewer_name}</TableCell>
+                      <TableCell className="text-center">{r.in_progress}</TableCell>
+                      <TableCell className="text-center">
+                        {r.d_minus_3 > 0 ? r.d_minus_3 : "-"}
+                      </TableCell>
+                      <TableCell className="text-center">
+                        {r.d_minus_2 > 0 ? r.d_minus_2 : "-"}
+                      </TableCell>
+                      <TableCell className="text-center">
+                        {r.d_minus_1 > 0 ? (
+                          <Badge variant="secondary">{r.d_minus_1}</Badge>
+                        ) : "-"}
+                      </TableCell>
+                      <TableCell className="text-center">
+                        {r.d_day > 0 ? (
+                          <Badge variant="default">{r.d_day}</Badge>
+                        ) : "-"}
+                      </TableCell>
+                      <TableCell className="text-center">
+                        {r.overdue > 0 ? (
+                          <Badge variant="destructive">{r.overdue}</Badge>
+                        ) : "-"}
+                      </TableCell>
+                      <TableCell className="text-center text-xs">
+                        {r.kakao_matched ? "✓" : "✗"}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
     </div>
   )
