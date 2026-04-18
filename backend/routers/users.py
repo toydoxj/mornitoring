@@ -18,6 +18,7 @@ from models.reviewer import Reviewer
 from models.user import User, UserRole
 from routers.auth import get_current_user, get_password_hash, require_roles
 from services.invite import InviteResult, send_invites
+from services.reviewer_link import ensure_reviewer_link
 
 router = APIRouter()
 
@@ -289,6 +290,9 @@ def create_user(
         must_change_password=True,
     )
     db.add(user)
+    db.flush()
+    # Reviewer 행 보장 + 배정된 건물 reviewer_id 자동 백필
+    ensure_reviewer_link(db, user)
     db.commit()
     db.refresh(user)
     return UserCreateResponse(
@@ -368,8 +372,13 @@ async def import_users_excel(
             created += 1
             created_users.append(user)
 
+        # flush로 신규 user.id 확정 후 사용자별 Reviewer 자동 연결
+        db.flush()
+        for u in created_users:
+            ensure_reviewer_link(db, u)
+
         db.commit()
-        # commit 후 user.id 확보
+        # commit 후 user.id 재확보
         for u in created_users:
             db.refresh(u)
         wb.close()
