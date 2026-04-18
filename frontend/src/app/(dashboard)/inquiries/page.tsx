@@ -198,8 +198,8 @@ export default function InquiriesPage() {
                 <TableHead className="w-[70px]">검토위원</TableHead>
                 <TableHead className="w-[80px]">단계</TableHead>
                 <TableHead>문의 내용</TableHead>
-                <TableHead className="w-[250px]">답변</TableHead>
                 <TableHead className="w-[80px]">상태</TableHead>
+                <TableHead className="w-[250px]">답변</TableHead>
                 <TableHead className="w-[180px]">처리</TableHead>
               </TableRow>
             </TableHeader>
@@ -229,17 +229,17 @@ export default function InquiriesPage() {
                     </TableCell>
                     <TableCell className="text-sm">{item.content}</TableCell>
                     <TableCell>
+                      <Badge variant={STATUS_VARIANT[item.status]}>
+                        {STATUS_LABELS[item.status]}
+                      </Badge>
+                    </TableCell>
+                    <TableCell>
                       <Input
                         value={replyMap[item.id] ?? item.reply ?? ""}
                         onChange={(e) => setReplyMap({ ...replyMap, [item.id]: e.target.value })}
                         placeholder="답변 입력"
                         className="text-sm"
                       />
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant={STATUS_VARIANT[item.status]}>
-                        {STATUS_LABELS[item.status]}
-                      </Badge>
                     </TableCell>
                     <TableCell>
                       <div className="flex gap-1 flex-wrap">
@@ -365,8 +365,8 @@ export default function InquiriesPage() {
                   <TableHead className="w-[70px]">검토위원</TableHead>
                   <TableHead className="w-[80px]">단계</TableHead>
                   <TableHead>문의 내용</TableHead>
-                  <TableHead>답변</TableHead>
                   <TableHead className="w-[80px]">상태</TableHead>
+                  <TableHead>답변</TableHead>
                   <TableHead className="w-[130px]">처리일시</TableHead>
                 </TableRow>
               </TableHeader>
@@ -388,12 +388,12 @@ export default function InquiriesPage() {
                       </Badge>
                     </TableCell>
                     <TableCell className="text-sm">{item.content}</TableCell>
-                    <TableCell className="text-sm">{item.reply || "-"}</TableCell>
                     <TableCell>
                       <Badge variant={STATUS_VARIANT[item.status]}>
                         {STATUS_LABELS[item.status]}
                       </Badge>
                     </TableCell>
+                    <TableCell className="text-sm">{item.reply || "-"}</TableCell>
                     <TableCell className="text-sm">
                       {new Date(item.updated_at).toLocaleString("ko-KR")}
                     </TableCell>
