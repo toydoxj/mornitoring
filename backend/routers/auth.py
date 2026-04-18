@@ -181,20 +181,8 @@ async def kakao_callback(code: str, db: Session = Depends(get_db)):
         access_token = create_access_token({"sub": str(user.id), "role": user.role.value})
         return TokenResponse(access_token=access_token, must_change_password=False)
 
-    # 이름으로 매칭 시도
-    if kakao_name:
-        user = db.query(User).filter(User.name == kakao_name).first()
-        if user:
-            user.kakao_id = kakao_id
-            user.kakao_access_token = kakao_access
-            user.kakao_refresh_token = kakao_refresh
-            user.kakao_token_expires_at = kakao_token_expires_at
-            db.commit()
-            db.refresh(user)
-            access_token = create_access_token({"sub": str(user.id), "role": user.role.value})
-            return TokenResponse(access_token=access_token, must_change_password=False)
-
-    # 매칭 안 됨 → 계정 연결 필요
+    # 카카오 ID 매칭 실패 → 이메일+비번으로 /link-account 호출 필요
+    # (이름 기반 자동 매칭은 동명이인 위험으로 제거)
     return {
         "access_token": "",
         "token_type": "bearer",
