@@ -556,6 +556,9 @@ class InquiryCreateRequest(BaseModel):
 class InquiryUpdateRequest(BaseModel):
     reply: str | None = None
     status: str | None = None  # asking_agency / completed
+    # 단계 변경을 함께 수행할 경우 사용. 지정되면 해당 건물의 current_phase가 갱신되고,
+    # inquiry 상태는 자동으로 COMPLETED로 통합된다.
+    new_phase: str | None = None
 
 
 @router.post("/inquiry")
@@ -606,7 +609,12 @@ def update_inquiry(
         require_roles(UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY, UserRole.SECRETARY)
     ),
 ):
-    """문의사항 답변/상태 변경"""
+    """문의사항 답변/상태/단계 변경.
+
+    `new_phase`가 주어지면 해당 건물의 current_phase를 갱신하고, 본 문의 상태는
+    자동으로 COMPLETED 로 설정된다. 건물 단계 변경 권한은 상위 라우터의
+    require_roles 와 동일한 관리자군(팀장/총괄간사/간사)에서 이미 강제된다.
+    """
     from models.inquiry import Inquiry, InquiryStatus
 
     inquiry = db.query(Inquiry).filter(Inquiry.id == inquiry_id).first()
@@ -615,7 +623,20 @@ def update_inquiry(
 
     if body.reply is not None:
         inquiry.reply = body.reply
-    if body.status:
+
+    if body.new_phase is not None:
+        new_phase = body.new_phase.strip()
+        if not new_phase:
+            raise HTTPException(status_code=400, detail="변경할 단계를 선택해주세요")
+        building = (
+            db.query(Building).filter(Building.id == inquiry.building_id).first()
+        )
+        if not building:
+            raise HTTPException(status_code=404, detail="건축물을 찾을 수 없습니다")
+        if building.current_phase != new_phase:
+            building.current_phase = new_phase
+        inquiry.status = InquiryStatus.COMPLETED
+    elif body.status:
         inquiry.status = InquiryStatus(body.status)
 
     db.commit()
@@ -645,6 +666,17 @@ def list_inquiries(
     total = query.count()
     items = query.order_by(Inquiry.created_at.desc()).offset((page - 1) * size).limit(size).all()
 
+    # 인라인 단계 변경 UI에서 초기값으로 노출하기 위해 현재 단계를 함께 내려준다
+    building_ids = {i.building_id for i in items}
+    current_phase_map: dict[int, str | None] = {}
+    if building_ids:
+        rows = (
+            db.query(Building.id, Building.current_phase)
+            .filter(Building.id.in_(building_ids))
+            .all()
+        )
+        current_phase_map = {bid: phase for bid, phase in rows}
+
     result = []
     for inq in items:
         result.append({
@@ -652,6 +684,7 @@ def list_inquiries(
             "building_id": inq.building_id,
             "mgmt_no": inq.mgmt_no,
             "phase": inq.phase,
+            "current_phase": current_phase_map.get(inq.building_id),
             "submitter_name": inq.submitter_name,
             "content": inq.content,
             "reply": inq.reply,

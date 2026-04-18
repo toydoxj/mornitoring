@@ -2,10 +2,17 @@
 
 import { useEffect, useState } from "react"
 import Link from "next/link"
-import { useRouter } from "next/navigation"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import {
   Table,
   TableBody,
@@ -22,6 +29,7 @@ interface InquiryItem {
   building_id: number
   mgmt_no: string
   phase: string
+  current_phase: string | null
   submitter_name: string
   content: string
   reply: string | null
@@ -48,13 +56,51 @@ const STATUS_VARIANT: Record<string, "default" | "secondary" | "destructive" | "
 }
 
 export default function InquiriesPage() {
-  const router = useRouter()
   const [activeData, setActiveData] = useState<InquiryItem[]>([])
   const [activeTotal, setActiveTotal] = useState(0)
   const [closedData, setClosedData] = useState<InquiryItem[]>([])
   const [closedTotal, setClosedTotal] = useState(0)
   const [isLoading, setIsLoading] = useState(true)
   const [replyMap, setReplyMap] = useState<Record<number, string>>({})
+  // 단계 변경 다이얼로그 상태
+  const [phaseEditTarget, setPhaseEditTarget] = useState<InquiryItem | null>(null)
+  const [phaseDraft, setPhaseDraft] = useState<string>("")
+  const [savingPhase, setSavingPhase] = useState(false)
+
+  const openPhaseDialog = (item: InquiryItem) => {
+    setPhaseEditTarget(item)
+    setPhaseDraft(item.current_phase ?? "")
+  }
+
+  const closePhaseDialog = () => {
+    setPhaseEditTarget(null)
+    setPhaseDraft("")
+  }
+
+  const handleSavePhase = async () => {
+    if (!phaseEditTarget) return
+    const next = phaseDraft.trim()
+    if (!next) {
+      alert("변경할 단계를 선택해주세요")
+      return
+    }
+    setSavingPhase(true)
+    try {
+      await apiClient.patch(`/api/reviews/inquiry/${phaseEditTarget.id}`, {
+        reply: replyMap[phaseEditTarget.id] || null,
+        new_phase: next,
+      })
+      closePhaseDialog()
+      fetchData()
+    } catch (err) {
+      const msg =
+        (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
+        ?? "단계 변경 실패"
+      alert(msg)
+    } finally {
+      setSavingPhase(false)
+    }
+  }
 
   const fetchData = async () => {
     setIsLoading(true)
@@ -189,11 +235,9 @@ export default function InquiriesPage() {
                         <Button
                           size="sm"
                           variant="default"
-                          onClick={() =>
-                            router.push(`/buildings/${item.building_id}?from=inquiries&editPhase=1`)
-                          }
+                          onClick={() => openPhaseDialog(item)}
                         >
-                          단계 변경
+                          단계변경
                         </Button>
                       </div>
                     </TableCell>
@@ -204,6 +248,47 @@ export default function InquiriesPage() {
           </Table>
         </div>
       </div>
+
+      {/* 단계 변경 다이얼로그 — 저장 시 건물 current_phase 갱신 + 문의 상태 completed */}
+      <Dialog
+        open={!!phaseEditTarget}
+        onOpenChange={(open) => { if (!open) closePhaseDialog() }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>단계 변경</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            {phaseEditTarget && (
+              <p className="text-xs text-muted-foreground">
+                관리번호 <span className="font-mono font-medium">{phaseEditTarget.mgmt_no}</span>
+                의 현재 단계를 변경합니다. 저장하면 본 문의는 자동으로 완료 처리됩니다.
+              </p>
+            )}
+            <div className="space-y-2">
+              <Label>단계 선택</Label>
+              <select
+                className="w-full rounded-md border px-3 py-2 text-sm"
+                value={phaseDraft}
+                onChange={(e) => setPhaseDraft(e.target.value)}
+              >
+                <option value="">선택 안 함</option>
+                {Object.entries(PHASE_LABELS).map(([value, label]) => (
+                  <option key={value} value={value}>{label}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={closePhaseDialog} disabled={savingPhase}>
+              취소
+            </Button>
+            <Button onClick={handleSavePhase} loading={savingPhase} loadingText="저장 중...">
+              저장
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* 완료된 문의 */}
       {closedData.length > 0 && (
