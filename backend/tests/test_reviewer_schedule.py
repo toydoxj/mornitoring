@@ -51,3 +51,25 @@ def test_reviewer_schedule_denied_for_reviewer(client, make_reviewer):
     _, _reviewer, headers = make_reviewer()
     res = client.get("/api/buildings/reviewer-schedule", headers=headers)
     assert res.status_code == 403
+
+
+def test_reviewer_schedule_lists_all_active_reviewers_even_when_idle(
+    client, db_session, make_user, make_reviewer
+):
+    """미제출 건이 없는 검토위원도 모든 카운트 0으로 포함되어야 한다."""
+    _, headers_admin = make_user(UserRole.CHIEF_SECRETARY, name="관리자")
+    _busy_user, reviewer_busy, _ = make_reviewer()
+    _idle_user, _reviewer_idle, _ = make_reviewer()
+    today = date.today()
+    _seed(db_session, reviewer_busy.id, "Z-0001", today + timedelta(days=1))
+
+    res = client.get("/api/buildings/reviewer-schedule", headers=headers_admin)
+    assert res.status_code == 200
+    rows = res.json()
+    # 두 검토위원 모두 응답에 포함
+    assert len(rows) == 2
+    busy = next(r for r in rows if r["in_progress"] > 0)
+    idle = next(r for r in rows if r["in_progress"] == 0)
+    assert busy["d_minus_1"] == 1
+    assert idle["d_minus_1"] == 0
+    assert idle["overdue"] == 0

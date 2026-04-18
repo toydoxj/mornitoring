@@ -494,15 +494,43 @@ def reviewer_schedule(
 ):
     """검토위원별 일정관리 요약 — 대시보드 "검토위원별 일정관리" 테이블 데이터.
 
+    활성 REVIEWER 사용자 전체를 행으로 노출하고, 각각에 대해
     `review_stages.report_submitted_at IS NULL AND report_due_date IS NOT NULL` 인 건을
-    검토위원별로 그룹핑하고, 오늘 기준 D-3/D-2/D-1/D-day/초과 카운트를 집계한다.
-    D+4 이상 예정이거나 일정이 없는 건은 in_progress 에만 합산된다.
+    오늘 기준 D-3/D-2/D-1/D-day/초과 카운트로 집계한다. D+4 이상 예정이거나 일정이 없는
+    건은 in_progress 에만 합산된다. 미제출이 없는 검토위원도 모든 카운트 0으로 표시.
     """
-    from datetime import date, timedelta
+    from datetime import date
     from models.review_stage import ReviewStage
     from models.reviewer import Reviewer
 
     today = date.today()
+
+    # 1) 활성 REVIEWER 전체를 0 초기화로 준비
+    reviewer_users = (
+        db.query(User)
+        .filter(
+            User.is_active.is_(True),
+            User.role == UserRole.REVIEWER,
+        )
+        .order_by(User.name)
+        .all()
+    )
+    by_user: dict[int, dict] = {
+        u.id: {
+            "reviewer_user_id": u.id,
+            "reviewer_name": u.name,
+            "kakao_matched": bool(u.kakao_uuid),
+            "in_progress": 0,
+            "d_minus_3": 0,
+            "d_minus_2": 0,
+            "d_minus_1": 0,
+            "d_day": 0,
+            "overdue": 0,
+        }
+        for u in reviewer_users
+    }
+
+    # 2) 미제출 stage 를 집계해 위 buckets 에 반영
     rows = (
         db.query(ReviewStage, Building, User)
         .join(Building, ReviewStage.building_id == Building.id)
@@ -515,9 +543,8 @@ def reviewer_schedule(
         )
         .all()
     )
-
-    by_user: dict[int, dict] = {}
     for stage, _building, user in rows:
+        # 간사/총괄간사가 Reviewer 행을 가진 경우에도 요약을 놓치지 않도록 setdefault
         info = by_user.setdefault(user.id, {
             "reviewer_user_id": user.id,
             "reviewer_name": user.name,
