@@ -53,6 +53,8 @@ interface DashboardStats {
   review_in_progress: number
   review_in_progress_preliminary: number
   review_in_progress_supplement: number
+  uploaded_reports_preliminary: number
+  uploaded_reports_supplement: number
   completed: number
   final_counts: FinalCounts
   inquiry_counts: InquiryCounts
@@ -432,11 +434,12 @@ export default function DashboardPage() {
               />
               <BreakdownCard
                 title="업로드된 검토서"
-                total={stats.review_in_progress_preliminary + stats.review_in_progress_supplement}
+                total={stats.uploaded_reports_preliminary + stats.uploaded_reports_supplement}
                 accent="slate"
+                onClick={() => router.push("/review-files")}
                 items={[
-                  { label: "예비", value: stats.review_in_progress_preliminary },
-                  { label: "보완", value: stats.review_in_progress_supplement },
+                  { label: "예비", value: stats.uploaded_reports_preliminary },
+                  { label: "보완", value: stats.uploaded_reports_supplement },
                 ]}
               />
               <BreakdownCard

@@ -218,6 +218,23 @@ def get_stats(
         if key in inquiry_counts:
             inquiry_counts[key] = count
 
+    # 1-3) 업로드된 검토서 수 (ReviewStage 누적) — 건물 phase 기반이 아니라
+    # 제출 기록 자체를 센다. 건물이 보완 단계로 넘어가도 과거 예비 제출이 집계에 남는다.
+    uploaded_rows = (
+        db.query(ReviewStage.phase, sa_func.count(ReviewStage.id))
+        .filter(ReviewStage.report_submitted_at.isnot(None))
+        .group_by(ReviewStage.phase)
+        .all()
+    )
+    uploaded_reports_preliminary = 0
+    uploaded_reports_supplement = 0
+    for phase, count in uploaded_rows:
+        key = phase.value if hasattr(phase, "value") else str(phase)
+        if key == "preliminary":
+            uploaded_reports_preliminary += count
+        elif key.startswith("supplement_"):
+            uploaded_reports_supplement += count
+
     # 2) phase 별 건수
     phase_counts_raw = (
         db.query(Building.current_phase, sa_func.count(Building.id))
@@ -346,6 +363,9 @@ def get_stats(
         "review_in_progress": review_in_progress,
         "review_in_progress_preliminary": review_in_progress_preliminary,
         "review_in_progress_supplement": review_in_progress_supplement,
+        # 업로드된 검토서 누적 수 (대시보드 "업로드된 검토서" 카드용)
+        "uploaded_reports_preliminary": uploaded_reports_preliminary,
+        "uploaded_reports_supplement": uploaded_reports_supplement,
         "completed": completed,
         # 최종 판정 5분류 (적합/보완적합/부적합/부적합(미회신)/대상제외)
         "final_counts": final_counts,
