@@ -111,6 +111,8 @@ async def preview_upload(
     building = db.query(Building).filter(Building.mgmt_no == mgmt_no).first()
     if not building:
         raise HTTPException(status_code=404, detail=f"관리번호 {mgmt_no}을 찾을 수 없습니다")
+    # 비용 큰 파일 파싱 전에 fail-fast로 권한 검증
+    _ensure_reviewer_can_access_building(building, current_user, db)
 
     with tempfile.NamedTemporaryFile(suffix=Path(file.filename).suffix, delete=False) as tmp:
         content = await file.read()
@@ -363,6 +365,8 @@ async def upload_review(
     building = db.query(Building).filter(Building.mgmt_no == mgmt_no).first()
     if not building:
         raise HTTPException(status_code=404, detail=f"관리번호 {mgmt_no}을 찾을 수 없습니다")
+    # 비용 큰 파일 파싱·DB 쓰기 전에 fail-fast로 권한 검증
+    _ensure_reviewer_can_access_building(building, current_user, db)
 
     # 임시 파일 저장
     with tempfile.NamedTemporaryFile(suffix=Path(file.filename).suffix, delete=False) as tmp:
@@ -563,28 +567,19 @@ def create_inquiry(
 ):
     """문의사항 등록 — 해당 건물의 담당 검토자만 가능.
 
-    담당 판정:
-    - Building.reviewer_id 가 로그인 사용자의 Reviewer 레코드와 일치, 또는
-    - Building.assigned_reviewer_name 이 로그인 사용자 이름과 일치
-
-    역할(role)은 무관. 간사/총괄간사/팀장도 검토위원 역할로 배정되었으면 문의 가능.
+    담당 판정은 `Reviewer.user_id == current_user.id` 그리고
+    `building.reviewer_id == reviewer.id`. 이름 기반 매칭은 동명이인 위험으로 제거.
+    역할(role)은 무관 — REVIEWER가 아닌 사용자도 Reviewer 행이 있으면 문의 가능.
     """
     from models.inquiry import Inquiry
     from models.reviewer import Reviewer
 
     building = db.query(Building).filter(Building.mgmt_no == body.mgmt_no).first()
     if not building:
-        raise HTTPException(status_code=404, detail="관리번호를 찾을 수 없습니다")
+        raise HTTPException(status_code=404, detail="건축물을 찾을 수 없습니다")
 
-    # 담당 여부 확인
-    is_assigned = False
     reviewer = db.query(Reviewer).filter(Reviewer.user_id == current_user.id).first()
-    if reviewer and building.reviewer_id == reviewer.id:
-        is_assigned = True
-    elif building.assigned_reviewer_name == current_user.name:
-        is_assigned = True
-
-    if not is_assigned:
+    if reviewer is None or building.reviewer_id != reviewer.id:
         raise HTTPException(
             status_code=403,
             detail="담당 건물에만 문의를 등록할 수 있습니다",
@@ -594,6 +589,7 @@ def create_inquiry(
         building_id=building.id,
         mgmt_no=body.mgmt_no,
         phase=body.phase,
+        submitter_id=current_user.id,
         submitter_name=current_user.name,
         content=body.content,
     )
@@ -674,10 +670,15 @@ def list_my_inquiries(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """내가 작성한 문의사항 목록 (모든 로그인 사용자)"""
+    """내가 작성한 문의사항 목록 (모든 로그인 사용자).
+
+    작성자 식별은 `submitter_id == current_user.id`만 사용.
+    이름 기반 매칭(submitter_name)은 동명이인 위험으로 제거.
+    submitter_id가 NULL인 historical 데이터는 본 목록에 노출되지 않는다.
+    """
     from models.inquiry import Inquiry
 
-    query = db.query(Inquiry).filter(Inquiry.submitter_name == current_user.name)
+    query = db.query(Inquiry).filter(Inquiry.submitter_id == current_user.id)
     total = query.count()
     items = (
         query.order_by(Inquiry.created_at.desc())
