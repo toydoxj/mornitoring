@@ -116,42 +116,52 @@ export default function DashboardPage() {
   const [notifications, setNotifications] = useState<NotificationItem[]>([])
   const [myInquiries, setMyInquiries] = useState<MyInquiryItem[]>([])
   const [isLoading, setIsLoading] = useState(true)
+  // 병렬 호출 진행률 표시용
+  const [loadedCount, setLoadedCount] = useState(0)
+  const [totalTasks, setTotalTasks] = useState(0)
 
   const isAdmin = user && ["team_leader", "chief_secretary", "secretary"].includes(user.role)
 
   useEffect(() => {
     // 각 섹션은 독립적이므로 병렬 호출 + 개별 에러 격리로 첫 페인트 속도를 크게 줄인다.
+    // 각 요청 완료 시 loadedCount를 증가시켜 사용자에게 진행률을 시각적으로 보여준다.
     const fetchAll = async () => {
+      const trackProgress = <T,>(p: Promise<T>): Promise<T> => {
+        return p.finally(() => setLoadedCount((c) => c + 1))
+      }
+
       const tasks: Promise<void>[] = [
-        apiClient.get<MyStats>("/api/buildings/my-stats")
+        trackProgress(apiClient.get<MyStats>("/api/buildings/my-stats"))
           .then(({ data }) => setMyStats(data))
           .catch((err) => console.error("개인 통계 조회 실패:", err)),
 
-        apiClient.get<{ items: PostItem[] }>("/api/announcements", { params: { size: 5 } })
+        trackProgress(apiClient.get<{ items: PostItem[] }>("/api/announcements", { params: { size: 5 } }))
           .then(({ data }) => setAnnouncements(data.items))
           .catch((err) => console.error("공지사항 조회 실패:", err)),
 
-        apiClient.get<{ items: PostItem[] }>("/api/discussions", { params: { size: 5 } })
+        trackProgress(apiClient.get<{ items: PostItem[] }>("/api/discussions", { params: { size: 5 } }))
           .then(({ data }) => setDiscussions(data.items))
           .catch((err) => console.error("토론방 조회 실패:", err)),
 
-        apiClient.get<{ items: NotificationItem[] }>("/api/notifications/my", { params: { size: 5, page: 1 } })
+        trackProgress(apiClient.get<{ items: NotificationItem[] }>("/api/notifications/my", { params: { size: 5, page: 1 } }))
           .then(({ data }) => setNotifications(data.items))
           .catch((err) => console.error("내 알림 조회 실패:", err)),
 
-        apiClient.get<{ items: MyInquiryItem[] }>("/api/reviews/my-inquiries", { params: { size: 5 } })
+        trackProgress(apiClient.get<{ items: MyInquiryItem[] }>("/api/reviews/my-inquiries", { params: { size: 5 } }))
           .then(({ data }) => setMyInquiries(data.items))
           .catch((err) => console.error("내 문의사항 조회 실패:", err)),
       ]
 
       if (isAdmin) {
         tasks.push(
-          apiClient.get<DashboardStats>("/api/buildings/stats")
+          trackProgress(apiClient.get<DashboardStats>("/api/buildings/stats"))
             .then(({ data }) => setStats(data))
             .catch((err) => console.error("전체 통계 조회 실패:", err))
         )
       }
 
+      setTotalTasks(tasks.length)
+      setLoadedCount(0)
       await Promise.all(tasks)
       setIsLoading(false)
     }
@@ -159,7 +169,26 @@ export default function DashboardPage() {
   }, [isAdmin])
 
   if (isLoading) {
-    return <div className="flex justify-center py-20 text-muted-foreground">로딩 중...</div>
+    const percent = totalTasks > 0
+      ? Math.min(100, Math.round((loadedCount / totalTasks) * 100))
+      : 0
+    return (
+      <div className="flex flex-col items-center justify-center gap-3 py-20">
+        <div className="text-sm text-muted-foreground">
+          대시보드 불러오는 중... ({loadedCount}/{totalTasks || "-"})
+        </div>
+        <div className="h-2 w-64 overflow-hidden rounded-full bg-muted">
+          <div
+            className="h-full bg-primary transition-all duration-300 ease-out"
+            style={{ width: `${percent}%` }}
+            role="progressbar"
+            aria-valuenow={percent}
+            aria-valuemin={0}
+            aria-valuemax={100}
+          />
+        </div>
+      </div>
+    )
   }
 
   return (
