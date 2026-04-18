@@ -3,6 +3,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from config import settings
 from routers import auth, users, buildings, ledger, assignments, reviews, audit, distribution, notifications, kakao, announcements, discussions
 
 app = FastAPI(
@@ -11,14 +12,10 @@ app = FastAPI(
     version="0.1.0",
 )
 
-# CORS 설정 (프론트엔드 연동)
+# CORS 설정 (프론트엔드 연동) — 허용 origin은 .env의 CORS_ORIGINS로 관리
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "https://ksea-m.vercel.app",
-        "https://frontend-fsjh35-8127s-projects.vercel.app",
-    ],
+    allow_origins=settings.cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
