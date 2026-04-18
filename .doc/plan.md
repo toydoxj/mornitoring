@@ -1,7 +1,7 @@
 # 건축구조안전 모니터링 시스템 — 구현 계획서
 
 > 최종 갱신: 2026-04-18
-> 진행 상황: Stage 1~4 완료. 보안 P0/P0.5 + P1 D + N5 + 외부 리뷰 잔여까지 완료. 92 테스트 PASS.
+> 진행 상황: Stage 1~4 완료. 보안 P0/P0.5 + P1 D + N5 + 외부 리뷰 4종 quick win까지 완료. **94 테스트 PASS**.
 > **운영 투입 직전 — 다음 단계는 운영 dry-run 또는 운영 전환.**
 
 ## 운영 문서 (50명 온보딩 직전 참조)
@@ -137,17 +137,24 @@
 - [ ] **OAuth state 1회성 nonce 저장소** (현재 JWT 서명만, replay window 10분)
 - [ ] **Refresh token 도입** (access 15분 + refresh 14일, `/api/auth/refresh`)
 - [ ] **HttpOnly cookie 전환** (현재 localStorage, cross-site cookie SameSite=None;Secure 고려)
+- [ ] **카카오 토큰 컬럼 암호화 또는 KMS** (현재 평문, XSS/DB 유출 시 피해 큼)
 - [ ] **must_change_password 전면 가드** — `/api/auth/change-password` 외 차단
 
 #### 운영 가시성
 - [ ] **Sentry 또는 외부 오류 추적 풀도입** (현재 Render 로그 + key=value 평문)
 - [ ] **카카오 발송 일일 카운트 모니터링 대시보드**
 
-#### 코드 구조
+#### 코드 구조 (외부 리뷰 종합)
 - [ ] **`reviews.py` (1,043줄) → `services/` 레이어 분리**
 - [ ] **`buildings.py` (700+줄) → 동일 분리**
 - [ ] **프론트 `admin/page.tsx` (1,385줄, useState 31개) → 섹션별 분리**
 - [ ] **React Query 도입** — 수동 fetch 너무 많음, 점진 도입
+- [ ] **phase/result 정의 중앙화** — 백엔드 phase_machine + reviews.py 맵 + 프론트 PHASE_LABELS + PRD 분산. 단일 소스
+- [ ] **alert/confirm → shadcn Dialog/Toast 통합** — 운영툴은 사용자 실수 방지·액션 추적성 중요
+
+#### 안정성 (외부 리뷰)
+- [ ] **async/sync 혼용 정리** — async 라우트에서 동기 SQLAlchemy/openpyxl/파일 I/O. event loop block 가능. (a) DB/엑셀 라우트는 def로, 또는 (b) AsyncSession + 백그라운드 워커
+- [ ] **purge cron 외부 scheduler** — DB advisory lock 또는 외부 cron (현재 lifespan task는 멀티워커 중복)
 
 #### 기능
 - [ ] **최종 completed 판정용 별도 엑셀 업로드 기능** — 현재 `phase_machine`에서 자동 completed 비활성화됨
@@ -157,6 +164,10 @@
 - [ ] **검토위원별 성과 리포트 export**
 - [ ] **알림 템플릿 관리 UI** (현재 하드코딩, DB 기반 관리)
 - [ ] **모바일 반응형 최적화** (현재 태블릿 이상)
+
+#### 확장성 (외부 리뷰 4)
+- [ ] **엑셀 검증/추출 worker 분리** — 대용량 처리 안정성
+- [ ] **presigned upload 도입** — 대용량 업로드 증가 시 서버 경유 회피
 
 #### 데이터 정합성
 - [ ] **미사용 필드 정리** — `buildings.drawing_creator_firm/name`, `high_risk_type`
@@ -177,12 +188,13 @@
 | 2026-04 중 | Stage 2~3 완료 (검토서 업로드/검증/추출 + 카카오 알림) |
 | 2026-04-17 | **카카오 디벨로퍼스 친구/메시지 권한 검수 통과** |
 | 2026-04-17 | 부적합 검토·공지사항·대시보드 재구성 |
-| 2026-04-18 | **보안 하드닝 P0/P0.5 + P1 D + N5 + 외부 리뷰 잔여까지 완료. 92 테스트 PASS** |
+| 2026-04-18 | **보안 하드닝 P0/P0.5 + P1 D + N5 + 외부 리뷰 4종 잔여까지 완료. 94 테스트 PASS** |
 | 2026-04-18 | 운영 문서 5종 + 카카오 초대 링크 비번 셋업 + 비번 미설정자 UI + 사용자 본인 동의 안내 배너 |
+| 2026-04-18 | 외부 리뷰 quick win — get_current_user 401 보강 + 업로드 stream 메모리 절약 |
 
 ---
 
-## 2026-04-18 세션 누적 변경 (보안·UX 묶음 30 커밋)
+## 2026-04-18 세션 누적 변경 (보안·UX 묶음 31 커밋, 94 테스트 PASS)
 
 | 묶음 | 핵심 |
 |---|---|
@@ -197,7 +209,8 @@
 | 비번 셋업 상태 UI | /admin "비번 미설정 N명" 컬럼 + 미설정자 필터 |
 | 카카오 동의 컬럼 | /admin 동의 OK/부족/미확인 캐시 + "동의 안내" 발송 버튼 |
 | 사용자 본인 배너 | dashboard layout 전역 배너 (미연동/동의부족) + "카카오 연동하기" 버튼 |
-| 외부 리뷰 잔여 | 파일 업로드 크기 제한 (8개 엔드포인트), S3 lru_cache, seed.py 환경 가드, 토큰 detail 마스킹, 401 race condition |
+| 외부 리뷰 잔여 1~3 | 파일 업로드 크기 제한 (8개 엔드포인트), S3 lru_cache, seed.py 환경 가드, 토큰 detail 마스킹, 401 race condition, docker-compose 가드, _registered_names_cache 데드 변수 제거 |
+| 외부 리뷰 4 quick win | get_current_user int(sub) 예외 401 보강 + 회귀 테스트 2개, 업로드 stream 개선 (stream_upload_to_tempfile으로 메모리 2중 사용 회피) |
 
 ---
 
