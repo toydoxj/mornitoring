@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from database import get_db
 from models.building import Building
@@ -236,7 +236,6 @@ def get_stats(
     )
 
     # 위원별 검토서 제출 건수 조회
-    submitted_by_reviewer = {}
     submitted_rows = (
         db.query(ReviewStage.building_id)
         .filter(
@@ -247,15 +246,23 @@ def get_stats(
     )
     submitted_building_ids = {r[0] for r in submitted_rows}
 
+    # N+1 제거: 위원별 doc_received 건물 ID를 한 번의 쿼리로 모두 조회 후 메모리 그룹핑
+    doc_received_rows = (
+        db.query(Building.assigned_reviewer_name, Building.id)
+        .filter(
+            Building.current_phase == "doc_received",
+            Building.assigned_reviewer_name.isnot(None),
+        )
+        .all()
+    )
+    received_by_reviewer: dict[str, list[int]] = {}
+    for rname, bid in doc_received_rows:
+        received_by_reviewer.setdefault(rname, []).append(bid)
+
     reviewer_stats = []
     for name, total_count, doc_count, comp_count, total_area, area_over_1000, high_risk in reviewer_stats_raw:
-        # 해당 위원의 building id 조회
-        reviewer_building_ids = [
-            b.id for b in db.query(Building.id)
-            .filter(Building.assigned_reviewer_name == name, Building.current_phase == "doc_received")
-            .all()
-        ]
-        submitted_count = len([bid for bid in reviewer_building_ids if bid in submitted_building_ids])
+        reviewer_building_ids = received_by_reviewer.get(name, [])
+        submitted_count = sum(1 for bid in reviewer_building_ids if bid in submitted_building_ids)
         not_submitted_count = len(reviewer_building_ids) - submitted_count
 
         reviewer_stats.append({
@@ -339,7 +346,14 @@ def list_buildings(
     if sort_order == "desc":
         sort_col = sort_col.desc()
 
-    buildings = query.order_by(sort_col).offset((page - 1) * size).limit(size).all()
+    # N+1 제거: building.reviewer.user를 한 번에 eager load
+    buildings = (
+        query.options(selectinload(Building.reviewer).selectinload(Reviewer.user))
+        .order_by(sort_col)
+        .offset((page - 1) * size)
+        .limit(size)
+        .all()
+    )
     registered_names = _get_registered_names(db)
     items = [_to_response(b, registered_names) for b in buildings]
     return BuildingListResponse(items=items, total=total)
@@ -544,7 +558,14 @@ def my_review_buildings(
 
     query = db.query(Building).filter(Building.reviewer_id == reviewer.id)
     total = query.count()
-    buildings = query.order_by(Building.mgmt_no).offset((page - 1) * size).limit(size).all()
+    # N+1 제거: building.reviewer.user를 한 번에 eager load
+    buildings = (
+        query.options(selectinload(Building.reviewer).selectinload(Reviewer.user))
+        .order_by(Building.mgmt_no)
+        .offset((page - 1) * size)
+        .limit(size)
+        .all()
+    )
     registered_names = _get_registered_names(db)
 
     # 각 건물별 최근 제출 stage (phase_order 최대, 제출일 존재) 조회
