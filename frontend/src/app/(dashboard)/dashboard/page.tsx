@@ -218,6 +218,75 @@ export default function DashboardPage() {
         </p>
       </div>
 
+      {/* 전체 통계 (간사 이상) — 상단 배치 */}
+      {isAdmin && stats && (
+        <>
+          <div>
+            <h2 className="text-lg font-bold mb-2">전체 현황</h2>
+            <div className="grid gap-4 md:grid-cols-3 lg:grid-cols-6">
+              <StatCard title="총 등록건" value={stats.total} />
+              <StatCard title="배정 완료" value={stats.assigned} />
+              <BreakdownCard
+                title="검토서 미접수"
+                total={stats.docs_waiting_review_preliminary + stats.docs_waiting_review_supplement}
+                accent="blue"
+                items={[
+                  { label: "예비", value: stats.docs_waiting_review_preliminary },
+                  { label: "보완", value: stats.docs_waiting_review_supplement },
+                ]}
+              />
+              <BreakdownCard
+                title="업로드된 검토서"
+                total={stats.uploaded_reports_preliminary + stats.uploaded_reports_supplement}
+                accent="slate"
+                onClick={canManageReports ? () => router.push("/review-files") : undefined}
+                items={[
+                  { label: "예비", value: stats.uploaded_reports_preliminary },
+                  { label: "보완", value: stats.uploaded_reports_supplement },
+                ]}
+              />
+              <BreakdownCard
+                title="문의사항"
+                total={
+                  stats.inquiry_counts.open +
+                  stats.inquiry_counts.asking_agency +
+                  stats.inquiry_counts.completed
+                }
+                accent="amber"
+                onClick={() => router.push("/inquiries")}
+                items={[
+                  { label: "접수", value: stats.inquiry_counts.open },
+                  { label: "관리원문의", value: stats.inquiry_counts.asking_agency },
+                  { label: "완료", value: stats.inquiry_counts.completed },
+                ]}
+              />
+              <BreakdownCard
+                title="최종 완료"
+                total={stats.completed}
+                accent="green"
+                items={[
+                  { label: "적합", value: stats.final_counts.pass },
+                  { label: "보완적합", value: stats.final_counts.pass_supplement },
+                  { label: "부적합", value: stats.final_counts.fail },
+                  { label: "부적합(미회신)", value: stats.final_counts.fail_no_response },
+                  { label: "대상제외", value: stats.final_counts.excluded },
+                ]}
+              />
+            </div>
+          </div>
+
+          {/* 단계별 현황: 배정완료 → 예비검토 → 보완검토 → 완료 플로우 */}
+          <Card>
+            <CardHeader>
+              <CardTitle>단계별 현황</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <FlowStages stats={stats} />
+            </CardContent>
+          </Card>
+        </>
+      )}
+
       {/* 내 담당 현황 (상단, 버킷 스타일) */}
       {myStats && myStats.total > 0 && (
         <section className="rounded-2xl border bg-gradient-to-br from-slate-50 to-white p-5 shadow-sm">
@@ -415,75 +484,6 @@ export default function DashboardPage() {
         </Card>
       </div>
 
-
-      {/* 전체 통계 (간사 이상) */}
-      {isAdmin && stats && (
-        <>
-          <div>
-            <h2 className="text-lg font-bold mb-2">전체 현황</h2>
-            <div className="grid gap-4 md:grid-cols-3 lg:grid-cols-6">
-              <StatCard title="총 등록건" value={stats.total} />
-              <StatCard title="배정 완료" value={stats.assigned} />
-              <BreakdownCard
-                title="검토서 미접수"
-                total={stats.docs_waiting_review_preliminary + stats.docs_waiting_review_supplement}
-                accent="blue"
-                items={[
-                  { label: "예비", value: stats.docs_waiting_review_preliminary },
-                  { label: "보완", value: stats.docs_waiting_review_supplement },
-                ]}
-              />
-              <BreakdownCard
-                title="업로드된 검토서"
-                total={stats.uploaded_reports_preliminary + stats.uploaded_reports_supplement}
-                accent="slate"
-                onClick={canManageReports ? () => router.push("/review-files") : undefined}
-                items={[
-                  { label: "예비", value: stats.uploaded_reports_preliminary },
-                  { label: "보완", value: stats.uploaded_reports_supplement },
-                ]}
-              />
-              <BreakdownCard
-                title="문의사항"
-                total={
-                  stats.inquiry_counts.open +
-                  stats.inquiry_counts.asking_agency +
-                  stats.inquiry_counts.completed
-                }
-                accent="amber"
-                onClick={() => router.push("/inquiries")}
-                items={[
-                  { label: "접수", value: stats.inquiry_counts.open },
-                  { label: "관리원문의", value: stats.inquiry_counts.asking_agency },
-                  { label: "완료", value: stats.inquiry_counts.completed },
-                ]}
-              />
-              <BreakdownCard
-                title="최종 완료"
-                total={stats.completed}
-                accent="green"
-                items={[
-                  { label: "적합", value: stats.final_counts.pass },
-                  { label: "보완적합", value: stats.final_counts.pass_supplement },
-                  { label: "부적합", value: stats.final_counts.fail },
-                  { label: "부적합(미회신)", value: stats.final_counts.fail_no_response },
-                  { label: "대상제외", value: stats.final_counts.excluded },
-                ]}
-              />
-            </div>
-          </div>
-
-          {/* 단계별 현황: 배포 → 예비검토 → 보완검토 → 완료 플로우 */}
-          <Card>
-            <CardHeader>
-              <CardTitle>단계별 현황</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <FlowStages stats={stats} />
-            </CardContent>
-          </Card>
-        </>
-      )}
 
       {/* 위원별 현황 */}
       {isAdmin && stats && stats.reviewer_stats.length > 0 && (
@@ -764,7 +764,7 @@ function FlowStages({ stats }: { stats: DashboardStats }) {
 
   return (
     <div className="flex flex-col items-stretch gap-3 lg:flex-row">
-      <FlowStageCard title="배포" total={stats.assigned} accent="blue" items={[]} />
+      <FlowStageCard title="배정완료" total={stats.assigned} accent="blue" items={[]} />
       <FlowArrow />
       <FlowStageCard
         title="예비검토"
