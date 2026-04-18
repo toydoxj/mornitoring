@@ -38,8 +38,9 @@ def test_reviewer_schedule_buckets(client, db_session, make_user, make_reviewer)
     res = client.get("/api/buildings/reviewer-schedule", headers=headers_admin)
     assert res.status_code == 200
     rows = res.json()
-    assert len(rows) == 1
-    row = rows[0]
+    # 활성 사용자 전원(관리자 + 검토위원) 포함
+    assert len(rows) >= 2
+    row = next(r for r in rows if r["reviewer_name"].startswith("검토위원"))
     assert row["in_progress"] == 5
     assert row["overdue"] == 1
     assert row["d_day"] == 1
@@ -53,10 +54,10 @@ def test_reviewer_schedule_denied_for_reviewer(client, make_reviewer):
     assert res.status_code == 403
 
 
-def test_reviewer_schedule_lists_all_active_reviewers_even_when_idle(
+def test_reviewer_schedule_lists_all_active_users_even_when_idle(
     client, db_session, make_user, make_reviewer
 ):
-    """미제출 건이 없는 검토위원도 모든 카운트 0으로 포함되어야 한다."""
+    """미제출 건이 없어도 활성 사용자 전원(팀장·총괄간사·간사·검토위원)을 모든 카운트 0으로 포함한다."""
     _, headers_admin = make_user(UserRole.CHIEF_SECRETARY, name="관리자")
     _busy_user, reviewer_busy, _ = make_reviewer()
     _idle_user, _reviewer_idle, _ = make_reviewer()
@@ -66,10 +67,12 @@ def test_reviewer_schedule_lists_all_active_reviewers_even_when_idle(
     res = client.get("/api/buildings/reviewer-schedule", headers=headers_admin)
     assert res.status_code == 200
     rows = res.json()
-    # 두 검토위원 모두 응답에 포함
-    assert len(rows) == 2
+    # 관리자 + 검토위원 2명 모두 응답에 포함
+    assert len(rows) == 3
     busy = next(r for r in rows if r["in_progress"] > 0)
-    idle = next(r for r in rows if r["in_progress"] == 0)
+    idles = [r for r in rows if r["in_progress"] == 0]
     assert busy["d_minus_1"] == 1
-    assert idle["d_minus_1"] == 0
-    assert idle["overdue"] == 0
+    assert len(idles) == 2  # 관리자 + idle 검토위원
+    for r in idles:
+        assert r["overdue"] == 0
+        assert r["d_minus_1"] == 0

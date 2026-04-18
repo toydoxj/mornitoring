@@ -505,13 +505,10 @@ def reviewer_schedule(
 
     today = date.today()
 
-    # 1) 활성 REVIEWER 전체를 0 초기화로 준비
+    # 1) 활성 사용자 전체(팀장·총괄간사·간사·검토위원)를 0 초기화로 준비
     reviewer_users = (
         db.query(User)
-        .filter(
-            User.is_active.is_(True),
-            User.role == UserRole.REVIEWER,
-        )
+        .filter(User.is_active.is_(True))
         .order_by(User.name)
         .all()
     )
