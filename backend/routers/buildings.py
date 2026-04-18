@@ -168,15 +168,28 @@ def get_stats(
         require_roles(UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY, UserRole.SECRETARY)
     ),
 ):
-    """대시보드 통계 (관리자 전용 — 전체 건물 통계 노출)"""
+    """대시보드 통계 (관리자 전용 — 전체 건물 통계 노출).
+
+    DB 왕복 수를 줄이기 위해 4개 쿼리로 통합:
+      1) 총 건수 + 최종 완료 건수
+      2) phase별 건수 GROUP BY
+      3) 위원별 집계 (총/단계/완료/면적/고위험)
+      4) 위원별 doc_received 상태 중 예비검토서 제출/미제출 (LEFT JOIN + GROUP BY)
+    """
+    from sqlalchemy import and_, func as sa_func
     from models.review_stage import ReviewStage, PhaseType
 
-    total = db.query(Building).count()
+    # 1) 총 건수 + 최종 완료 건수 (단일 쿼리)
+    totals_row = db.query(
+        sa_func.count(Building.id).label("total"),
+        sa_func.count(Building.id).filter(Building.final_result.isnot(None)).label("completed"),
+    ).one()
+    total = totals_row.total or 0
+    completed = totals_row.completed or 0
 
-    # 단계별 건수 (세부)
-    from sqlalchemy import func as sa_func2
+    # 2) phase 별 건수
     phase_counts_raw = (
-        db.query(Building.current_phase, sa_func2.count(Building.id))
+        db.query(Building.current_phase, sa_func.count(Building.id))
         .group_by(Building.current_phase)
         .all()
     )
@@ -201,8 +214,6 @@ def get_stats(
         "supplement_4", "supplement_5",
     }
     review_in_progress = sum(v for k, v in phase_counts.items() if k in submission_phases)
-    # 최종 완료
-    completed = db.query(Building).filter(Building.final_result.isnot(None)).count()
 
     # 기존 필드 호환 (이미 사용 중인 명칭 유지)
     doc_received = phase_counts.get("doc_received", 0)
@@ -210,8 +221,7 @@ def get_stats(
     preliminary = phase_counts.get("preliminary", 0)
     supplement = sum(v for k, v in phase_counts.items() if k.startswith("supplement"))
 
-    # 위원별 현황
-    from sqlalchemy import func as sa_func
+    # 3) 위원별 기본 집계
     reviewer_stats_raw = (
         db.query(
             Building.assigned_reviewer_name,
@@ -232,35 +242,39 @@ def get_stats(
         .all()
     )
 
-    # 위원별 검토서 제출 건수 조회
-    submitted_rows = (
-        db.query(ReviewStage.building_id)
-        .filter(
-            ReviewStage.phase == PhaseType.PRELIMINARY,
-            ReviewStage.report_submitted_at.isnot(None),
+    # 4) 위원별 doc_received 상태 건물 중 예비검토서 제출/미제출 수 (LEFT JOIN 1회)
+    # - building당 (phase=PRELIMINARY, submitted_at NOT NULL) review_stage 최대 1건이라는 도메인
+    #   전제 하에 COUNT(ReviewStage.id)로 제출 건수를 집계한다. 가정이 깨지면 DISTINCT 필요.
+    received_stats_raw = (
+        db.query(
+            Building.assigned_reviewer_name,
+            sa_func.count(Building.id).label("received"),
+            sa_func.count(ReviewStage.id).label("received_submitted"),
         )
-        .all()
-    )
-    submitted_building_ids = {r[0] for r in submitted_rows}
-
-    # N+1 제거: 위원별 doc_received 건물 ID를 한 번의 쿼리로 모두 조회 후 메모리 그룹핑
-    doc_received_rows = (
-        db.query(Building.assigned_reviewer_name, Building.id)
+        .outerjoin(
+            ReviewStage,
+            and_(
+                ReviewStage.building_id == Building.id,
+                ReviewStage.phase == PhaseType.PRELIMINARY,
+                ReviewStage.report_submitted_at.isnot(None),
+            ),
+        )
         .filter(
             Building.current_phase == "doc_received",
             Building.assigned_reviewer_name.isnot(None),
         )
+        .group_by(Building.assigned_reviewer_name)
         .all()
     )
-    received_by_reviewer: dict[str, list[int]] = {}
-    for rname, bid in doc_received_rows:
-        received_by_reviewer.setdefault(rname, []).append(bid)
+    received_by_reviewer: dict[str, tuple[int, int]] = {
+        name: (received or 0, received_submitted or 0)
+        for name, received, received_submitted in received_stats_raw
+    }
 
     reviewer_stats = []
     for name, total_count, doc_count, comp_count, total_area, area_over_1000, high_risk in reviewer_stats_raw:
-        reviewer_building_ids = received_by_reviewer.get(name, [])
-        submitted_count = sum(1 for bid in reviewer_building_ids if bid in submitted_building_ids)
-        not_submitted_count = len(reviewer_building_ids) - submitted_count
+        received_total, submitted_count = received_by_reviewer.get(name, (0, 0))
+        not_submitted_count = received_total - submitted_count
 
         reviewer_stats.append({
             "name": name,
