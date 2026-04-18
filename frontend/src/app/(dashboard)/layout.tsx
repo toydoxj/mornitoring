@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react"
 import { useRouter, usePathname } from "next/navigation"
 import Link from "next/link"
+import Image from "next/image"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Separator } from "@/components/ui/separator"
@@ -94,7 +95,18 @@ export default function DashboardLayout({
       <header className="border-b bg-white">
         <div className="mx-auto flex h-14 w-[90%] items-center justify-between">
           <div className="flex items-center gap-6">
-            <Link href="/buildings" className="text-lg font-bold">
+            <Link
+              href="/dashboard"
+              className="flex items-center gap-2 text-lg font-bold"
+            >
+              <Image
+                src="/ksea.png"
+                alt="KSEA 로고"
+                width={28}
+                height={28}
+                priority
+                className="h-7 w-7 rounded"
+              />
               모니터링
             </Link>
             <nav className="flex gap-1">

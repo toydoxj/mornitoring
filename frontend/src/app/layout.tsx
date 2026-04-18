@@ -13,7 +13,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "건축구조안전 모니터링 검토 시스템",
+  title: "건축구조안전 모니터링",
   description: "건축구조안전 모니터링 플랫폼",
 };
 
