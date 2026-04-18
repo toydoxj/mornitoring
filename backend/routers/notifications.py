@@ -239,6 +239,38 @@ async def send_notifications(
     )
 
 
+class ReviewReminderRequest(BaseModel):
+    trigger: str  # "d_minus_1" | "overdue"
+    dry_run: bool = False
+
+
+@router.post("/review-reminder")
+async def send_review_reminder_endpoint(
+    body: ReviewReminderRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(
+        require_roles(UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY)
+    ),
+):
+    """검토위원 리마인드 알림 수동 발송.
+
+    trigger 값:
+      - `d_minus_1`: 내일이 예정일인 미제출 건
+      - `overdue`: 예정일이 지났는데 미제출인 건
+
+    `dry_run=true` 이면 대상자 프리뷰만 반환하고 실제 발송·로그 기록은 하지 않는다.
+    동일 함수는 `scripts/send_review_reminders.py` (cron)에서도 재사용된다.
+    """
+    from services.review_reminder import send_review_reminders
+
+    if body.trigger not in {"d_minus_1", "overdue"}:
+        raise HTTPException(status_code=400, detail="trigger 값이 올바르지 않습니다")
+
+    return await send_review_reminders(
+        db, current_user, body.trigger, dry_run=body.dry_run
+    )
+
+
 @router.get("", response_model=NotificationListResponse)
 def list_notifications(
     is_sent: bool | None = None,
