@@ -1,7 +1,8 @@
 # 건축구조안전 모니터링 시스템 — 구현 계획서
 
 > 최종 갱신: 2026-04-18
-> 진행 상황: Stage 1~4 거의 완료. 보안 P0/P0.5 + P1 D 완료. 운영 투입 직전.
+> 진행 상황: Stage 1~4 완료. 보안 P0/P0.5 + P1 D + N5 + 외부 리뷰 잔여까지 완료. 92 테스트 PASS.
+> **운영 투입 직전 — 다음 단계는 운영 dry-run 또는 운영 전환.**
 
 ## 운영 문서 (50명 온보딩 직전 참조)
 
@@ -106,52 +107,65 @@
 
 ## 아직 남은 작업 (TODO)
 
-### 우선순위 높음
-- [ ] **검토서 양식 셀 위치 재확인**
-  - F9/H9 도면작성자 소속/성명 — **현재 미사용으로 삭제됨, 자격(F13)만 유지**
-  - 실제 양식의 내진등급 셀이 F12가 맞는지 최종 확인
-- [ ] **최종 완료(completed) 판정용 별도 엑셀 업로드 기능**
-  - 현재 `phase_machine`에서 자동 completed 처리 비활성화됨
-  - 별도 엑셀로 최종 판정 지정 예정 (사용자 요구)
+### 🔴 운영 시작 전 필수 (사람-손, 2026-04-18 시점)
+
+- [ ] **운영 dry-run** — 테스트 계정 2~3개로 end-to-end 흐름 검증
+  - 절차: [.doc/operational-dry-run.md](./operational-dry-run.md)
+  - 검증: 등록 → 자동 발송 → 카카오 수신 → 비번 셋팅 → 카카오 연동 → 동의 진단 → 검토위원 화면 확인
+- [ ] **AWS IAM 기존 키 `AKIAZZPZKADQH5MH5YMY` Deactivate** (검증 후 Delete)
+- [ ] **"ksea" 잔존 계정 3명 비번 초기화** — `/admin`에서 "초대 발송" 또는 "PW초기화"
+- [ ] **카카오 콘솔 friends 동의항목 '선택 동의' 변경**
+- [ ] **`.env.example` 갱신** — `CORS_ORIGINS`, `FRONTEND_BASE_URL`, `KAKAO_CLIENT_SECRET` 누락 항목 추가
 - [ ] **검토위원 50명 실제 온보딩**
-  - 사용자 계정 생성 (엑셀 일괄등록)
-  - 카카오 로그인 + 동의 + 카카오톡 친구 관계 확보
-  - 간사가 `/admin`에서 친구 매칭
-- [ ] **프로덕션 배포 환경 최종 점검**
-  - 마이그레이션 자동 적용 확인 (Render)
-  - 환경변수/시크릿 점검
-  - AWS S3 운영 버킷 / IAM 정책
+  - `/admin`에서 엑셀 일괄 등록 (자동 발송 ON 권장)
+  - 카카오 매칭 사용자: 자동 발송 → 사용자가 비번 셋팅 + 카카오 연동
+  - 미매칭 사용자: 수동 전달용 setup_url을 SMS/이메일로 전달
+  - 50명 등록 후 `python -m scripts.backfill_reviewer_id --include-all-roles --apply --create-missing-reviewer`
+  - `/admin`에서 카카오 친구 매칭 (선택)
+  - "비번 미설정자만 보기" 토글로 미설정자 식별 → 재발송
 
-### 우선순위 중간
-- [ ] **도서배포(`doc_distributed_at`) 워크플로**
-  - 현재 `doc_received_at`만 기록되고 있음
-  - 간사가 검토위원에게 도서 배포한 날짜를 별도 기록하는 UI/API 필요할지 검토
-- [ ] **검토 마감일 알림 (자동 리마인더)**
-  - 접수 후 N일 경과 시 자동 알림 (카카오 메시지 API 자동 발송은 검수 정책상 별도 검토 필요)
-  - 현재는 수동 발송만 구현
-- [ ] **검토서 버전 히스토리**
-  - 현재 같은 단계 재업로드 시 기존 파일/데이터 덮어쓰기
-  - 이전 버전 스냅샷 보존 필요한지 검토 (audit_logs에 업로드 행위만 기록 중)
-- [ ] **인덱스 최적화**
-  - `buildings.current_phase`, `buildings.assigned_reviewer_name` 등 빈번한 필터 대상 인덱스 검토
-  - 3,401건 규모에서는 문제 없으나 확장 대비
+### 🟡 운영 시작 후 1주 내
 
-### 우선순위 낮음
-- [ ] **미사용 필드 정리**
-  - `buildings.drawing_creator_firm`, `drawing_creator_name` (사용자가 제거 요청, DB 컬럼은 아직 존재)
-  - `buildings.high_risk_type` (전부 NULL, is_special/high_rise/multi_use 3개 불리언으로 대체됨)
+- [ ] **`/reset-password` 통합** — D 토큰 흐름으로 단계적 통합, `initial_password` 응답 단계적 제거
+- [ ] **자동 리마인더 정책 결정** — 접수 후 N일 경과 미설정자/검토 미제출자 자동 알림
+- [ ] **purge cron 외부 scheduler 이동** — 멀티워커 중복 실행 방지 (Render cron job 등)
+- [ ] **검토위원 미설정자 일괄 재발송 단축 액션 (UI)** — 현재는 체크박스+일괄, "필터 결과 모두 선택" 단축 버튼
+
+### 🟢 안정화 단계 (1주~1개월)
+
+#### 보안 강화
+- [ ] **OAuth state 1회성 nonce 저장소** (현재 JWT 서명만, replay window 10분)
+- [ ] **Refresh token 도입** (access 15분 + refresh 14일, `/api/auth/refresh`)
+- [ ] **HttpOnly cookie 전환** (현재 localStorage, cross-site cookie SameSite=None;Secure 고려)
+- [ ] **must_change_password 전면 가드** — `/api/auth/change-password` 외 차단
+
+#### 운영 가시성
+- [ ] **Sentry 또는 외부 오류 추적 풀도입** (현재 Render 로그 + key=value 평문)
+- [ ] **카카오 발송 일일 카운트 모니터링 대시보드**
+
+#### 코드 구조
+- [ ] **`reviews.py` (1,043줄) → `services/` 레이어 분리**
+- [ ] **`buildings.py` (700+줄) → 동일 분리**
+- [ ] **프론트 `admin/page.tsx` (1,385줄, useState 31개) → 섹션별 분리**
+- [ ] **React Query 도입** — 수동 fetch 너무 많음, 점진 도입
+
+#### 기능
+- [ ] **최종 completed 판정용 별도 엑셀 업로드 기능** — 현재 `phase_machine`에서 자동 completed 비활성화됨
+- [ ] **검토서 양식 셀 위치 재확인** (내진등급 F12, 도면작성자 자격 F13)
+- [ ] **도서배포(`doc_distributed_at`) 워크플로** (현재 `doc_received_at`만 기록)
+- [ ] **검토서 버전 히스토리** (현재 재업로드 시 덮어쓰기)
 - [ ] **검토위원별 성과 리포트 export**
-- [ ] **알림 템플릿 관리 UI**
-  - 현재 프론트에 하드코딩된 템플릿 3종 (검토 요청/도서 접수/리마인더)
-  - 팀장이 템플릿 편집하게 하려면 DB 기반 관리 필요
-- [ ] **백엔드 단위 테스트 / E2E 테스트 작성**
-- [ ] **모바일 반응형 최적화** (현재 태블릿 이상 전제)
+- [ ] **알림 템플릿 관리 UI** (현재 하드코딩, DB 기반 관리)
+- [ ] **모바일 반응형 최적화** (현재 태블릿 이상)
+
+#### 데이터 정합성
+- [ ] **미사용 필드 정리** — `buildings.drawing_creator_firm/name`, `high_risk_type`
+- [ ] **인덱스 최적화** — `current_phase`, `assigned_reviewer_name` 등 (3,401건이라 당장 부담 없음)
 
 ### 문서화
 - [ ] `kakao-message-setup.md` 최신화 (검수 통과 반영)
-- [ ] `kakao-permission-review-purpose.md`는 보관/삭제 결정
-- [ ] API 엔드포인트 전체 목록 문서 (현재 `/openapi.json`으로 확인 가능)
-- [ ] 운영 매뉴얼 (간사/팀장용 사용 가이드)
+- [ ] `kakao-permission-review-purpose.md` 보관/삭제 결정
+- [ ] API 엔드포인트 전체 목록 문서 (현재 `/openapi.json`)
 
 ---
 
@@ -163,6 +177,27 @@
 | 2026-04 중 | Stage 2~3 완료 (검토서 업로드/검증/추출 + 카카오 알림) |
 | 2026-04-17 | **카카오 디벨로퍼스 친구/메시지 권한 검수 통과** |
 | 2026-04-17 | 부적합 검토·공지사항·대시보드 재구성 |
+| 2026-04-18 | **보안 하드닝 P0/P0.5 + P1 D + N5 + 외부 리뷰 잔여까지 완료. 92 테스트 PASS** |
+| 2026-04-18 | 운영 문서 5종 + 카카오 초대 링크 비번 셋업 + 비번 미설정자 UI + 사용자 본인 동의 안내 배너 |
+
+---
+
+## 2026-04-18 세션 누적 변경 (보안·UX 묶음 30 커밋)
+
+| 묶음 | 핵심 |
+|---|---|
+| P0 (B/C/G/H) | 카카오 토큰 봉인, REVIEWER 권한 강화, reviews.py hotfix, pytest 인프라 |
+| P0.5 N1+N2 | reviewer_id 백필 스크립트, my-* OR 조건 정리 |
+| P0.5 N3 | reviews.py 잔여 권한, Inquiry.submitter_id |
+| P0.5 N4 | audit/kakao/announcements/discussions 등 8개 라우터 권한 sweep |
+| P0.5 N6+N8 | GitHub Actions CI, X-Request-ID 미들웨어, 키-값 로깅 |
+| P1 D 3단계 | 카카오 초대 링크 비번 셋업 + admin UI + 일괄 발송 |
+| P1 N5 | respx 카카오 mock 통합 테스트 |
+| 운영 이슈 fix | reviewer_id 백필 확장 + inquiry submitter_id 백필 + 본인 데이터 노출 복구 |
+| 비번 셋업 상태 UI | /admin "비번 미설정 N명" 컬럼 + 미설정자 필터 |
+| 카카오 동의 컬럼 | /admin 동의 OK/부족/미확인 캐시 + "동의 안내" 발송 버튼 |
+| 사용자 본인 배너 | dashboard layout 전역 배너 (미연동/동의부족) + "카카오 연동하기" 버튼 |
+| 외부 리뷰 잔여 | 파일 업로드 크기 제한 (8개 엔드포인트), S3 lru_cache, seed.py 환경 가드, 토큰 detail 마스킹, 401 race condition |
 
 ---
 
