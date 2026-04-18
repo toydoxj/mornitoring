@@ -150,6 +150,13 @@ class BulkSendInviteResponse(BaseModel):
     results: list[BulkInviteResultItem]
 
 
+class ConsentReminderResponse(BaseModel):
+    """카카오 동의 재안내 발송 결과."""
+    delivery: str  # "kakao" | "manual"
+    login_url: str
+    error: str | None = None
+
+
 class UserListResponse(BaseModel):
     items: list[UserResponse]
     total: int
@@ -576,6 +583,73 @@ async def bulk_send_invite(
             sender_error=summary.sender_error,
         ),
         results=items,
+    )
+
+
+@router.post("/{user_id}/send-consent-reminder", response_model=ConsentReminderResponse)
+async def send_consent_reminder(
+    user_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(
+        require_roles(UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY)
+    ),
+):
+    """카카오 동의 부족 사용자에게 재동의 안내 메시지 발송.
+
+    - 카카오 매칭(`kakao_uuid`)된 사용자: 발신 관리자의 카카오 토큰으로 친구 메시지 발송
+    - 미매칭 또는 발송 실패: manual — 운영자가 다른 채널로 login URL 안내
+    - 사용자가 login URL에서 카카오 로그인 시 누락 scope 동의 화면이 자동 노출됨
+    """
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다")
+    if not user.is_active:
+        raise HTTPException(status_code=400, detail="비활성 사용자입니다")
+
+    login_url = f"{settings.frontend_base_url.rstrip('/')}/login"
+    delivery = "manual"
+    error: str | None = None
+
+    if user.kakao_uuid:
+        try:
+            from services.kakao import ensure_valid_token, send_message_to_friends
+
+            access_token = await ensure_valid_token(current_user, db)
+            title = "건축구조안전 모니터링 — 카카오 동의 갱신 요청"
+            description = (
+                f"{user.name}님, 시스템에서 카카오 알림을 받으려면 "
+                f"카카오 로그인 후 추가 동의가 필요합니다. 아래 링크를 눌러 다시 로그인해주세요."
+            )
+            result = await send_message_to_friends(
+                access_token=access_token,
+                receiver_uuids=[user.kakao_uuid],
+                title=title,
+                description=description,
+                link_url=login_url,
+            )
+            if "error" in result:
+                error = str(result.get("detail", "발송 실패"))
+                log_event(
+                    "error", "consent_reminder_kakao_failed",
+                    user_id=user.id, reason=error,
+                )
+            else:
+                delivery = "kakao"
+                log_event(
+                    "info", "consent_reminder_kakao_sent",
+                    user_id=user.id,
+                )
+        except Exception as exc:
+            error = f"카카오 발송 오류: {exc}"
+            log_event(
+                "error", "consent_reminder_kakao_exception",
+                user_id=user.id, reason=str(exc),
+            )
+
+    return ConsentReminderResponse(
+        delivery=delivery,
+        login_url=login_url,
+        error=error,
     )
 
 

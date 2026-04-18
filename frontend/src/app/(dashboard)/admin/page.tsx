@@ -396,6 +396,45 @@ export default function AdminPage() {
     }
   }
 
+  const [reminderUserId, setReminderUserId] = useState<number | null>(null)
+
+  const handleSendConsentReminder = async (userId: number, userName: string, kakaoMatched: boolean) => {
+    const message = kakaoMatched
+      ? `${userName}에게 카카오 동의 재안내 메시지를 발송하시겠습니까?`
+      : `${userName}은 카카오 매칭이 안 되어 있습니다.\n\nlogin URL이 화면에 표시됩니다. 별도 채널로 전달해주세요. 진행하시겠습니까?`
+    if (!confirm(message)) return
+    setReminderUserId(userId)
+    try {
+      const { data } = await apiClient.post<{
+        delivery: string
+        login_url: string
+        error?: string | null
+      }>(`/api/users/${userId}/send-consent-reminder`)
+      if (data.delivery === "kakao" && !data.error) {
+        alert(`${userName}에게 카카오 메시지로 동의 안내를 발송했습니다.`)
+      } else {
+        const errSuffix = data.error ? `\n사유: ${data.error}` : ""
+        const ok = confirm(
+          `카카오 발송이 안 되어 수동 전달이 필요합니다.${errSuffix}\n\nlogin URL을 클립보드에 복사할까요?\n${data.login_url}`
+        )
+        if (ok) {
+          try {
+            await navigator.clipboard.writeText(data.login_url)
+          } catch {
+            // ignore
+          }
+        }
+      }
+    } catch (err) {
+      const msg =
+        (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
+        ?? "동의 안내 발송 실패"
+      alert(msg)
+    } finally {
+      setReminderUserId(null)
+    }
+  }
+
   const handleResetPassword = async (userId: number, userName: string) => {
     if (!confirm(`${userName}의 비밀번호를 초기화하시겠습니까?`)) return
     try {
@@ -822,6 +861,19 @@ export default function AdminPage() {
                       >
                         초대 발송
                       </Button>
+                      {user.kakao_scopes_status === "insufficient" && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          loading={reminderUserId === user.id}
+                          loadingText="발송 중..."
+                          onClick={() =>
+                            handleSendConsentReminder(user.id, user.name, !!user.kakao_matched)
+                          }
+                        >
+                          동의 안내
+                        </Button>
+                      )}
                       <Button
                         size="sm"
                         variant="outline"
