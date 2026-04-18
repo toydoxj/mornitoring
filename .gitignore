@@ -23,3 +23,9 @@ shrimp_data/
 
 # Playwright MCP logs
 .playwright-mcp/
+
+# 내부 문서의 실제 엑셀 데이터는 저장소에 올리지 않음 (.doc/ 내 템플릿/샘플 포함)
+.doc/*.xlsx
+.doc/*.xls
+.doc/*.xlsm
+.doc/*.xlsb
