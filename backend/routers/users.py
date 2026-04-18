@@ -252,7 +252,16 @@ def get_user(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """사용자 상세 조회"""
+    """사용자 상세 조회 — 본인 또는 관리자(팀장/총괄간사)만.
+
+    REVIEWER/SECRETARY가 임의의 user_id로 다른 사용자 정보(이메일/전화번호 등)를
+    조회하지 못하도록 방어. 존재 자체를 노출하지 않기 위해 권한 미달 시 404.
+    """
+    is_admin = current_user.role in (UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY)
+    is_self = current_user.id == user_id
+    if not (is_admin or is_self):
+        raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다")
+
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다")
