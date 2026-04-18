@@ -64,6 +64,16 @@ export default function DashboardLayout({
     setBannerDismissed((prev) => ({ ...prev, [key]: true }))
   }
 
+  const handleConnectKakao = async () => {
+    try {
+      const { data } = await apiClient.get<{ url: string }>("/api/auth/kakao/login")
+      window.location.href = data.url
+    } catch (err) {
+      console.error("카카오 연동 시작 실패:", err)
+      alert("카카오 연동 시작에 실패했습니다. 잠시 후 다시 시도해주세요.")
+    }
+  }
+
   if (isLoading) {
     return (
       <div className="flex min-h-screen items-center justify-center">
@@ -116,17 +126,22 @@ export default function DashboardLayout({
         <div className="border-b border-amber-200 bg-amber-50 text-amber-900">
           <div className="mx-auto flex w-[90%] items-center justify-between gap-3 py-2 text-sm">
             <span>
-              📱 카카오 알림을 받으려면 <strong>카카오 연동</strong>이 필요합니다. 로그아웃 후
-              카카오로 다시 로그인해주세요.
+              📱 카카오 알림을 받으려면 <strong>카카오 연동</strong>이 필요합니다.
+              아래 버튼으로 카카오 로그인 + 동의를 진행해주세요.
             </span>
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => dismissBanner("notLinked")}
-              className="text-amber-900"
-            >
-              닫기
-            </Button>
+            <div className="flex gap-2">
+              <Button size="sm" onClick={handleConnectKakao}>
+                카카오 연동하기
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => dismissBanner("notLinked")}
+                className="text-amber-900"
+              >
+                닫기
+              </Button>
+            </div>
           </div>
         </div>
       )}
