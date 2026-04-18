@@ -13,11 +13,11 @@ from config import settings
 from database import get_db
 from logging_config import log_event
 from models.building import Building
-from models.password_setup_token import TokenDeliveryChannel, TokenPurpose
+from models.password_setup_token import TokenPurpose
 from models.reviewer import Reviewer
 from models.user import User, UserRole
 from routers.auth import get_current_user, get_password_hash, require_roles
-from services.password_setup import issue_setup_token
+from services.invite import InviteResult, send_invites
 
 router = APIRouter()
 
@@ -97,6 +97,9 @@ class BulkImportResponse(BaseModel):
     skipped: int
     errors: list[str] = []
     accounts: list[BulkImportAccount] = []
+    # auto_send_invite=True로 호출된 경우만 채워짐
+    invite_summary: "BulkInviteSummary | None" = None
+    invite_results: list["BulkInviteResultItem"] = []
 
 
 class ResetPasswordResponse(BaseModel):
@@ -105,16 +108,39 @@ class ResetPasswordResponse(BaseModel):
 
 
 class SendInviteResponse(BaseModel):
-    """초대 발송 결과.
-
-    delivery=kakao: 카카오 메시지 발송 성공. setup_url은 디버그/관리자 확인용으로 함께 반환.
-    delivery=manual: 카카오 매칭 안 됨 또는 발송 실패. 관리자가 setup_url을 다른 채널로 전달.
-    """
+    """단건 초대 발송 결과."""
     delivery: str  # "kakao" | "manual"
-    setup_url: str
+    setup_url: str | None  # manual/error에만 노출 (kakao 성공 시 None)
     expires_at: str
     purpose: str
-    error: str | None = None  # 카카오 발송 실패 시 사유
+    error: str | None = None
+
+
+class BulkSendInviteRequest(BaseModel):
+    user_ids: list[int]
+    purpose: TokenPurpose = TokenPurpose.INITIAL_SETUP
+
+
+class BulkInviteResultItem(BaseModel):
+    user_id: int
+    name: str
+    delivery: str  # "kakao" | "manual"
+    expires_at: str
+    setup_url: str | None  # manual/error에만
+    error: str | None
+
+
+class BulkInviteSummary(BaseModel):
+    total: int
+    kakao_sent: int
+    manual: int
+    failed: int
+    sender_error: str | None  # 카카오 발신자 토큰 미준비 등 공통 사유
+
+
+class BulkSendInviteResponse(BaseModel):
+    summary: BulkInviteSummary
+    results: list[BulkInviteResultItem]
 
 
 class UserListResponse(BaseModel):
@@ -195,6 +221,7 @@ def create_user(
 @router.post("/import-excel", response_model=BulkImportResponse)
 async def import_users_excel(
     file: UploadFile = File(...),
+    auto_send_invite: bool = Query(False, description="등록 후 카카오/수동 초대 자동 발송"),
     db: Session = Depends(get_db),
     current_user: User = Depends(
         require_roles(UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY)
@@ -203,6 +230,8 @@ async def import_users_excel(
     """사용자 일괄 등록 (엑셀). 각 신규 계정의 일회용 초기 비밀번호를 응답에 포함.
 
     엑셀 형식: A열=이름, B열=이메일, C열=역할(팀장/총괄간사/간사/검토위원), D열=전화번호(선택)
+    auto_send_invite=true인 경우 신규 계정에 한해 send_invites를 호출하고
+    invite_summary/invite_results를 응답에 포함한다.
     """
     if not file.filename or not file.filename.endswith((".xlsx", ".xls")):
         raise HTTPException(status_code=400, detail="엑셀 파일(.xlsx)만 업로드 가능합니다")
@@ -220,6 +249,7 @@ async def import_users_excel(
         skipped = 0
         errors: list[str] = []
         accounts: list[BulkImportAccount] = []
+        created_users: list[User] = []
 
         for row_idx, row in enumerate(ws.iter_rows(min_row=2), start=2):
             name = str(row[0].value).strip() if row[0].value else None
@@ -252,11 +282,49 @@ async def import_users_excel(
                 email=email, name=name, initial_password=initial_password,
             ))
             created += 1
+            created_users.append(user)
 
         db.commit()
+        # commit 후 user.id 확보
+        for u in created_users:
+            db.refresh(u)
         wb.close()
+
+        invite_summary = None
+        invite_results: list[BulkInviteResultItem] = []
+        if auto_send_invite and created_users:
+            summary, results = await send_invites(
+                db,
+                sender=current_user,
+                targets=created_users,
+                purpose=TokenPurpose.INITIAL_SETUP,
+            )
+            invite_summary = BulkInviteSummary(
+                total=summary.total,
+                kakao_sent=summary.kakao_sent,
+                manual=summary.manual,
+                failed=summary.failed,
+                sender_error=summary.sender_error,
+            )
+            invite_results = [
+                BulkInviteResultItem(
+                    user_id=r.user_id,
+                    name=r.name,
+                    delivery=r.delivery,
+                    expires_at=r.expires_at,
+                    setup_url=r.setup_url,
+                    error=r.error,
+                )
+                for r in results
+            ]
+
         return BulkImportResponse(
-            created=created, skipped=skipped, errors=errors, accounts=accounts,
+            created=created,
+            skipped=skipped,
+            errors=errors,
+            accounts=accounts,
+            invite_summary=invite_summary,
+            invite_results=invite_results,
         )
 
     finally:
@@ -342,82 +410,92 @@ async def send_invite(
         require_roles(UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY)
     ),
 ):
-    """비밀번호 셋업 초대 발송 (팀장/총괄간사).
-
-    - 카카오 매칭(`kakao_uuid`)된 사용자에게는 발신 관리자의 카카오 토큰으로 초대 메시지 발송
-    - 미매칭 사용자에게는 setup_url만 응답 → 관리자가 별도 채널로 전달
-    - 기존 미소비 토큰은 자동 무효화 (재발송 시 이전 링크 비활성)
-    """
+    """단건 초대 발송. 내부적으로 bulk 흐름과 같은 services/invite.send_invites 호출."""
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다")
     if not user.is_active:
         raise HTTPException(status_code=400, detail="비활성 사용자입니다")
 
-    # 카카오 매칭 여부에 따라 channel 결정 (먼저 정해 토큰에 기록)
-    will_send_kakao = bool(user.kakao_uuid) and bool(current_user.kakao_uuid is not None or current_user.kakao_access_token)
-    channel = TokenDeliveryChannel.KAKAO if will_send_kakao else TokenDeliveryChannel.MANUAL
-
-    raw_token, token = issue_setup_token(
-        db,
-        user_id=user.id,
-        purpose=purpose,
-        delivery_channel=channel,
-        created_by=current_user.id,
+    _, results = await send_invites(
+        db, sender=current_user, targets=[user], purpose=purpose
     )
-    setup_url = f"{settings.frontend_base_url.rstrip('/')}/setup-password?token={raw_token}"
-
-    delivery = "manual"
-    error: str | None = None
-
-    if user.kakao_uuid:
-        # 발송 시도 — 실패 시 manual로 fallback
-        try:
-            from services.kakao import ensure_valid_token, send_message_to_friends
-
-            access_token = await ensure_valid_token(current_user, db)
-            title = "건축구조안전 모니터링 — 비밀번호 설정"
-            description = (
-                f"{user.name}님, 시스템 접속을 위해 비밀번호를 설정해주세요.\n"
-                f"링크는 72시간 후 만료됩니다."
-            )
-            result = await send_message_to_friends(
-                access_token=access_token,
-                receiver_uuids=[user.kakao_uuid],
-                title=title,
-                description=description,
-                link_url=setup_url,
-            )
-            if "error" in result:
-                error = str(result.get("detail", "발송 실패"))
-                log_event(
-                    "error", "send_invite_kakao_failed",
-                    user_id=user.id, reason=error,
-                )
-            else:
-                delivery = "kakao"
-                log_event(
-                    "info", "send_invite_kakao_sent",
-                    user_id=user.id, purpose=purpose.value,
-                )
-        except Exception as exc:
-            error = f"카카오 발송 오류: {exc}"
-            log_event(
-                "error", "send_invite_kakao_exception",
-                user_id=user.id, reason=str(exc),
-            )
-
-    if delivery != "kakao":
-        # 토큰의 실제 delivery_channel 반영 (manual로 변경)
-        token.delivery_channel = TokenDeliveryChannel.MANUAL
-        db.commit()
-
+    r = results[0]
     return SendInviteResponse(
-        delivery=delivery,
-        setup_url=setup_url,
-        expires_at=token.expires_at.isoformat(),
+        delivery=r.delivery,
+        setup_url=r.setup_url,
+        expires_at=r.expires_at,
         purpose=purpose.value,
-        error=error,
+        error=r.error,
+    )
+
+
+@router.post("/bulk-send-invite", response_model=BulkSendInviteResponse)
+async def bulk_send_invite(
+    body: BulkSendInviteRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(
+        require_roles(UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY)
+    ),
+):
+    """다중 사용자 일괄 초대 발송.
+
+    - 비활성/존재하지 않는 사용자 ID는 결과에서 제외 (에러 카운트로 들어감)
+    - 카카오 매칭자는 카카오 메시지 발송, 미매칭은 manual setup_url 반환
+    - 카카오 발신자 토큰 미준비 시 모두 manual fallback
+    - best-effort: 일부 실패가 전체 롤백을 일으키지 않음
+    """
+    if not body.user_ids:
+        raise HTTPException(status_code=400, detail="user_ids가 비어 있습니다")
+    if len(body.user_ids) > 200:
+        raise HTTPException(status_code=400, detail="한 번에 최대 200명까지 발송 가능합니다")
+
+    users = (
+        db.query(User)
+        .filter(User.id.in_(body.user_ids), User.is_active.is_(True))
+        .all()
+    )
+    user_by_id = {u.id: u for u in users}
+    targets = [user_by_id[uid] for uid in body.user_ids if uid in user_by_id]
+    skipped = [uid for uid in body.user_ids if uid not in user_by_id]
+
+    summary, results = await send_invites(
+        db, sender=current_user, targets=targets, purpose=body.purpose
+    )
+
+    # 누락된 user_id는 실패 결과로 추가
+    items = [
+        BulkInviteResultItem(
+            user_id=r.user_id,
+            name=r.name,
+            delivery=r.delivery,
+            expires_at=r.expires_at,
+            setup_url=r.setup_url,
+            error=r.error,
+        )
+        for r in results
+    ]
+    for uid in skipped:
+        items.append(
+            BulkInviteResultItem(
+                user_id=uid,
+                name=f"#{uid}",
+                delivery="manual",
+                expires_at="",
+                setup_url=None,
+                error="사용자를 찾을 수 없거나 비활성 상태입니다",
+            )
+        )
+
+    return BulkSendInviteResponse(
+        summary=BulkInviteSummary(
+            total=summary.total + len(skipped),
+            kakao_sent=summary.kakao_sent,
+            manual=summary.manual,
+            failed=summary.failed + len(skipped),
+            sender_error=summary.sender_error,
+        ),
+        results=items,
     )
 
 

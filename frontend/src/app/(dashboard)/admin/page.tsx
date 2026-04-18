@@ -120,6 +120,28 @@ export default function AdminPage() {
   const [inviteCopied, setInviteCopied] = useState(false)
   const [invitingUserId, setInvitingUserId] = useState<number | null>(null)
 
+  // 일괄 발송 관련
+  const [selectedUserIds, setSelectedUserIds] = useState<Set<number>>(new Set())
+  const [bulkInviting, setBulkInviting] = useState(false)
+  const [autoSendInviteOnImport, setAutoSendInviteOnImport] = useState(true)
+  const [bulkInviteResult, setBulkInviteResult] = useState<{
+    summary: {
+      total: number
+      kakao_sent: number
+      manual: number
+      failed: number
+      sender_error: string | null
+    }
+    results: Array<{
+      user_id: number
+      name: string
+      delivery: string
+      expires_at: string
+      setup_url: string | null
+      error: string | null
+    }>
+  } | null>(null)
+
   // 수정 다이얼로그
   const [editTarget, setEditTarget] = useState<User | null>(null)
   const [editData, setEditData] = useState({
@@ -241,10 +263,19 @@ export default function AdminPage() {
     try {
       const formData = new FormData()
       formData.append("file", file)
-      const { data } = await apiClient.post("/api/users/import-excel", formData, {
-        headers: { "Content-Type": "multipart/form-data" },
-      })
+      const { data } = await apiClient.post(
+        `/api/users/import-excel?auto_send_invite=${autoSendInviteOnImport}`,
+        formData,
+        { headers: { "Content-Type": "multipart/form-data" } },
+      )
       setBulkResult(data)
+      // 등록 시 자동 발송 결과가 있으면 일괄 결과 다이얼로그도 띄움
+      if (data.invite_summary) {
+        setBulkInviteResult({
+          summary: data.invite_summary,
+          results: data.invite_results || [],
+        })
+      }
       fetchUsers()
     } catch {
       setBulkResult({ created: 0, skipped: 0 })
@@ -289,6 +320,58 @@ export default function AdminPage() {
       alert(msg)
     } finally {
       setInvitingUserId(null)
+    }
+  }
+
+  const toggleUserSelection = (userId: number) => {
+    setSelectedUserIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(userId)) {
+        next.delete(userId)
+      } else {
+        next.add(userId)
+      }
+      return next
+    })
+  }
+
+  const toggleAllUsers = () => {
+    if (selectedUserIds.size === users.length && users.length > 0) {
+      setSelectedUserIds(new Set())
+    } else {
+      setSelectedUserIds(new Set(users.map((u) => u.id)))
+    }
+  }
+
+  const handleBulkSendInvite = async () => {
+    const ids = Array.from(selectedUserIds)
+    if (ids.length === 0) return
+    if (!confirm(`선택한 ${ids.length}명에게 초대를 발송하시겠습니까?\n\n카카오 매칭자는 카카오로 발송되며, 미매칭자는 화면에 수동 전달용 링크가 표시됩니다.`)) {
+      return
+    }
+    setBulkInviting(true)
+    try {
+      const { data } = await apiClient.post(
+        "/api/users/bulk-send-invite",
+        { user_ids: ids },
+      )
+      setBulkInviteResult(data)
+      setSelectedUserIds(new Set())
+    } catch (err) {
+      const msg =
+        (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
+        ?? "일괄 발송 실패"
+      alert(msg)
+    } finally {
+      setBulkInviting(false)
+    }
+  }
+
+  const handleCopyToken = async (url: string) => {
+    try {
+      await navigator.clipboard.writeText(url)
+    } catch {
+      // 무시 — 사용자가 수동 선택 가능
     }
   }
 
@@ -428,6 +511,18 @@ export default function AdminPage() {
           >
             친구 목록 새로고침
           </Button>
+          <label
+            className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer"
+            title="카카오 미매칭 사용자는 수동 전달 링크가 화면에 표시됩니다"
+          >
+            <input
+              type="checkbox"
+              checked={autoSendInviteOnImport}
+              onChange={(e) => setAutoSendInviteOnImport(e.target.checked)}
+              className="h-3.5 w-3.5"
+            />
+            등록 후 자동 초대 발송
+          </label>
           <label className="cursor-pointer">
             <Input
               type="file"
@@ -523,11 +618,46 @@ export default function AdminPage() {
         </div>
       )}
 
+      {/* 일괄 발송 액션 바 */}
+      {selectedUserIds.size > 0 && (
+        <div className="flex items-center justify-between rounded-md border bg-blue-50 px-3 py-2 text-sm">
+          <span>
+            <strong>{selectedUserIds.size}명</strong> 선택됨
+          </span>
+          <div className="flex gap-2">
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => setSelectedUserIds(new Set())}
+            >
+              선택 해제
+            </Button>
+            <Button
+              size="sm"
+              loading={bulkInviting}
+              loadingText="발송 중..."
+              onClick={handleBulkSendInvite}
+            >
+              선택한 {selectedUserIds.size}명에게 일괄 초대 발송
+            </Button>
+          </div>
+        </div>
+      )}
+
       {/* 사용자 목록 */}
       <div className="rounded-md border bg-white overflow-x-auto">
         <Table>
           <TableHeader>
             <TableRow>
+              <TableHead className="w-[40px] text-center">
+                <input
+                  type="checkbox"
+                  checked={users.length > 0 && selectedUserIds.size === users.length}
+                  onChange={toggleAllUsers}
+                  aria-label="전체 선택"
+                  className="h-4 w-4"
+                />
+              </TableHead>
               <TableHead className="w-[60px]">ID</TableHead>
               <TableHead>이름</TableHead>
               <TableHead>이메일</TableHead>
@@ -542,19 +672,28 @@ export default function AdminPage() {
           <TableBody>
             {isLoading ? (
               <TableRow>
-                <TableCell colSpan={9} className="h-32 text-center">
+                <TableCell colSpan={10} className="h-32 text-center">
                   로딩 중...
                 </TableCell>
               </TableRow>
             ) : users.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={9} className="h-32 text-center text-muted-foreground">
+                <TableCell colSpan={10} className="h-32 text-center text-muted-foreground">
                   등록된 사용자가 없습니다
                 </TableCell>
               </TableRow>
             ) : (
               users.map((user) => (
                 <TableRow key={user.id}>
+                  <TableCell className="text-center">
+                    <input
+                      type="checkbox"
+                      checked={selectedUserIds.has(user.id)}
+                      onChange={() => toggleUserSelection(user.id)}
+                      aria-label={`${user.name} 선택`}
+                      className="h-4 w-4"
+                    />
+                  </TableCell>
                   <TableCell>{user.id}</TableCell>
                   <TableCell className="font-medium">{user.name}</TableCell>
                   <TableCell>{user.email}</TableCell>
@@ -731,6 +870,131 @@ export default function AdminPage() {
               <p className="text-xs text-muted-foreground">
                 최초 로그인 시 사용자가 반드시 비밀번호를 변경해야 합니다.
                 이 창을 닫으면 비밀번호를 다시 볼 수 없으니 먼저 복사하세요.
+              </p>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* 일괄 발송 결과 다이얼로그 */}
+      <Dialog
+        open={!!bulkInviteResult}
+        onOpenChange={(open) => !open && setBulkInviteResult(null)}
+      >
+        <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>일괄 초대 발송 결과</DialogTitle>
+          </DialogHeader>
+          {bulkInviteResult && (
+            <div className="space-y-4">
+              {/* 요약 카드 */}
+              <div className="grid grid-cols-4 gap-2 text-center text-sm">
+                <div className="rounded-md border bg-gray-50 p-2">
+                  <div className="text-xs text-muted-foreground">총</div>
+                  <div className="text-lg font-bold">{bulkInviteResult.summary.total}</div>
+                </div>
+                <div className="rounded-md border border-green-200 bg-green-50 p-2">
+                  <div className="text-xs text-green-700">카카오 발송</div>
+                  <div className="text-lg font-bold text-green-700">{bulkInviteResult.summary.kakao_sent}</div>
+                </div>
+                <div className="rounded-md border border-amber-200 bg-amber-50 p-2">
+                  <div className="text-xs text-amber-700">수동 전달 필요</div>
+                  <div className="text-lg font-bold text-amber-700">{bulkInviteResult.summary.manual}</div>
+                </div>
+                <div className="rounded-md border border-red-200 bg-red-50 p-2">
+                  <div className="text-xs text-red-700">실패</div>
+                  <div className="text-lg font-bold text-red-700">{bulkInviteResult.summary.failed}</div>
+                </div>
+              </div>
+
+              {bulkInviteResult.summary.sender_error && (
+                <div className="rounded-md border border-amber-200 bg-amber-50 p-2 text-xs text-amber-800">
+                  카카오 발신자 토큰 사용 불가 — {bulkInviteResult.summary.sender_error}.
+                  카카오 매칭 사용자도 모두 수동 전달 링크로 표시됩니다.
+                </div>
+              )}
+
+              {/* 수동 전달 필요 (가장 중요 — 펼침) */}
+              {bulkInviteResult.results.some((r) => r.delivery === "manual" && !r.error) && (
+                <details open className="rounded-md border">
+                  <summary className="cursor-pointer p-2 text-sm font-medium bg-amber-50 flex items-center justify-between">
+                    <span>수동 전달 필요 — 아래 링크를 사용자에게 SMS/이메일로 전달</span>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={(e) => {
+                        e.preventDefault()
+                        e.stopPropagation()
+                        const tsv =
+                          "이름\t링크\n" +
+                          bulkInviteResult.results
+                            .filter((r) => r.delivery === "manual" && !r.error && r.setup_url)
+                            .map((r) => `${r.name}\t${r.setup_url}`)
+                            .join("\n")
+                        handleCopyToken(tsv)
+                      }}
+                    >
+                      전체 복사
+                    </Button>
+                  </summary>
+                  <div className="space-y-1 p-2">
+                    {bulkInviteResult.results
+                      .filter((r) => r.delivery === "manual" && !r.error)
+                      .map((r) => (
+                        <div key={r.user_id} className="flex items-center gap-2 rounded border bg-white p-2 text-xs">
+                          <div className="w-20 font-medium">{r.name}</div>
+                          <code className="flex-1 break-all font-mono text-[10px] text-muted-foreground">
+                            {r.setup_url}
+                          </code>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => r.setup_url && handleCopyToken(r.setup_url)}
+                          >
+                            복사
+                          </Button>
+                        </div>
+                      ))}
+                  </div>
+                </details>
+              )}
+
+              {/* 카카오 발송 완료 (접힘) */}
+              {bulkInviteResult.results.some((r) => r.delivery === "kakao" && !r.error) && (
+                <details className="rounded-md border">
+                  <summary className="cursor-pointer p-2 text-sm font-medium bg-green-50">
+                    카카오 발송 완료 ({bulkInviteResult.results.filter((r) => r.delivery === "kakao" && !r.error).length}명)
+                  </summary>
+                  <ul className="space-y-0.5 p-2 text-xs">
+                    {bulkInviteResult.results
+                      .filter((r) => r.delivery === "kakao" && !r.error)
+                      .map((r) => (
+                        <li key={r.user_id}>{r.name}</li>
+                      ))}
+                  </ul>
+                </details>
+              )}
+
+              {/* 실패 (접힘) */}
+              {bulkInviteResult.results.some((r) => r.error) && (
+                <details className="rounded-md border">
+                  <summary className="cursor-pointer p-2 text-sm font-medium bg-red-50">
+                    실패 ({bulkInviteResult.results.filter((r) => r.error).length}명)
+                  </summary>
+                  <ul className="space-y-0.5 p-2 text-xs">
+                    {bulkInviteResult.results
+                      .filter((r) => r.error)
+                      .map((r) => (
+                        <li key={r.user_id}>
+                          <span className="font-medium">{r.name}</span>: {r.error}
+                        </li>
+                      ))}
+                  </ul>
+                </details>
+              )}
+
+              <p className="text-xs text-muted-foreground">
+                이 창을 닫으면 수동 전달용 링크를 다시 볼 수 없습니다. 먼저 복사하세요.
               </p>
             </div>
           )}

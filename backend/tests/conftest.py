@@ -85,7 +85,9 @@ def _create_user(
     role: UserRole,
     password: str = "testpass1",
     must_change_password: bool = False,
+    **extra,
 ) -> User:
+    """User 생성 fixture. **extra로 kakao_uuid 등 추가 필드 직접 주입 가능."""
     user = User(
         name=name,
         email=email,
@@ -93,6 +95,7 @@ def _create_user(
         password_hash=get_password_hash(password),
         must_change_password=must_change_password,
         is_active=True,
+        **extra,
     )
     db.add(user)
     db.commit()
