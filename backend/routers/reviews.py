@@ -688,6 +688,7 @@ def list_my_inquiries(
         "items": [
             {
                 "id": inq.id,
+                "building_id": inq.building_id,
                 "mgmt_no": inq.mgmt_no,
                 "phase": inq.phase,
                 "submitter_name": inq.submitter_name,

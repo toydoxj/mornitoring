@@ -86,6 +86,7 @@ interface NotificationItem {
 
 interface MyInquiryItem {
   id: number
+  building_id: number
   mgmt_no: string
   content: string
   reply: string | null
@@ -371,7 +372,7 @@ export default function DashboardPage() {
                   key={q.id}
                   className="rounded-md border p-2 cursor-pointer hover:bg-muted/30"
                   onClick={() =>
-                    router.push(`/buildings?mgmt_no=${q.mgmt_no}`)
+                    router.push(`/buildings/${q.building_id}`)
                   }
                 >
                   <div className="flex items-center gap-2">
