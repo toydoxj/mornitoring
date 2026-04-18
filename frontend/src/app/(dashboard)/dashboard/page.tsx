@@ -261,7 +261,7 @@ export default function DashboardPage() {
               <CardTitle>현황</CardTitle>
             </CardHeader>
             <CardContent className="flex-1">
-              <div className="grid gap-3 sm:grid-cols-3 xl:grid-cols-3">
+              <div className="grid h-full gap-3 sm:grid-cols-3 xl:grid-cols-3 xl:auto-rows-fr">
                 <BreakdownCard
                   title="검토서 미접수"
                   total={stats.docs_waiting_review_preliminary + stats.docs_waiting_review_supplement}
@@ -714,7 +714,7 @@ function BreakdownCard({
         }
       }}
       className={`
-        relative overflow-hidden rounded-xl border bg-white p-4 transition-all hover:shadow-md
+        relative flex h-full flex-col overflow-hidden rounded-xl border bg-white p-4 transition-all hover:shadow-md
         before:absolute before:left-0 before:top-0 before:h-full before:w-1 ${BREAKDOWN_BAR[accent]}
         ${onClick ? "cursor-pointer focus:outline-none focus:ring-2 focus:ring-primary/40" : ""}
       `}
