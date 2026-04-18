@@ -16,13 +16,11 @@ import {
 import apiClient from "@/lib/api/client"
 import { useAuthStore } from "@/stores/authStore"
 
-type Trigger = "within_3_days" | "d_minus_1" | "overdue" | "on_date"
+type Trigger = "within_n_days" | "overdue"
 
 const TRIGGER_OPTIONS: { value: Trigger; label: string; hint: string }[] = [
-  { value: "within_3_days", label: "D-3 이내 + 초과", hint: "예정일 3일 이내이거나 이미 지난 미제출 건" },
-  { value: "d_minus_1", label: "D-1만", hint: "예정일이 내일인 미제출 건" },
-  { value: "overdue", label: "초과만", hint: "예정일이 지난 미제출 건" },
-  { value: "on_date", label: "날짜 지정", hint: "선택한 날짜와 예정일이 일치하는 미제출 건" },
+  { value: "within_n_days", label: "D-{N} 이내", hint: "예정일이 N일 이내이거나 이미 지난 미제출 건" },
+  { value: "overdue", label: "초과", hint: "예정일이 지난 미제출 건만" },
 ]
 
 interface ReviewerPreview {
@@ -55,24 +53,23 @@ export default function RemindersPage() {
     if (!isUserLoading && user && !isAdmin) router.replace("/dashboard")
   }, [isUserLoading, user, isAdmin, router])
 
-  const [trigger, setTrigger] = useState<Trigger>("within_3_days")
-  const today = new Date().toISOString().slice(0, 10)
-  const [targetDate, setTargetDate] = useState<string>(today)
+  const [trigger, setTrigger] = useState<Trigger>("within_n_days")
+  const [daysAhead, setDaysAhead] = useState<number>(3)
   const [preview, setPreview] = useState<PreviewResponse | null>(null)
   const [selected, setSelected] = useState<Record<number, boolean>>({})
   const [isPreviewLoading, setIsPreviewLoading] = useState(false)
   const [isSending, setIsSending] = useState(false)
   const [sendResult, setSendResult] = useState<{ sent: number; failed: number } | null>(null)
 
-  const fetchPreview = useCallback(async (t: Trigger, dateValue: string | null) => {
+  const fetchPreview = useCallback(async (t: Trigger, n: number) => {
     setIsPreviewLoading(true)
     try {
       const payload: {
         trigger: Trigger
         dry_run: true
-        target_date?: string
+        days_ahead?: number
       } = { trigger: t, dry_run: true }
-      if (t === "on_date" && dateValue) payload.target_date = dateValue
+      if (t === "within_n_days") payload.days_ahead = n
       const { data } = await apiClient.post<PreviewResponse>(
         "/api/notifications/review-reminder",
         payload,
@@ -92,19 +89,17 @@ export default function RemindersPage() {
   }, [])
 
   useEffect(() => {
-    if (isAdmin) fetchPreview("within_3_days", null)
+    if (isAdmin) fetchPreview("within_n_days", 3)
   }, [isAdmin, fetchPreview])
 
   const handleTriggerChange = (t: Trigger) => {
     setTrigger(t)
     setSendResult(null)
-    // on_date 는 사용자가 날짜 선택/조회 버튼을 눌러야 실제 반영
-    if (t !== "on_date") fetchPreview(t, null)
+    fetchPreview(t, daysAhead)
   }
 
-  const handleDateQuery = () => {
-    if (!targetDate) return
-    fetchPreview("on_date", targetDate)
+  const handleDaysQuery = () => {
+    fetchPreview("within_n_days", daysAhead)
   }
 
   const toggle = (id: number) => {
@@ -144,20 +139,20 @@ export default function RemindersPage() {
         trigger: Trigger
         dry_run: false
         recipient_user_ids: number[]
-        target_date?: string
+        days_ahead?: number
       } = {
         trigger,
         dry_run: false,
         recipient_user_ids: selectedIds,
       }
-      if (trigger === "on_date" && targetDate) payload.target_date = targetDate
+      if (trigger === "within_n_days") payload.days_ahead = daysAhead
       const { data } = await apiClient.post<PreviewResponse>(
         "/api/notifications/review-reminder",
         payload,
       )
       setSendResult({ sent: data.sent, failed: data.failed })
-      // 자동 재조회 (같은 트리거·날짜로)
-      await fetchPreview(trigger, trigger === "on_date" ? targetDate : null)
+      // 자동 재조회 (같은 트리거·N 값으로)
+      await fetchPreview(trigger, daysAhead)
     } catch (err) {
       console.error("리마인드 발송 실패:", err)
       setSendResult({ sent: 0, failed: selectedIds.length })
@@ -215,20 +210,25 @@ export default function RemindersPage() {
             ))}
           </div>
 
-          {trigger === "on_date" && (
+          {trigger === "within_n_days" && (
             <div className="flex items-end gap-2 border-t pt-3">
               <div className="space-y-1">
-                <label className="text-xs text-muted-foreground">예정일 선택</label>
+                <label className="text-xs text-muted-foreground">D-N 일수</label>
                 <input
-                  type="date"
-                  value={targetDate}
-                  onChange={(e) => setTargetDate(e.target.value)}
-                  className="rounded-md border px-3 py-2 text-sm"
+                  type="number"
+                  min={0}
+                  max={60}
+                  value={daysAhead}
+                  onChange={(e) => setDaysAhead(Math.max(0, Number(e.target.value) || 0))}
+                  className="w-28 rounded-md border px-3 py-2 text-sm"
                 />
               </div>
-              <Button variant="secondary" size="sm" onClick={handleDateQuery} disabled={!targetDate || isPreviewLoading}>
+              <Button variant="secondary" size="sm" onClick={handleDaysQuery} disabled={isPreviewLoading}>
                 조회
               </Button>
+              <p className="pb-2 text-xs text-muted-foreground">
+                예정일이 오늘부터 {daysAhead}일 이내이거나 이미 지난 미제출 건
+              </p>
             </div>
           )}
         </CardContent>

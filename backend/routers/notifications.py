@@ -240,12 +240,12 @@ async def send_notifications(
 
 
 class ReviewReminderRequest(BaseModel):
-    trigger: str  # "d_minus_1" | "overdue" | "within_3_days" | "on_date"
+    trigger: str  # "d_minus_1" | "overdue" | "within_3_days" | "within_n_days"
     dry_run: bool = False
     # 지정 시 해당 user_id 의 검토위원에게만 발송 (리마인드 페이지 체크박스 선택 발송)
     recipient_user_ids: list[int] | None = None
-    # trigger == "on_date" 일 때 사용: 예정일이 이 날짜와 일치하는 미제출 건만 조회·발송
-    target_date: date | None = None
+    # trigger == "within_n_days" 에서 사용 (기본 3). 0 이면 오늘까지 + 초과만.
+    days_ahead: int | None = None
 
 
 @router.post("/review-reminder")
@@ -259,10 +259,9 @@ async def send_review_reminder_endpoint(
     """검토위원 리마인드 알림 수동 발송 (팀장/총괄간사 전용).
 
     trigger 값:
-      - `d_minus_1`: 내일이 예정일인 미제출 건
-      - `overdue`: 예정일이 지났는데 미제출인 건
-      - `within_3_days`: D-3 이내(초과 포함) 미제출 — 리마인드 페이지 기본 조회
-      - `on_date`: 특정 예정일(target_date) 과 일치하는 미제출 건
+      - `within_n_days`: 예정일이 today + days_ahead 이하인 미제출(초과 포함). UI 기본값.
+      - `overdue`: 예정일이 지났는데 미제출인 건.
+      - `within_3_days` / `d_minus_1`: 하위 호환(cron 스크립트용).
 
     `dry_run=true` 이면 대상자 프리뷰만 반환하고 실제 발송·로그 기록은 하지 않는다.
     `recipient_user_ids` 로 대상 검토위원을 좁힐 수 있다(체크박스 기반 선택 발송).
@@ -270,19 +269,16 @@ async def send_review_reminder_endpoint(
     """
     from services.review_reminder import send_review_reminders
 
-    if body.trigger not in {"d_minus_1", "overdue", "within_3_days", "on_date"}:
+    if body.trigger not in {"d_minus_1", "overdue", "within_3_days", "within_n_days"}:
         raise HTTPException(status_code=400, detail="trigger 값이 올바르지 않습니다")
-    if body.trigger == "on_date" and body.target_date is None:
-        raise HTTPException(
-            status_code=400,
-            detail="trigger=on_date 일 때 target_date 를 지정해야 합니다",
-        )
+    if body.trigger == "within_n_days" and body.days_ahead is not None and body.days_ahead < 0:
+        raise HTTPException(status_code=400, detail="days_ahead 는 0 이상이어야 합니다")
 
     return await send_review_reminders(
         db, current_user, body.trigger,
         dry_run=body.dry_run,
         recipient_user_ids=body.recipient_user_ids,
-        target_date=body.target_date,
+        days_ahead=body.days_ahead,
     )
 
 
