@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react"
 import { useParams, useRouter } from "next/navigation"
-import { FileIcon, Paperclip, X } from "lucide-react"
+import { Paperclip } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -16,6 +16,18 @@ import {
 } from "@/components/ui/dialog"
 import apiClient from "@/lib/api/client"
 import { useAuthStore } from "@/stores/authStore"
+import { AttachmentItem } from "@/components/AttachmentItem"
+
+interface CommentAttachment {
+  id: number
+  comment_id: number
+  filename: string
+  file_size: number
+  content_type: string | null
+  uploaded_by: number
+  created_at: string
+  download_url: string | null
+}
 
 interface Comment {
   id: number
@@ -24,6 +36,7 @@ interface Comment {
   author_name: string
   content: string
   created_at: string
+  attachments: CommentAttachment[]
 }
 
 interface Attachment {
@@ -31,8 +44,10 @@ interface Attachment {
   discussion_id: number
   filename: string
   file_size: number
+  content_type: string | null
   uploaded_by: number
   created_at: string
+  download_url: string | null
 }
 
 interface DiscussionDetail {
@@ -182,15 +197,48 @@ export default function DiscussionDetailPage() {
     }
   }
 
-  const handleDownloadAttachment = async (attId: number) => {
+  // 댓글 첨부
+  const commentFileInputs = useRef<Record<number, HTMLInputElement | null>>({})
+  const [uploadingCommentFile, setUploadingCommentFile] = useState<number | null>(null)
+
+  const handleUploadCommentFile = async (
+    e: React.ChangeEvent<HTMLInputElement>,
+    commentId: number,
+  ) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setUploadingCommentFile(commentId)
     try {
-      const { data } = await apiClient.get<{ download_url: string; filename: string }>(
-        `/api/discussions/attachments/${attId}/download`
+      const formData = new FormData()
+      formData.append("file", file)
+      await apiClient.post(
+        `/api/discussions/comments/${commentId}/attachments`,
+        formData,
+        { headers: { "Content-Type": "multipart/form-data" } },
       )
-      if (data.download_url) window.open(data.download_url, "_blank")
-      else alert("다운로드 URL을 생성할 수 없습니다")
-    } catch {
-      alert("다운로드 실패")
+      fetchData()
+    } catch (err) {
+      const msg =
+        (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
+        ?? "업로드 실패"
+      alert(msg)
+    } finally {
+      setUploadingCommentFile(null)
+      const input = commentFileInputs.current[commentId]
+      if (input) input.value = ""
+    }
+  }
+
+  const handleDeleteCommentAttachment = async (attId: number) => {
+    if (!confirm("첨부파일을 삭제하시겠습니까?")) return
+    try {
+      await apiClient.delete(`/api/discussions/comment-attachments/${attId}`)
+      fetchData()
+    } catch (err) {
+      const msg =
+        (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
+        ?? "삭제 실패"
+      alert(msg)
     }
   }
 
@@ -255,37 +303,14 @@ export default function DiscussionDetailPage() {
           {(d.attachments?.length ?? 0) > 0 && (
             <div className="mt-6 space-y-2">
               <p className="text-sm font-medium">첨부파일 ({d.attachments.length})</p>
-              {d.attachments.map((a) => {
-                const canDeleteFile =
-                  user?.id === a.uploaded_by || isAdmin
-                return (
-                  <div
-                    key={a.id}
-                    className="flex items-center gap-2 rounded-md border p-2 text-sm"
-                  >
-                    <FileIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
-                    <button
-                      className="flex-1 truncate text-left text-blue-600 hover:underline"
-                      onClick={() => handleDownloadAttachment(a.id)}
-                    >
-                      {a.filename}
-                    </button>
-                    <span className="text-xs text-muted-foreground shrink-0">
-                      {(a.file_size / 1024).toLocaleString(undefined, { maximumFractionDigits: 1 })} KB
-                    </span>
-                    {canDeleteFile && (
-                      <Button
-                        size="icon-xs"
-                        variant="ghost"
-                        onClick={() => handleDeleteAttachment(a.id)}
-                        aria-label="삭제"
-                      >
-                        <X />
-                      </Button>
-                    )}
-                  </div>
-                )
-              })}
+              {d.attachments.map((a) => (
+                <AttachmentItem
+                  key={a.id}
+                  attachment={a}
+                  canDelete={user?.id === a.uploaded_by || !!isAdmin}
+                  onDelete={() => handleDeleteAttachment(a.id)}
+                />
+              ))}
             </div>
           )}
 
@@ -324,6 +349,7 @@ export default function DiscussionDetailPage() {
             ) : (
               d.comments.map((c) => {
                 const isCommentOwner = user?.id === c.author_id
+                const canUploadToComment = !!user  // 로그인 사용자 전원
                 return (
                   <div key={c.id} className="rounded-md border p-3">
                     <div className="flex items-start justify-between gap-2">
@@ -344,6 +370,42 @@ export default function DiscussionDetailPage() {
                       )}
                     </div>
                     <p className="mt-1 whitespace-pre-wrap break-words text-sm">{c.content}</p>
+
+                    {(c.attachments?.length ?? 0) > 0 && (
+                      <div className="mt-2 space-y-2">
+                        {c.attachments.map((a) => (
+                          <AttachmentItem
+                            key={a.id}
+                            attachment={a}
+                            canDelete={user?.id === a.uploaded_by || !!isAdmin}
+                            onDelete={() => handleDeleteCommentAttachment(a.id)}
+                          />
+                        ))}
+                      </div>
+                    )}
+
+                    {canUploadToComment && (
+                      <div className="mt-2">
+                        <input
+                          ref={(el) => {
+                            commentFileInputs.current[c.id] = el
+                          }}
+                          type="file"
+                          className="hidden"
+                          onChange={(e) => handleUploadCommentFile(e, c.id)}
+                        />
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => commentFileInputs.current[c.id]?.click()}
+                          loading={uploadingCommentFile === c.id}
+                          loadingText="업로드 중..."
+                        >
+                          <Paperclip className="mr-1 h-3.5 w-3.5" />
+                          첨부
+                        </Button>
+                      </div>
+                    )}
                   </div>
                 )
               })
