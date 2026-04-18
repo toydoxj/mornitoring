@@ -77,6 +77,10 @@ class UserResponse(BaseModel):
     kakao_linked: bool = False        # 카카오 로그인 완료(kakao_id 존재)
     kakao_matched: bool = False       # 친구 매칭 완료(kakao_uuid 존재)
     kakao_uuid: str | None = None
+    # 비밀번호 셋업 상태 (목록 조회 시에만 채워짐)
+    # setup_completed | pending | expired | not_invited
+    setup_status: str | None = None
+    last_invite_sent_at: str | None = None  # 마지막 토큰 발급 시각 (재발송 판단용)
 
     model_config = {"from_attributes": True}
 
@@ -153,6 +157,9 @@ class UserListResponse(BaseModel):
 @router.get("", response_model=UserListResponse)
 def list_users(
     role: UserRole | None = None,
+    setup_status: str | None = Query(
+        None, description="필터: setup_completed/pending/expired/not_invited"
+    ),
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=100),
     db: Session = Depends(get_db),
@@ -160,13 +167,69 @@ def list_users(
         require_roles(UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY)
     ),
 ):
-    """사용자 목록 조회 (팀장/총괄간사만)"""
+    """사용자 목록 조회 (팀장/총괄간사만). 비밀번호 셋업 상태 포함."""
+    from datetime import datetime, timezone
+    from models.password_setup_token import PasswordSetupToken
+    from services.password_setup import _ensure_aware_utc
+
     query = db.query(User)
     if role:
         query = query.filter(User.role == role)
 
-    total = query.count()
-    users = query.offset((page - 1) * size).limit(size).all()
+    # 페이지네이션 전에 setup_status 필터를 적용하려면 모든 사용자에 대해
+    # 상태를 계산해야 한다(60명 규모라 부담 없음). 필터 미지정 시는 페이지만 잘라낸다.
+    if setup_status:
+        candidates = query.all()
+    else:
+        total_pre = query.count()
+        candidates = query.offset((page - 1) * size).limit(size).all()
+
+    user_ids = [u.id for u in candidates]
+    latest_tokens: dict[int, PasswordSetupToken] = {}
+    if user_ids:
+        token_rows = (
+            db.query(PasswordSetupToken)
+            .filter(PasswordSetupToken.user_id.in_(user_ids))
+            .order_by(
+                PasswordSetupToken.user_id,
+                PasswordSetupToken.created_at.desc(),
+            )
+            .all()
+        )
+        for t in token_rows:
+            if t.user_id not in latest_tokens:
+                latest_tokens[t.user_id] = t
+
+    now = datetime.now(timezone.utc)
+
+    def _compute_status(user: User) -> tuple[str, str | None]:
+        """(setup_status, last_invite_sent_at_iso). 우선순위: 완료 > 토큰 상태."""
+        if not user.must_change_password:
+            tok = latest_tokens.get(user.id)
+            return "setup_completed", tok.created_at.isoformat() if tok else None
+        tok = latest_tokens.get(user.id)
+        if tok is None:
+            return "not_invited", None
+        if tok.consumed_at is not None:
+            # 토큰 소비됐는데 must_change_password=true인 비정상 상태.
+            # 완료로 가리지 말고 재발송 필요로 표시한다 (운영자 액션 트리거).
+            return "not_invited", tok.created_at.isoformat()
+        if _ensure_aware_utc(tok.expires_at) <= now:
+            return "expired", tok.created_at.isoformat()
+        return "pending", tok.created_at.isoformat()
+
+    items_all = [
+        (u, *_compute_status(u))
+        for u in candidates
+    ]
+
+    if setup_status:
+        items_all = [t for t in items_all if t[1] == setup_status]
+        total = len(items_all)
+        items_all = items_all[(page - 1) * size : (page - 1) * size + size]
+    else:
+        total = total_pre
+
     items = [
         UserResponse(
             id=u.id, name=u.name, email=u.email, role=u.role,
@@ -174,8 +237,10 @@ def list_users(
             kakao_linked=bool(u.kakao_id),
             kakao_matched=bool(u.kakao_uuid),
             kakao_uuid=u.kakao_uuid,
+            setup_status=status,
+            last_invite_sent_at=last_sent,
         )
-        for u in users
+        for (u, status, last_sent) in items_all
     ]
     return UserListResponse(items=items, total=total)
 

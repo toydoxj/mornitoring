@@ -20,8 +20,8 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import apiClient from "@/lib/api/client"
-import type { User, UserRole } from "@/types"
-import { ROLE_LABELS } from "@/types"
+import type { SetupStatus, User, UserRole } from "@/types"
+import { ROLE_LABELS, SETUP_STATUS_LABELS } from "@/types"
 
 interface UserListResponse {
   items: User[]
@@ -161,6 +161,9 @@ export default function AdminPage() {
   const [diagnosis, setDiagnosis] = useState<UserScopeDiagnosis | null>(null)
   const [diagnosisLoading, setDiagnosisLoading] = useState(false)
 
+  // 비번 미설정자 필터 (운영자가 재발송 대상 식별)
+  const [showUnsetupOnly, setShowUnsetupOnly] = useState(false)
+
   const fetchUsers = async () => {
     try {
       const { data } = await apiClient.get<UserListResponse>("/api/users", {
@@ -174,6 +177,14 @@ export default function AdminPage() {
       setIsLoading(false)
     }
   }
+
+  // 미설정자 = setup_completed 외 (pending/expired/not_invited)
+  const visibleUsers = showUnsetupOnly
+    ? users.filter((u) => u.setup_status && u.setup_status !== "setup_completed")
+    : users
+  const unsetupCount = users.filter(
+    (u) => u.setup_status && u.setup_status !== "setup_completed"
+  ).length
 
   const fetchScopeStatus = async () => {
     try {
@@ -499,8 +510,20 @@ export default function AdminPage() {
         <div>
           <h1 className="text-2xl font-bold">사용자 관리</h1>
           <p className="text-sm text-muted-foreground">
-            전체 {total}명 · 카카오 로그인 {linkedCount}명 · 친구 매칭 {matchedCount}명
+            전체 {total}명 · 카카오 로그인 {linkedCount}명 · 친구 매칭 {matchedCount}명 ·
+            <span className={unsetupCount > 0 ? "text-amber-700 font-medium ml-1" : "ml-1"}>
+              비번 미설정 {unsetupCount}명
+            </span>
           </p>
+          <label className="mt-1 inline-flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer">
+            <input
+              type="checkbox"
+              checked={showUnsetupOnly}
+              onChange={(e) => setShowUnsetupOnly(e.target.checked)}
+              className="h-3.5 w-3.5"
+            />
+            비번 미설정자만 보기
+          </label>
         </div>
         <div className="flex gap-2 items-center">
           <Button
@@ -665,6 +688,7 @@ export default function AdminPage() {
               <TableHead className="w-[120px]">전화번호</TableHead>
               <TableHead className="w-[100px] text-center">카카오 로그인</TableHead>
               <TableHead className="w-[100px] text-center">친구 매칭</TableHead>
+              <TableHead className="w-[100px] text-center">비번 상태</TableHead>
               <TableHead className="w-[80px] text-center">상태</TableHead>
               <TableHead className="w-[260px] text-center">관리</TableHead>
             </TableRow>
@@ -672,18 +696,18 @@ export default function AdminPage() {
           <TableBody>
             {isLoading ? (
               <TableRow>
-                <TableCell colSpan={10} className="h-32 text-center">
+                <TableCell colSpan={11} className="h-32 text-center">
                   로딩 중...
                 </TableCell>
               </TableRow>
             ) : users.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={10} className="h-32 text-center text-muted-foreground">
+                <TableCell colSpan={11} className="h-32 text-center text-muted-foreground">
                   등록된 사용자가 없습니다
                 </TableCell>
               </TableRow>
             ) : (
-              users.map((user) => (
+              visibleUsers.map((user) => (
                 <TableRow key={user.id}>
                   <TableCell className="text-center">
                     <input
@@ -714,6 +738,28 @@ export default function AdminPage() {
                     ) : (
                       <Badge variant="outline">미매칭</Badge>
                     )}
+                  </TableCell>
+                  <TableCell className="text-center">
+                    {(() => {
+                      const s = user.setup_status as SetupStatus | undefined
+                      if (!s) return <Badge variant="outline">-</Badge>
+                      const cls =
+                        s === "setup_completed"
+                          ? "bg-gray-100 text-gray-700 border-gray-300"
+                          : s === "pending"
+                            ? "bg-blue-100 text-blue-700 border-blue-300"
+                            : s === "expired"
+                              ? "bg-amber-100 text-amber-800 border-amber-300"
+                              : "bg-red-100 text-red-700 border-red-300"
+                      const tooltip = user.last_invite_sent_at
+                        ? `마지막 발송: ${new Date(user.last_invite_sent_at).toLocaleString("ko-KR")}`
+                        : undefined
+                      return (
+                        <Badge variant="outline" className={cls} title={tooltip}>
+                          {SETUP_STATUS_LABELS[s]}
+                        </Badge>
+                      )
+                    })()}
                   </TableCell>
                   <TableCell className="text-center">
                     <Badge variant={user.is_active ? "default" : "secondary"}>

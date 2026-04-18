@@ -12,6 +12,18 @@ export interface User {
   kakao_linked?: boolean      // 카카오 로그인 완료
   kakao_matched?: boolean     // 친구 매칭 완료
   kakao_uuid?: string | null
+  // 비밀번호 셋업 상태 (목록 응답에만 포함)
+  setup_status?: SetupStatus | null
+  last_invite_sent_at?: string | null
+}
+
+export type SetupStatus = "setup_completed" | "pending" | "expired" | "not_invited"
+
+export const SETUP_STATUS_LABELS: Record<SetupStatus, string> = {
+  setup_completed: "완료",
+  pending: "대기",
+  expired: "만료",
+  not_invited: "미발송",
 }
 
 // 건축물 (통합관리대장)
