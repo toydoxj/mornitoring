@@ -66,6 +66,9 @@ export default function InquiriesPage() {
   const [phaseEditTarget, setPhaseEditTarget] = useState<InquiryItem | null>(null)
   const [phaseDraft, setPhaseDraft] = useState<string>("")
   const [savingPhase, setSavingPhase] = useState(false)
+  // 답변저장 후 진행 방식을 선택받는 확인 다이얼로그 상태
+  const [replyActionTarget, setReplyActionTarget] = useState<InquiryItem | null>(null)
+  const [savingReplyAction, setSavingReplyAction] = useState(false)
 
   const openPhaseDialog = (item: InquiryItem) => {
     setPhaseEditTarget(item)
@@ -143,15 +146,32 @@ export default function InquiriesPage() {
     }
   }
 
-  const handleReplyOnly = async (id: number) => {
+  const handleReplyAndComplete = async () => {
+    if (!replyActionTarget) return
+    setSavingReplyAction(true)
     try {
-      await apiClient.patch(`/api/reviews/inquiry/${id}`, {
-        reply: replyMap[id] || "",
+      await apiClient.patch(`/api/reviews/inquiry/${replyActionTarget.id}`, {
+        reply: replyMap[replyActionTarget.id] || null,
+        status: "completed",
       })
-      alert("답변이 저장되었습니다")
+      setReplyActionTarget(null)
+      fetchData()
     } catch (err) {
-      console.error("답변 저장 실패:", err)
+      const msg =
+        (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
+        ?? "저장 실패"
+      alert(msg)
+    } finally {
+      setSavingReplyAction(false)
     }
+  }
+
+  const handleReplyAndGoToPhaseChange = () => {
+    // 단계 변경 다이얼로그로 이관. 답변은 그쪽 저장 시 함께 PATCH된다.
+    if (!replyActionTarget) return
+    const target = replyActionTarget
+    setReplyActionTarget(null)
+    openPhaseDialog(target)
   }
 
   if (isLoading) {
@@ -180,7 +200,7 @@ export default function InquiriesPage() {
                 <TableHead>문의 내용</TableHead>
                 <TableHead className="w-[250px]">답변</TableHead>
                 <TableHead className="w-[80px]">상태</TableHead>
-                <TableHead className="w-[280px]">처리</TableHead>
+                <TableHead className="w-[180px]">처리</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -223,21 +243,19 @@ export default function InquiriesPage() {
                     </TableCell>
                     <TableCell>
                       <div className="flex gap-1 flex-wrap">
-                        <Button size="sm" variant="outline" onClick={() => handleReplyOnly(item.id)}>
-                          답변저장
-                        </Button>
-                        <Button size="sm" variant="secondary" onClick={() => handleUpdate(item.id, "asking_agency")}>
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          onClick={() => handleUpdate(item.id, "asking_agency")}
+                        >
                           관리원문의
-                        </Button>
-                        <Button size="sm" variant="default" onClick={() => handleUpdate(item.id, "completed")}>
-                          완료
                         </Button>
                         <Button
                           size="sm"
                           variant="default"
-                          onClick={() => openPhaseDialog(item)}
+                          onClick={() => setReplyActionTarget(item)}
                         >
-                          단계변경
+                          답변저장
                         </Button>
                       </div>
                     </TableCell>
@@ -248,6 +266,51 @@ export default function InquiriesPage() {
           </Table>
         </div>
       </div>
+
+      {/* 답변저장 후 후속 조치 선택 다이얼로그 */}
+      <Dialog
+        open={!!replyActionTarget}
+        onOpenChange={(open) => { if (!open) setReplyActionTarget(null) }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>답변을 저장합니다</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-2 text-sm">
+            <p>저장 후 진행 방식을 선택해주세요.</p>
+            {replyActionTarget && (
+              <p className="text-xs text-muted-foreground">
+                관리번호{" "}
+                <span className="font-mono font-medium">{replyActionTarget.mgmt_no}</span>
+              </p>
+            )}
+          </div>
+          <DialogFooter className="flex-col gap-2 sm:flex-row sm:justify-end">
+            <Button
+              variant="ghost"
+              onClick={() => setReplyActionTarget(null)}
+              disabled={savingReplyAction}
+            >
+              취소
+            </Button>
+            <Button
+              variant="secondary"
+              onClick={handleReplyAndGoToPhaseChange}
+              disabled={savingReplyAction}
+            >
+              단계변경하기
+            </Button>
+            <Button
+              variant="default"
+              onClick={handleReplyAndComplete}
+              loading={savingReplyAction}
+              loadingText="저장 중..."
+            >
+              완료하기
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* 단계 변경 다이얼로그 — 저장 시 건물 current_phase 갱신 + 문의 상태 completed */}
       <Dialog
