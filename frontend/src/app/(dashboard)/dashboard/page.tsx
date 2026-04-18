@@ -120,67 +120,39 @@ export default function DashboardPage() {
   const isAdmin = user && ["team_leader", "chief_secretary", "secretary"].includes(user.role)
 
   useEffect(() => {
+    // 각 섹션은 독립적이므로 병렬 호출 + 개별 에러 격리로 첫 페인트 속도를 크게 줄인다.
     const fetchAll = async () => {
-      try {
-        const { data: mine } = await apiClient.get<MyStats>("/api/buildings/my-stats")
-        setMyStats(mine)
-      } catch (err) {
-        console.error("개인 통계 조회 실패:", err)
-      }
+      const tasks: Promise<void>[] = [
+        apiClient.get<MyStats>("/api/buildings/my-stats")
+          .then(({ data }) => setMyStats(data))
+          .catch((err) => console.error("개인 통계 조회 실패:", err)),
 
-      // 공지사항 최신 5건
-      try {
-        const { data } = await apiClient.get<{ items: PostItem[] }>(
-          "/api/announcements",
-          { params: { size: 5 } }
-        )
-        setAnnouncements(data.items)
-      } catch (err) {
-        console.error("공지사항 조회 실패:", err)
-      }
+        apiClient.get<{ items: PostItem[] }>("/api/announcements", { params: { size: 5 } })
+          .then(({ data }) => setAnnouncements(data.items))
+          .catch((err) => console.error("공지사항 조회 실패:", err)),
 
-      // 토론방 최신 5건
-      try {
-        const { data } = await apiClient.get<{ items: PostItem[] }>(
-          "/api/discussions",
-          { params: { size: 5 } }
-        )
-        setDiscussions(data.items)
-      } catch (err) {
-        console.error("토론방 조회 실패:", err)
-      }
+        apiClient.get<{ items: PostItem[] }>("/api/discussions", { params: { size: 5 } })
+          .then(({ data }) => setDiscussions(data.items))
+          .catch((err) => console.error("토론방 조회 실패:", err)),
 
-      // 내가 받은 카톡 알림 최신 5건 (모든 로그인 사용자)
-      try {
-        const { data } = await apiClient.get<{ items: NotificationItem[] }>(
-          "/api/notifications/my",
-          { params: { size: 5, page: 1 } }
-        )
-        setNotifications(data.items)
-      } catch (err) {
-        console.error("내 알림 조회 실패:", err)
-      }
+        apiClient.get<{ items: NotificationItem[] }>("/api/notifications/my", { params: { size: 5, page: 1 } })
+          .then(({ data }) => setNotifications(data.items))
+          .catch((err) => console.error("내 알림 조회 실패:", err)),
 
-      // 나의 문의사항 최신 5건
-      try {
-        const { data } = await apiClient.get<{ items: MyInquiryItem[] }>(
-          "/api/reviews/my-inquiries",
-          { params: { size: 5 } }
-        )
-        setMyInquiries(data.items)
-      } catch (err) {
-        console.error("내 문의사항 조회 실패:", err)
-      }
+        apiClient.get<{ items: MyInquiryItem[] }>("/api/reviews/my-inquiries", { params: { size: 5 } })
+          .then(({ data }) => setMyInquiries(data.items))
+          .catch((err) => console.error("내 문의사항 조회 실패:", err)),
+      ]
 
-      // 간사 이상만 전체 통계
       if (isAdmin) {
-        try {
-          const { data } = await apiClient.get<DashboardStats>("/api/buildings/stats")
-          setStats(data)
-        } catch (err) {
-          console.error("전체 통계 조회 실패:", err)
-        }
+        tasks.push(
+          apiClient.get<DashboardStats>("/api/buildings/stats")
+            .then(({ data }) => setStats(data))
+            .catch((err) => console.error("전체 통계 조회 실패:", err))
+        )
       }
+
+      await Promise.all(tasks)
       setIsLoading(false)
     }
     fetchAll()
