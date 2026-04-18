@@ -12,6 +12,68 @@
 - [operational-dry-run.md](./operational-dry-run.md) — 50명 온보딩 전 테스트 계정 2~3개로 end-to-end 점검
 - [operations-policy.md](./operations-policy.md) — 권한/토큰/카카오/데이터 정합성 정책 요약
 
+---
+
+## 위협 모델링 (2026-04-18 기준, codex 검토)
+
+### 가장 가능성 높은 공격 벡터 5개 (우선순위순)
+
+| # | 벡터 | 공격 시나리오 | 잔여 위험 |
+|---|---|---|---|
+| 1 | **XSS → localStorage JWT 탈취** | 공지/토론/첨부파일명 등 사용자 입력 지점에 스크립트 삽입 → 브라우저 JS로 JWT 읽어 외부 전송 | 🔴 높음 |
+| 2 | **DB 자격증명 유출/직접 접근** | `.env` 유출, 운영자 PC 침해, Supabase 자격증명 노출 → `users.kakao_*_token`(평문)·운영 데이터 직접 열람 | 🔴 높음 |
+| 3 | **운영자 계정 탈취** | 피싱·약한 비번·비번 재사용 → 간사/총괄간사 계정 → `/admin`·발송·리셋 악용 | 🟡 중~높음 |
+| 4 | **업로드/엑셀 파싱 경로** | 악성 파일·edge-case payload → 서버 예외/리소스 소진·parser 취약점 | 🟡 중간 |
+| 5 | **OAuth/setup 토큰 재사용** | 피싱·shoulder surfing·운영자 화면 노출 후 setup_url 재사용 시도 | 🟡 중간 |
+
+### 🚨 가장 위험한 단일 공격
+> **XSS → localStorage JWT 탈취** — 한 번 통하면 세션 즉시 탈취. 운영자 세션 탈취 시 피해 매우 큼.
+
+### 현재 적용된 방어 (요약)
+- JWT 32자 secret 검증, OAuth state JWT (10분 TTL)
+- 카카오 토큰 1회성 link_session (DB), 비번 셋업 토큰 sha256 해시 저장 + 1회성
+- REVIEWER 권한: `reviewer_id` 매칭만 (이름 X), 라우터 sweep 8종
+- 파일 업로드 10/20MB 크기 제한 + stream tempfile, MIME 화이트리스트 미적용
+- 카카오 토큰 detail 응답 마스킹, 외부 응답 본문 비노출
+- request middleware + key=value 로깅 + X-Request-ID
+- CORS env화, must_change_password, 401 race 방지
+
+### 🔴 즉시 보강 권장 (운영 시작 전 또는 1주 내)
+
+1. **프론트 XSS 점검 + CSP 헤더 추가** ⭐ 1순위
+   - `dangerouslySetInnerHTML` 사용처 grep + 모두 점검
+   - Next.js `next.config` 또는 middleware로 CSP 헤더 (script-src 'self' 등)
+   - 사용자 입력이 HTML로 렌더링되는 모든 지점 escaping 재확인 (공지/토론/문의 본문 등)
+2. **관리자 계정 운영 강화**
+   - 운영자 7명 비번 재점검 + 재사용 금지 안내
+   - "ksea" 잔존 계정 3명 비번 초기화 (이미 plan에 있음)
+   - 관리자 로그인 실패 로그 모니터링 (`event=auth_login_failed reason=...`)
+3. **DB 접근 최소화**
+   - Supabase DB 비번 재로테이션 주기화 (분기별)
+   - 최소권한 DB 계정 (앱용 vs admin용 분리)
+   - 가능하면 Supabase 네트워크/IP 제한
+4. **카카오 토큰 컬럼 암호화 설계 착수**
+   - 즉시 KMS는 과한 부담이지만 설계·컬럼 래퍼 준비 시작
+   - DB 유출 시 토큰 재사용 방지
+5. **OAuth state 1회성 저장소 검토**
+   - 현재 JWT 서명만 (replay window 10분)
+   - DB 또는 Redis 기반 nonce 1회성 소비 구조 설계
+
+### 🟢 장기 방어 (안정화)
+
+1. **HttpOnly cookie 전환** — XSS로 JWT 탈취 자체 차단 (가장 효과적인 #1 벡터 방어)
+2. **카카오 토큰 KMS 또는 앱 계층 암호화** — DB 유출 시 토큰 비활성화
+3. **관리자 MFA** — 운영자 계정 탈취 차단
+4. **파일 처리 worker 분리** — parser 취약점 격리
+5. **보안 헤더 전수 정리** — CSP, HSTS, X-Frame-Options, Permissions-Policy
+
+### 운영자 위협 인식 가이드 (행동)
+- 카카오 메시지/이메일 링크 의심 시 직접 입력 (URL 복붙 X)
+- 운영 사이트 외 카카오 OAuth 동의 화면이 떠도 일단 닫기
+- 운영자 PC에 .env 같은 시크릿 파일 보관 시 디스크 암호화
+- 화면 미사용 시 잠금 (shoulder surfing 방지)
+- 비번을 다른 서비스와 공유 X
+
 ## Context
 
 건축구조안전 모니터링 업무(관리번호 부여 → 설계도서 배포 → 검토서 수집 → 보완 반복)를 현재 엑셀 기반 수작업에서 **웹 기반 통합 시스템**으로 전환.
