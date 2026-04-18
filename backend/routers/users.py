@@ -9,11 +9,15 @@ from openpyxl import load_workbook
 from pydantic import BaseModel, EmailStr
 from sqlalchemy.orm import Session
 
+from config import settings
 from database import get_db
+from logging_config import log_event
 from models.building import Building
+from models.password_setup_token import TokenDeliveryChannel, TokenPurpose
 from models.reviewer import Reviewer
 from models.user import User, UserRole
 from routers.auth import get_current_user, get_password_hash, require_roles
+from services.password_setup import issue_setup_token
 
 router = APIRouter()
 
@@ -98,6 +102,19 @@ class BulkImportResponse(BaseModel):
 class ResetPasswordResponse(BaseModel):
     message: str
     initial_password: str
+
+
+class SendInviteResponse(BaseModel):
+    """초대 발송 결과.
+
+    delivery=kakao: 카카오 메시지 발송 성공. setup_url은 디버그/관리자 확인용으로 함께 반환.
+    delivery=manual: 카카오 매칭 안 됨 또는 발송 실패. 관리자가 setup_url을 다른 채널로 전달.
+    """
+    delivery: str  # "kakao" | "manual"
+    setup_url: str
+    expires_at: str
+    purpose: str
+    error: str | None = None  # 카카오 발송 실패 시 사유
 
 
 class UserListResponse(BaseModel):
@@ -314,6 +331,94 @@ def delete_user(
 
     db.delete(user)
     db.commit()
+
+
+@router.post("/{user_id}/send-invite", response_model=SendInviteResponse)
+async def send_invite(
+    user_id: int,
+    purpose: TokenPurpose = TokenPurpose.INITIAL_SETUP,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(
+        require_roles(UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY)
+    ),
+):
+    """비밀번호 셋업 초대 발송 (팀장/총괄간사).
+
+    - 카카오 매칭(`kakao_uuid`)된 사용자에게는 발신 관리자의 카카오 토큰으로 초대 메시지 발송
+    - 미매칭 사용자에게는 setup_url만 응답 → 관리자가 별도 채널로 전달
+    - 기존 미소비 토큰은 자동 무효화 (재발송 시 이전 링크 비활성)
+    """
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다")
+    if not user.is_active:
+        raise HTTPException(status_code=400, detail="비활성 사용자입니다")
+
+    # 카카오 매칭 여부에 따라 channel 결정 (먼저 정해 토큰에 기록)
+    will_send_kakao = bool(user.kakao_uuid) and bool(current_user.kakao_uuid is not None or current_user.kakao_access_token)
+    channel = TokenDeliveryChannel.KAKAO if will_send_kakao else TokenDeliveryChannel.MANUAL
+
+    raw_token, token = issue_setup_token(
+        db,
+        user_id=user.id,
+        purpose=purpose,
+        delivery_channel=channel,
+        created_by=current_user.id,
+    )
+    setup_url = f"{settings.frontend_base_url.rstrip('/')}/setup-password?token={raw_token}"
+
+    delivery = "manual"
+    error: str | None = None
+
+    if user.kakao_uuid:
+        # 발송 시도 — 실패 시 manual로 fallback
+        try:
+            from services.kakao import ensure_valid_token, send_message_to_friends
+
+            access_token = await ensure_valid_token(current_user, db)
+            title = "건축구조안전 모니터링 — 비밀번호 설정"
+            description = (
+                f"{user.name}님, 시스템 접속을 위해 비밀번호를 설정해주세요.\n"
+                f"링크는 72시간 후 만료됩니다."
+            )
+            result = await send_message_to_friends(
+                access_token=access_token,
+                receiver_uuids=[user.kakao_uuid],
+                title=title,
+                description=description,
+                link_url=setup_url,
+            )
+            if "error" in result:
+                error = str(result.get("detail", "발송 실패"))
+                log_event(
+                    "error", "send_invite_kakao_failed",
+                    user_id=user.id, reason=error,
+                )
+            else:
+                delivery = "kakao"
+                log_event(
+                    "info", "send_invite_kakao_sent",
+                    user_id=user.id, purpose=purpose.value,
+                )
+        except Exception as exc:
+            error = f"카카오 발송 오류: {exc}"
+            log_event(
+                "error", "send_invite_kakao_exception",
+                user_id=user.id, reason=str(exc),
+            )
+
+    if delivery != "kakao":
+        # 토큰의 실제 delivery_channel 반영 (manual로 변경)
+        token.delivery_channel = TokenDeliveryChannel.MANUAL
+        db.commit()
+
+    return SendInviteResponse(
+        delivery=delivery,
+        setup_url=setup_url,
+        expires_at=token.expires_at.isoformat(),
+        purpose=purpose.value,
+        error=error,
+    )
 
 
 @router.post("/{user_id}/reset-password", response_model=ResetPasswordResponse)

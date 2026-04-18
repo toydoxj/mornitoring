@@ -329,3 +329,97 @@ def change_password(
     current_user.must_change_password = False
     db.commit()
     return {"message": "비밀번호가 변경되었습니다"}
+
+
+# --- 비밀번호 셋업 (초대 링크 토큰 기반, 인증 불필요) ---
+
+class PasswordSetupValidateResponse(BaseModel):
+    valid: bool
+    purpose: str
+    email_masked: str  # "ho***@example.com" 형태로 일부만 노출
+
+
+class PasswordSetupRequest(BaseModel):
+    token: str = Field(min_length=1, max_length=128)
+    new_password: str = Field(min_length=8, max_length=200)
+
+
+def _mask_email(email: str) -> str:
+    if "@" not in email:
+        return "***"
+    local, domain = email.split("@", 1)
+    if len(local) <= 2:
+        return f"{local[0]}*@{domain}"
+    return f"{local[:2]}{'*' * (len(local) - 2)}@{domain}"
+
+
+@router.get("/password-setup/validate", response_model=PasswordSetupValidateResponse)
+def validate_password_setup(token: str, db: Session = Depends(get_db)):
+    """초대 링크 토큰 사전 검증 (페이지 진입 시 호출).
+
+    유효 시 200 + 마스킹된 이메일 반환, 실패 시 401.
+    행 락은 잡지 않고 read-only 검증.
+    """
+    from services.password_setup import _hash_token
+    from models.password_setup_token import PasswordSetupToken
+
+    invalid = HTTPException(status_code=401, detail="유효하지 않거나 만료된 링크입니다")
+    if not token:
+        raise invalid
+
+    row = (
+        db.query(PasswordSetupToken)
+        .filter(PasswordSetupToken.token_hash == _hash_token(token))
+        .first()
+    )
+    if row is None or row.consumed_at is not None:
+        log_event("warning", "password_setup_validate_failed", reason="invalid")
+        raise invalid
+
+    expires_at = row.expires_at
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if expires_at <= datetime.now(timezone.utc):
+        log_event("warning", "password_setup_validate_failed", reason="expired")
+        raise invalid
+
+    user = db.query(User).filter(User.id == row.user_id).first()
+    if user is None or not user.is_active:
+        raise invalid
+
+    return PasswordSetupValidateResponse(
+        valid=True,
+        purpose=row.purpose.value,
+        email_masked=_mask_email(user.email),
+    )
+
+
+@router.post("/password-setup")
+def setup_password(body: PasswordSetupRequest, db: Session = Depends(get_db)):
+    """초대 링크 토큰 + 새 비밀번호 → 비밀번호 셋업 + 토큰 1회 소비.
+
+    토큰 락 -> 비번 검증 -> User 업데이트 + consumed_at 마킹을 한 트랜잭션에서 처리.
+    """
+    from services.password_setup import lookup_setup_token
+
+    invalid = HTTPException(status_code=401, detail="유효하지 않거나 만료된 링크입니다")
+
+    token = lookup_setup_token(db, body.token)
+    if token is None:
+        log_event("warning", "password_setup_invalid_token")
+        raise invalid
+
+    user = db.query(User).filter(User.id == token.user_id).first()
+    if user is None or not user.is_active:
+        raise invalid
+
+    user.password_hash = get_password_hash(body.new_password)
+    user.must_change_password = False
+    token.consumed_at = datetime.now(timezone.utc)
+    db.commit()
+
+    log_event(
+        "info", "password_setup_completed",
+        user_id=user.id, purpose=token.purpose.value,
+    )
+    return {"message": "비밀번호가 설정되었습니다"}

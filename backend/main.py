@@ -67,6 +67,7 @@ LINK_SESSION_PURGE_INTERVAL_SECONDS = 1800
 
 async def _purge_expired_link_sessions_loop() -> None:
     from services.kakao import purge_expired_link_sessions
+    from services.password_setup import purge_expired_setup_tokens
 
     while True:
         try:
@@ -76,13 +77,16 @@ async def _purge_expired_link_sessions_loop() -> None:
                 deleted = purge_expired_link_sessions(db)
                 if deleted:
                     log_event("info", "kakao_link_session_purge", deleted=deleted)
+                deleted_tokens = purge_expired_setup_tokens(db)
+                if deleted_tokens:
+                    log_event("info", "password_setup_token_purge", deleted=deleted_tokens)
             finally:
                 db.close()
         except asyncio.CancelledError:
             raise
         except Exception:
-            logger.exception("kakao_link_sessions 정리 실패")
-            log_event("error", "kakao_link_session_purge_failed")
+            logger.exception("주기 정리 작업 실패")
+            log_event("error", "purge_loop_failed")
 
 
 @asynccontextmanager

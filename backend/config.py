@@ -27,6 +27,10 @@ class Settings(BaseSettings):
     # CORS 허용 origin (JSON 배열 형식)
     cors_origins: list[str]
 
+    # 프론트엔드 base URL (초대 링크 등 외부 발송 메시지에 사용)
+    # 예: https://ksea-m.vercel.app
+    frontend_base_url: str = "https://ksea-m.vercel.app"
+
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     @field_validator("jwt_secret_key")

@@ -15,6 +15,7 @@ os.environ["AWS_REGION"] = "ap-northeast-2"
 os.environ["S3_BUCKET_NAME"] = "test-bucket"
 os.environ["KAKAO_REDIRECT_URI"] = "http://localhost/callback"
 os.environ["CORS_ORIGINS"] = '["http://localhost:3000"]'
+os.environ["FRONTEND_BASE_URL"] = "http://localhost:3000"
 
 import pytest
 from fastapi.testclient import TestClient

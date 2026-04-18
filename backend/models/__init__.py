@@ -9,6 +9,7 @@ from models.inappropriate_note import InappropriateNote
 from models.announcement import Announcement, AnnouncementComment, AnnouncementAttachment
 from models.discussion import Discussion, DiscussionComment, DiscussionAttachment
 from models.kakao_link_session import KakaoLinkSession
+from models.password_setup_token import PasswordSetupToken
 
 __all__ = [
     "User",
@@ -26,4 +27,5 @@ __all__ = [
     "DiscussionComment",
     "DiscussionAttachment",
     "KakaoLinkSession",
+    "PasswordSetupToken",
 ]
