@@ -23,6 +23,15 @@ interface NotificationItem {
   message: string
   round?: string
   phase?: string
+  report_due_date?: string
+}
+
+// 접수일 + N일을 YYYY-MM-DD 로 반환
+const DEFAULT_DUE_DAYS = 14
+function addDays(iso: string, days: number): string {
+  const d = new Date(iso)
+  d.setDate(d.getDate() + days)
+  return d.toISOString().slice(0, 10)
 }
 
 interface ReceiveResult {
@@ -33,12 +42,29 @@ interface ReceiveResult {
 
 export default function DistributionPage() {
   const [mgmtNosInput, setMgmtNosInput] = useState("")
-  const [receivedDate, setReceivedDate] = useState(
-    new Date().toISOString().slice(0, 10)
+  const initialReceived = new Date().toISOString().slice(0, 10)
+  const [receivedDate, setReceivedDate] = useState(initialReceived)
+  // 검토서 요청 예정일 — 접수일 + DEFAULT_DUE_DAYS 기본값, 사용자가 직접 수정 가능
+  const [reportDueDate, setReportDueDate] = useState(
+    addDays(initialReceived, DEFAULT_DUE_DAYS)
   )
+  // 예정일을 사용자가 한 번이라도 손댔으면 접수일 변경 시 더 이상 자동 계산하지 않는다
+  const [dueDateTouched, setDueDateTouched] = useState(false)
   const [isProcessing, setIsProcessing] = useState(false)
   const [result, setResult] = useState<ReceiveResult | null>(null)
   const [notifSent, setNotifSent] = useState(false)
+
+  const handleReceivedDateChange = (v: string) => {
+    setReceivedDate(v)
+    if (!dueDateTouched && v) {
+      setReportDueDate(addDays(v, DEFAULT_DUE_DAYS))
+    }
+  }
+
+  const handleDueDateChange = (v: string) => {
+    setReportDueDate(v)
+    setDueDateTouched(true)
+  }
 
   // 파일에서 관리번호 추출
   const handleFileExtract = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -77,6 +103,7 @@ export default function DistributionPage() {
         {
           mgmt_nos: mgmtNos,
           received_date: receivedDate,
+          report_due_date: reportDueDate || null,
         }
       )
       setResult(data)
@@ -126,14 +153,28 @@ export default function DistributionPage() {
           <CardTitle>1단계: 접수 관리번호 입력</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="space-y-2">
-            <Label>접수 날짜</Label>
-            <Input
-              type="date"
-              value={receivedDate}
-              onChange={(e) => setReceivedDate(e.target.value)}
-              className="w-48"
-            />
+          <div className="flex flex-wrap gap-4">
+            <div className="space-y-2">
+              <Label>접수 날짜</Label>
+              <Input
+                type="date"
+                value={receivedDate}
+                onChange={(e) => handleReceivedDateChange(e.target.value)}
+                className="w-48"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>검토서 요청 예정일</Label>
+              <Input
+                type="date"
+                value={reportDueDate}
+                onChange={(e) => handleDueDateChange(e.target.value)}
+                className="w-48"
+              />
+              <p className="text-xs text-muted-foreground">
+                기본값: 접수일 + {DEFAULT_DUE_DAYS}일 (직접 수정 가능)
+              </p>
+            </div>
           </div>
 
           <div className="space-y-2">

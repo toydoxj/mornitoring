@@ -1,6 +1,6 @@
 """도서 접수/배포 라우터"""
 
-from datetime import date
+from datetime import date, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -14,10 +14,16 @@ from routers.auth import require_roles
 
 router = APIRouter()
 
+# 검토서 요청 예정일 기본 유예 기간(접수일 + DEFAULT_DUE_DAYS).
+DEFAULT_DUE_DAYS = 14
+
 
 class DocReceiveRequest(BaseModel):
     mgmt_nos: list[str]
     received_date: date | None = None  # 미입력 시 오늘
+    # 검토서 요청 예정일 — 미입력 시 received_date + DEFAULT_DUE_DAYS로 자동 설정.
+    # 한 번의 receive 호출 안에서는 모든 건물에 동일 예정일을 일괄 적용한다.
+    report_due_date: date | None = None
 
 
 class DocReceiveResponse(BaseModel):
@@ -92,6 +98,8 @@ def receive_documents(
     - 검토위원 × 차수 조합별로 알림 데이터 생성
     """
     received = body.received_date or date.today()
+    # 요청 예정일: 명시값 > 기본(접수일 + DEFAULT_DUE_DAYS)
+    due_date = body.report_due_date or (received + timedelta(days=DEFAULT_DUE_DAYS))
     updated = 0
     not_found: list[str] = []
     # (검토자 이름, 접수 차수) → 관리번호 목록
@@ -150,12 +158,14 @@ def receive_documents(
         stage = existing_stages.get(key)
         if stage:
             stage.doc_received_at = received
+            stage.report_due_date = due_date
         else:
             db.add(ReviewStage(
                 building_id=building.id,
                 phase=PhaseType(target_phase),
                 phase_order=_PHASE_ORDER[target_phase],
                 doc_received_at=received,
+                report_due_date=due_date,
             ))
 
         reviewer_name = building.assigned_reviewer_name
@@ -171,6 +181,7 @@ def receive_documents(
     db.commit()
 
     # 5. 알림 목록 생성 (검토자 × 차수 별로)
+    due_date_str = due_date.strftime("%Y-%m-%d")
     notif_list = []
     for (reviewer, phase), mgmt_nos_list in notif_key.items():
         round_label = _ROUND_KOREAN.get(phase, phase)
@@ -180,9 +191,11 @@ def receive_documents(
             "round": round_label,
             "phase": phase,
             "mgmt_nos": mgmt_nos_list,
+            "report_due_date": due_date_str,
             "message": (
                 f"{round_label}도서 {len(mgmt_nos_list)}건이 웹하드에 "
-                f"업로드되었습니다. (관리번호 {', '.join(mgmt_nos_list)})"
+                f"업로드되었습니다. (관리번호 {', '.join(mgmt_nos_list)})\n"
+                f"검토서 요청 예정일: {due_date_str}"
             ),
         })
 

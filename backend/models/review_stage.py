@@ -42,6 +42,9 @@ class ReviewStage(Base):
     # 도서 배포
     doc_received_at: Mapped[date | None] = mapped_column(Date)       # 도서접수일
     doc_distributed_at: Mapped[date | None] = mapped_column(Date)    # 도서배포일
+    # 검토서 요청 예정일 — 도서 접수 시점에 배정(기본 접수일 + 14일)되고
+    # 검토위원 리마인드 알림의 기준일로 사용된다.
+    report_due_date: Mapped[date | None] = mapped_column(Date)
 
     # 검토서 제출
     report_submitted_at: Mapped[date | None] = mapped_column(Date)   # 검토서 제출일
