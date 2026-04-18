@@ -1,6 +1,7 @@
 """AWS S3 파일 저장 서비스"""
 
 from datetime import date
+from functools import lru_cache
 from pathlib import Path
 
 import boto3
@@ -9,7 +10,13 @@ from botocore.exceptions import ClientError
 from config import settings
 
 
+@lru_cache(maxsize=1)
 def _get_s3_client():
+    """워커당 1회만 boto3 클라이언트 생성 (각 호출당 ~50ms 절약).
+
+    boto3 client 생성은 무겁고, settings는 프로세스 lifetime 동안 변경되지 않으므로
+    프로세스(워커) 단위 캐싱이 안전하다.
+    """
     return boto3.client(
         "s3",
         aws_access_key_id=settings.aws_access_key_id,

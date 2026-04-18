@@ -11,9 +11,6 @@ from models.user import User, UserRole
 from routers.auth import get_current_user, require_roles
 from services.audit import log_action
 
-# 등록된 사용자 이름 캐시 (요청마다 갱신)
-_registered_names_cache: set[str] | None = None
-
 router = APIRouter()
 
 

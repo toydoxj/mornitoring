@@ -5,7 +5,9 @@ services:
     environment:
       POSTGRES_DB: monitoring
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      # 운영 DB는 Supabase 사용. 이 docker-compose는 로컬 개발 전용.
+      # POSTGRES_PASSWORD가 없으면 컨테이너 부팅 실패 → 운영 실수 방지.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD 환경변수가 필요합니다}
     ports:
       - "5432:5432"
     volumes:

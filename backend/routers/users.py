@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from config import settings
 from database import get_db
+from dependencies import read_upload_limited
 from logging_config import log_event
 from models.building import Building
 from models.password_setup_token import TokenPurpose
@@ -323,8 +324,8 @@ async def import_users_excel(
     if not file.filename or not file.filename.endswith((".xlsx", ".xls")):
         raise HTTPException(status_code=400, detail="엑셀 파일(.xlsx)만 업로드 가능합니다")
 
+    content = await read_upload_limited(file, max_mb=10)
     with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
-        content = await file.read()
         tmp.write(content)
         tmp_path = Path(tmp.name)
 

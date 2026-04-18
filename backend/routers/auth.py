@@ -192,7 +192,11 @@ async def kakao_callback(
 
     kakao_access = kakao_tokens.get("access_token")
     if not kakao_access:
-        raise HTTPException(status_code=400, detail=f"카카오 액세스 토큰 없음: {kakao_tokens}")
+        # 외부 응답 본문은 응답 detail에 노출하지 않음 (민감 정보/디버그 정보 누출 방지)
+        # 자세한 사유는 서버 로그에서만 확인
+        logger.error("카카오 액세스 토큰 없음 — 응답 keys=%s", list(kakao_tokens.keys()))
+        log_event("error", "kakao_token_missing", keys=",".join(kakao_tokens.keys()))
+        raise HTTPException(status_code=400, detail="카카오 로그인 처리 중 오류가 발생했습니다")
     kakao_refresh = kakao_tokens.get("refresh_token", "")
     kakao_expires_in = kakao_tokens.get("expires_in", 21599)
     kakao_token_expires_at = datetime.now(timezone.utc) + timedelta(seconds=kakao_expires_in)

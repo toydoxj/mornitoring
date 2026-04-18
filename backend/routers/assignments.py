@@ -8,6 +8,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from database import get_db
+from dependencies import read_upload_limited
 from models.building import Building
 from models.reviewer import Reviewer
 from models.user import User, UserRole
@@ -105,8 +106,8 @@ async def preview_assignment_excel(
     if not file.filename or not file.filename.endswith((".xlsx", ".xls")):
         raise HTTPException(status_code=400, detail="엑셀 파일(.xlsx)만 업로드 가능합니다")
 
+    content = await read_upload_limited(file, max_mb=10)
     with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
-        content = await file.read()
         tmp.write(content)
         tmp_path = Path(tmp.name)
 
@@ -128,8 +129,8 @@ async def apply_assignment_excel(
     if not file.filename or not file.filename.endswith((".xlsx", ".xls")):
         raise HTTPException(status_code=400, detail="엑셀 파일(.xlsx)만 업로드 가능합니다")
 
+    content = await read_upload_limited(file, max_mb=10)
     with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
-        content = await file.read()
         tmp.write(content)
         tmp_path = Path(tmp.name)
 

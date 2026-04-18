@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from database import get_db
+from dependencies import read_upload_limited
 from models.announcement import Announcement, AnnouncementComment, AnnouncementAttachment
 from models.user import User, UserRole
 from routers.auth import get_current_user, require_roles
@@ -324,9 +325,9 @@ async def upload_attachment(
         raise HTTPException(status_code=400, detail="파일이 없습니다")
 
     # 임시 저장 후 S3 업로드
+    content = await read_upload_limited(file, max_mb=20)  # 첨부 (이미지/문서)
     suffix = Path(file.filename).suffix
     with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-        content = await file.read()
         tmp.write(content)
         tmp_path = Path(tmp.name)
 
