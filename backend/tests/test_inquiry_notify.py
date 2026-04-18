@@ -50,8 +50,8 @@ async def test_skips_when_recipient_has_no_kakao_uuid(db_session, make_user):
 
 
 @pytest.mark.asyncio
-async def test_message_includes_sender_name_as_manager(db_session, make_user):
-    """메시지 본문 첫 줄에 '담당간사 : {발신자 이름}'이 기입된다."""
+async def test_message_body_includes_reply_and_phase_notice(db_session, make_user):
+    """phase_changed=True 이면 본문에 답변 + 단계 변경 안내가 포함되고, 담당간사 라인은 없다."""
     sender, _ = make_user(UserRole.CHIEF_SECRETARY, name="김총괄")
     recipient, _ = make_user(UserRole.REVIEWER, name="이공우")
     inquiry = _make_inquiry(db_session, submitter_id=recipient.id)
@@ -65,9 +65,9 @@ async def test_message_includes_sender_name_as_manager(db_session, make_user):
     log = db_session.query(NotificationLog).first()
     assert log is not None
     assert log.message is not None
-    assert "담당간사 : 김총괄" in log.message
     assert "답변:" in log.message
     assert "검토 단계가 변경" in log.message
+    assert "담당간사" not in log.message
 
 
 @pytest.mark.asyncio
