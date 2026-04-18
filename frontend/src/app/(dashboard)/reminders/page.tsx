@@ -16,12 +16,13 @@ import {
 import apiClient from "@/lib/api/client"
 import { useAuthStore } from "@/stores/authStore"
 
-type Trigger = "within_3_days" | "d_minus_1" | "overdue"
+type Trigger = "within_3_days" | "d_minus_1" | "overdue" | "on_date"
 
 const TRIGGER_OPTIONS: { value: Trigger; label: string; hint: string }[] = [
   { value: "within_3_days", label: "D-3 이내 + 초과", hint: "예정일 3일 이내이거나 이미 지난 미제출 건" },
   { value: "d_minus_1", label: "D-1만", hint: "예정일이 내일인 미제출 건" },
   { value: "overdue", label: "초과만", hint: "예정일이 지난 미제출 건" },
+  { value: "on_date", label: "날짜 지정", hint: "선택한 날짜와 예정일이 일치하는 미제출 건" },
 ]
 
 interface ReviewerPreview {
@@ -38,6 +39,7 @@ interface PreviewResponse {
   sent: number
   failed: number
   dry_run: boolean
+  today_sent_count?: number
   by_reviewer: ReviewerPreview[]
 }
 
@@ -45,26 +47,35 @@ export default function RemindersPage() {
   const router = useRouter()
   const user = useAuthStore((s) => s.user)
   const isUserLoading = useAuthStore((s) => s.isLoading)
+  // 리마인드 발송은 팀장/총괄간사 전용 (간사는 접근 금지)
   const isAdmin =
-    !!user && ["team_leader", "chief_secretary", "secretary"].includes(user.role)
+    !!user && ["team_leader", "chief_secretary"].includes(user.role)
 
   useEffect(() => {
     if (!isUserLoading && user && !isAdmin) router.replace("/dashboard")
   }, [isUserLoading, user, isAdmin, router])
 
   const [trigger, setTrigger] = useState<Trigger>("within_3_days")
+  const today = new Date().toISOString().slice(0, 10)
+  const [targetDate, setTargetDate] = useState<string>(today)
   const [preview, setPreview] = useState<PreviewResponse | null>(null)
   const [selected, setSelected] = useState<Record<number, boolean>>({})
   const [isPreviewLoading, setIsPreviewLoading] = useState(false)
   const [isSending, setIsSending] = useState(false)
   const [sendResult, setSendResult] = useState<{ sent: number; failed: number } | null>(null)
 
-  const fetchPreview = useCallback(async (t: Trigger) => {
+  const fetchPreview = useCallback(async (t: Trigger, dateValue: string | null) => {
     setIsPreviewLoading(true)
     try {
+      const payload: {
+        trigger: Trigger
+        dry_run: true
+        target_date?: string
+      } = { trigger: t, dry_run: true }
+      if (t === "on_date" && dateValue) payload.target_date = dateValue
       const { data } = await apiClient.post<PreviewResponse>(
         "/api/notifications/review-reminder",
-        { trigger: t, dry_run: true },
+        payload,
       )
       setPreview(data)
       // 카카오 매칭된 검토위원만 기본 체크
@@ -81,13 +92,19 @@ export default function RemindersPage() {
   }, [])
 
   useEffect(() => {
-    if (isAdmin) fetchPreview("within_3_days")
+    if (isAdmin) fetchPreview("within_3_days", null)
   }, [isAdmin, fetchPreview])
 
   const handleTriggerChange = (t: Trigger) => {
     setTrigger(t)
     setSendResult(null)
-    fetchPreview(t)
+    // on_date 는 사용자가 날짜 선택/조회 버튼을 눌러야 실제 반영
+    if (t !== "on_date") fetchPreview(t, null)
+  }
+
+  const handleDateQuery = () => {
+    if (!targetDate) return
+    fetchPreview("on_date", targetDate)
   }
 
   const toggle = (id: number) => {
@@ -123,17 +140,24 @@ export default function RemindersPage() {
     setIsSending(true)
     setSendResult(null)
     try {
+      const payload: {
+        trigger: Trigger
+        dry_run: false
+        recipient_user_ids: number[]
+        target_date?: string
+      } = {
+        trigger,
+        dry_run: false,
+        recipient_user_ids: selectedIds,
+      }
+      if (trigger === "on_date" && targetDate) payload.target_date = targetDate
       const { data } = await apiClient.post<PreviewResponse>(
         "/api/notifications/review-reminder",
-        {
-          trigger,
-          dry_run: false,
-          recipient_user_ids: selectedIds,
-        },
+        payload,
       )
       setSendResult({ sent: data.sent, failed: data.failed })
-      // 자동 재조회
-      await fetchPreview(trigger)
+      // 자동 재조회 (같은 트리거·날짜로)
+      await fetchPreview(trigger, trigger === "on_date" ? targetDate : null)
     } catch (err) {
       console.error("리마인드 발송 실패:", err)
       setSendResult({ sent: 0, failed: selectedIds.length })
@@ -157,10 +181,16 @@ export default function RemindersPage() {
       </div>
 
       <Card>
-        <CardHeader>
+        <CardHeader className="flex flex-row items-center justify-between">
           <CardTitle>조회 조건</CardTitle>
+          <div className="text-xs text-muted-foreground">
+            오늘 발송 횟수{" "}
+            <strong className="text-slate-800">
+              {preview?.today_sent_count ?? 0}건
+            </strong>
+          </div>
         </CardHeader>
-        <CardContent>
+        <CardContent className="space-y-3">
           <div className="flex flex-wrap gap-4">
             {TRIGGER_OPTIONS.map((opt) => (
               <label
@@ -184,6 +214,23 @@ export default function RemindersPage() {
               </label>
             ))}
           </div>
+
+          {trigger === "on_date" && (
+            <div className="flex items-end gap-2 border-t pt-3">
+              <div className="space-y-1">
+                <label className="text-xs text-muted-foreground">예정일 선택</label>
+                <input
+                  type="date"
+                  value={targetDate}
+                  onChange={(e) => setTargetDate(e.target.value)}
+                  className="rounded-md border px-3 py-2 text-sm"
+                />
+              </div>
+              <Button variant="secondary" size="sm" onClick={handleDateQuery} disabled={!targetDate || isPreviewLoading}>
+                조회
+              </Button>
+            </div>
+          )}
         </CardContent>
       </Card>
 

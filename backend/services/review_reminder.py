@@ -30,7 +30,7 @@ from services.kakao import (
 )
 
 
-TriggerType = Literal["d_minus_1", "overdue", "within_3_days"]
+TriggerType = Literal["d_minus_1", "overdue", "within_3_days", "on_date"]
 TEMPLATE_TYPE = "reminder"
 
 _ROUND_LABEL: dict[str, str] = {
@@ -55,9 +55,17 @@ class ReminderTarget:
 
 
 def collect_targets(
-    db: Session, trigger: TriggerType, today: date | None = None
+    db: Session,
+    trigger: TriggerType,
+    today: date | None = None,
+    *,
+    target_date: date | None = None,
 ) -> list[ReminderTarget]:
-    """트리거 조건에 해당하는 검토서 미제출 건을 모은다."""
+    """트리거 조건에 해당하는 검토서 미제출 건을 모은다.
+
+    `target_date` 는 `trigger == "on_date"` 일 때 사용되며, 예정일이 해당 날짜와
+    정확히 일치하는 미제출 건만 반환한다.
+    """
     anchor = today or date.today()
     base_query = (
         db.query(ReviewStage, Building, Reviewer, User)
@@ -81,6 +89,10 @@ def collect_targets(
         base_query = base_query.filter(
             ReviewStage.report_due_date <= anchor + timedelta(days=3)
         )
+    elif trigger == "on_date":
+        if target_date is None:
+            return []
+        base_query = base_query.filter(ReviewStage.report_due_date == target_date)
     else:  # pragma: no cover - 타입 힌트로 방어되지만 안전망
         return []
 
@@ -118,6 +130,9 @@ def _compose_message(
     elif trigger == "overdue":
         title = "검토서 요청 기한 초과"
         lead = "제출 예정일이 지났습니다. 빠른 검토서 제출을 부탁드립니다."
+    elif trigger == "on_date":
+        title = "검토서 제출 요청 안내"
+        lead = "지정 예정일 건입니다. 확인 부탁드립니다."
     else:  # within_3_days
         title = "검토서 제출 요청 안내"
         lead = "제출 예정일이 다가오거나 지난 검토서입니다. 빠른 제출을 부탁드립니다."
@@ -141,6 +156,22 @@ def _group_by_reviewer(
     return grouped
 
 
+def _today_reminder_sent_count(db: Session) -> int:
+    """오늘(UTC 자정 이후) 성공 발송된 reminder NotificationLog 수."""
+    today_start = datetime.now(timezone.utc).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    return (
+        db.query(NotificationLog)
+        .filter(
+            NotificationLog.template_type == TEMPLATE_TYPE,
+            NotificationLog.is_sent.is_(True),
+            NotificationLog.created_at >= today_start,
+        )
+        .count()
+    )
+
+
 async def send_review_reminders(
     db: Session,
     sender: User,
@@ -149,13 +180,18 @@ async def send_review_reminders(
     dry_run: bool = False,
     today: date | None = None,
     recipient_user_ids: list[int] | None = None,
+    target_date: date | None = None,
 ) -> dict:
     """담당 검토위원별로 묶어 리마인드 발송. dry_run=True 면 대상만 반환.
 
     `recipient_user_ids` 가 주어지면 해당 검토위원에게만 발송 대상을 좁힌다.
     None 이면 조건에 맞는 모든 검토위원에게 발송.
+    `target_date` 는 `trigger == "on_date"` 일 때 사용.
+
+    응답 dict 에 `today_sent_count` 필드를 포함해 UI 에서 "오늘 발송 횟수" 를
+    표시할 수 있도록 한다.
     """
-    targets = collect_targets(db, trigger, today)
+    targets = collect_targets(db, trigger, today, target_date=target_date)
     if recipient_user_ids is not None:
         allow = set(recipient_user_ids)
         targets = [t for t in targets if t.reviewer_user_id in allow]
@@ -168,6 +204,7 @@ async def send_review_reminders(
             "sent": 0,
             "failed": 0,
             "dry_run": dry_run,
+            "today_sent_count": _today_reminder_sent_count(db),
             "by_reviewer": [
                 {
                     "reviewer_user_id": uid,
@@ -206,6 +243,7 @@ async def send_review_reminders(
             "sent": 0,
             "failed": len(grouped),
             "dry_run": False,
+            "today_sent_count": _today_reminder_sent_count(db),
             "by_reviewer": [],
         }
 
@@ -215,7 +253,7 @@ async def send_review_reminders(
     link_url = f"{settings.frontend_base_url}/my-reviews"
 
     for uid, ts in grouped.items():
-        title, message = _compose_message(trigger, ts)
+        title, message = _compose_message(trigger, ts, today)
         head = ts[0]
 
         # 본인에게 쏘는 경우 '나에게 보내기'
@@ -292,5 +330,6 @@ async def send_review_reminders(
         "sent": sent,
         "failed": failed,
         "dry_run": False,
+        "today_sent_count": _today_reminder_sent_count(db),
         "by_reviewer": summary,
     }

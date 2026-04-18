@@ -65,6 +65,25 @@ def test_collect_targets_overdue_excludes_submitted(db_session, make_reviewer):
     assert mgmts == ["R-0100"]
 
 
+def test_collect_targets_on_date_exact_match(db_session, make_reviewer):
+    _, reviewer, _ = make_reviewer()
+    target = date(2026, 5, 1)
+    _seed_stage(db_session, reviewer_id=reviewer.id, mgmt_no="OD-01", due=target)
+    _seed_stage(db_session, reviewer_id=reviewer.id, mgmt_no="OD-02", due=target - timedelta(days=1))
+    _seed_stage(db_session, reviewer_id=reviewer.id, mgmt_no="OD-03", due=target + timedelta(days=1))
+
+    mgmts = [t.mgmt_no for t in collect_targets(
+        db_session, "on_date", target_date=target,
+    )]
+    assert mgmts == ["OD-01"]
+
+
+def test_collect_targets_on_date_without_target_returns_empty(db_session, make_reviewer):
+    _, reviewer, _ = make_reviewer()
+    _seed_stage(db_session, reviewer_id=reviewer.id, mgmt_no="ONE-01", due=date(2026, 5, 1))
+    assert collect_targets(db_session, "on_date", target_date=None) == []
+
+
 def test_collect_targets_within_3_days_includes_overdue_and_future(db_session, make_reviewer):
     _, reviewer, _ = make_reviewer()
     today = date(2026, 4, 19)
@@ -95,6 +114,20 @@ async def test_send_review_reminders_respects_recipient_filter(db_session, make_
     assert result["target_count"] == 1
     assert len(result["by_reviewer"]) == 1
     assert result["by_reviewer"][0]["mgmt_nos"] == ["F-001"]
+
+
+@pytest.mark.asyncio
+async def test_send_review_reminders_response_includes_today_sent_count(db_session, make_user, make_reviewer):
+    sender, _ = make_user(UserRole.CHIEF_SECRETARY, name="발신자")
+    _, reviewer, _ = make_reviewer()
+    today = date(2026, 4, 19)
+    _seed_stage(db_session, reviewer_id=reviewer.id, mgmt_no="T-001", due=today + timedelta(days=1))
+
+    result = await send_review_reminders(
+        db_session, sender, "d_minus_1", dry_run=True, today=today,
+    )
+    assert "today_sent_count" in result
+    assert result["today_sent_count"] == 0
 
 
 @pytest.mark.asyncio

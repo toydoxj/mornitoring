@@ -1,6 +1,6 @@
 """알림 로그 조회 + 카카오톡 발송 라우터"""
 
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
@@ -240,10 +240,12 @@ async def send_notifications(
 
 
 class ReviewReminderRequest(BaseModel):
-    trigger: str  # "d_minus_1" | "overdue" | "within_3_days"
+    trigger: str  # "d_minus_1" | "overdue" | "within_3_days" | "on_date"
     dry_run: bool = False
     # 지정 시 해당 user_id 의 검토위원에게만 발송 (리마인드 페이지 체크박스 선택 발송)
     recipient_user_ids: list[int] | None = None
+    # trigger == "on_date" 일 때 사용: 예정일이 이 날짜와 일치하는 미제출 건만 조회·발송
+    target_date: date | None = None
 
 
 @router.post("/review-reminder")
@@ -251,29 +253,36 @@ async def send_review_reminder_endpoint(
     body: ReviewReminderRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(
-        require_roles(UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY, UserRole.SECRETARY)
+        require_roles(UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY)
     ),
 ):
-    """검토위원 리마인드 알림 수동 발송.
+    """검토위원 리마인드 알림 수동 발송 (팀장/총괄간사 전용).
 
     trigger 값:
       - `d_minus_1`: 내일이 예정일인 미제출 건
       - `overdue`: 예정일이 지났는데 미제출인 건
       - `within_3_days`: D-3 이내(초과 포함) 미제출 — 리마인드 페이지 기본 조회
+      - `on_date`: 특정 예정일(target_date) 과 일치하는 미제출 건
 
     `dry_run=true` 이면 대상자 프리뷰만 반환하고 실제 발송·로그 기록은 하지 않는다.
     `recipient_user_ids` 로 대상 검토위원을 좁힐 수 있다(체크박스 기반 선택 발송).
-    동일 함수는 `scripts/send_review_reminders.py` (cron)에서도 재사용된다.
+    응답에는 오늘(UTC) 성공 발송된 리마인드 수 `today_sent_count` 가 포함된다.
     """
     from services.review_reminder import send_review_reminders
 
-    if body.trigger not in {"d_minus_1", "overdue", "within_3_days"}:
+    if body.trigger not in {"d_minus_1", "overdue", "within_3_days", "on_date"}:
         raise HTTPException(status_code=400, detail="trigger 값이 올바르지 않습니다")
+    if body.trigger == "on_date" and body.target_date is None:
+        raise HTTPException(
+            status_code=400,
+            detail="trigger=on_date 일 때 target_date 를 지정해야 합니다",
+        )
 
     return await send_review_reminders(
         db, current_user, body.trigger,
         dry_run=body.dry_run,
         recipient_user_ids=body.recipient_user_ids,
+        target_date=body.target_date,
     )
 
 
