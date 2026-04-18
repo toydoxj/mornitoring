@@ -831,7 +831,7 @@ function FlowStages({ stats }: { stats: DashboardStats }) {
     stats.final_counts.excluded
 
   return (
-    <div className="flex flex-col items-stretch gap-3 lg:flex-row">
+    <div className="flex h-full flex-col items-stretch gap-3 lg:flex-row lg:items-stretch">
       <FlowStageCard title="총 등록건" total={stats.total} accent="indigo" items={[]} />
       {/* 총 등록건은 전체 요약. 진행 단계와 구분해 화살표 대신 세로선으로 분리 */}
       <div
@@ -899,7 +899,7 @@ function FlowStageCard({
   return (
     <div
       className={`
-        relative flex-1 overflow-hidden rounded-xl border bg-white p-4 transition-all hover:shadow-sm
+        relative flex h-full flex-1 flex-col overflow-hidden rounded-xl border bg-white p-4 transition-all hover:shadow-sm
         before:absolute before:left-0 before:top-0 before:h-full before:w-1 ${BREAKDOWN_BAR[accent]}
       `}
     >
