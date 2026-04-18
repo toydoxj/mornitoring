@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react"
 import Link from "next/link"
+import { useRouter } from "next/navigation"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -38,17 +39,16 @@ const STATUS_LABELS: Record<string, string> = {
   open: "접수",
   asking_agency: "관리원문의중",
   completed: "완료",
-  next_phase: "다음단계",
 }
 
 const STATUS_VARIANT: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
   open: "destructive",
   asking_agency: "secondary",
   completed: "default",
-  next_phase: "default",
 }
 
 export default function InquiriesPage() {
+  const router = useRouter()
   const [activeData, setActiveData] = useState<InquiryItem[]>([])
   const [activeTotal, setActiveTotal] = useState(0)
   const [closedData, setClosedData] = useState<InquiryItem[]>([])
@@ -149,7 +149,7 @@ export default function InquiriesPage() {
                   <TableRow key={item.id}>
                     <TableCell className="font-mono text-sm">
                       <Link
-                        href={`/buildings/${item.building_id}`}
+                        href={`/buildings/${item.building_id}?from=inquiries`}
                         className="text-primary hover:underline"
                       >
                         {item.mgmt_no}
@@ -186,8 +186,14 @@ export default function InquiriesPage() {
                         <Button size="sm" variant="default" onClick={() => handleUpdate(item.id, "completed")}>
                           완료
                         </Button>
-                        <Button size="sm" variant="default" onClick={() => handleUpdate(item.id, "next_phase")}>
-                          다음단계
+                        <Button
+                          size="sm"
+                          variant="default"
+                          onClick={() =>
+                            router.push(`/buildings/${item.building_id}?from=inquiries&editPhase=1`)
+                          }
+                        >
+                          단계 변경
                         </Button>
                       </div>
                     </TableCell>
@@ -202,7 +208,7 @@ export default function InquiriesPage() {
       {/* 완료된 문의 */}
       {closedData.length > 0 && (
         <div>
-          <h2 className="text-lg font-semibold mb-2">완료/다음단계</h2>
+          <h2 className="text-lg font-semibold mb-2">완료</h2>
           <div className="rounded-md border bg-white">
             <Table>
               <TableHeader>
@@ -221,7 +227,7 @@ export default function InquiriesPage() {
                   <TableRow key={item.id} className="text-muted-foreground">
                     <TableCell className="font-mono text-sm">
                       <Link
-                        href={`/buildings/${item.building_id}`}
+                        href={`/buildings/${item.building_id}?from=inquiries`}
                         className="text-primary hover:underline"
                       >
                         {item.mgmt_no}

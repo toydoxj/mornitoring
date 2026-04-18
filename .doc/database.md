@@ -143,7 +143,7 @@ Supabase PostgreSQL 17 (Seoul) | 마지막 갱신: 2026-04-17
 | submitter_name | varchar(50) | 문의자 이름 |
 | content | text | 문의 내용 |
 | reply | text | 답변 |
-| status | varchar(13) (enum) | `open` 접수 / `asking_agency` 관리원문의중 / `completed` 완료 / `next_phase` 다음단계 |
+| status | varchar(13) (enum) | `open` 접수 / `asking_agency` 관리원문의중 / `completed` 완료 |
 | created_at / updated_at | timestamp | |
 
 ### notification_logs — 카카오톡 알림 발송 이력

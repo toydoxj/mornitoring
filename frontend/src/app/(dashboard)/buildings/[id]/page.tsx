@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { useParams, useRouter, useSearchParams } from "next/navigation"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -31,9 +31,16 @@ export default function BuildingDetailPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const from = searchParams.get("from")
+  const editPhaseParam = searchParams.get("editPhase") === "1"
   const user = useAuthStore((s) => s.user)
-  const backPath = from === "my-reviews" ? "/my-reviews" : "/buildings"
-  const backLabel = from === "my-reviews" ? "← 내 검토 대상" : "← 목록으로"
+  const backPath =
+    from === "my-reviews" ? "/my-reviews" :
+    from === "inquiries" ? "/inquiries" :
+    "/buildings"
+  const backLabel =
+    from === "my-reviews" ? "← 내 검토 대상" :
+    from === "inquiries" ? "← 문의사항" :
+    "← 목록으로"
   const [building, setBuilding] = useState<Building | null>(null)
   const [stages, setStages] = useState<ReviewStage[]>([])
   const [inquiries, setInquiries] = useState<{
@@ -86,6 +93,18 @@ export default function BuildingDetailPage() {
     }
     fetchData()
   }, [params.id, router])
+
+  // 문의사항 등에서 `?editPhase=1` 로 진입하면 로딩 완료 후 단계 변경 다이얼로그 자동 오픈.
+  // building 갱신(저장) 시 재오픈되지 않도록 1회성 ref 가드를 쓴다.
+  const autoOpenedRef = useRef(false)
+  useEffect(() => {
+    if (autoOpenedRef.current) return
+    if (!isLoading && building && editPhaseParam && canManage) {
+      autoOpenedRef.current = true
+      setPhaseDraft(building.current_phase ?? "")
+      setPhaseEditOpen(true)
+    }
+  }, [isLoading, building, editPhaseParam, canManage])
 
   interface NoteItem {
     id: number
@@ -527,7 +546,7 @@ export default function BuildingDetailPage() {
                       } className="text-xs">
                         {inq.status === "open" ? "접수" :
                          inq.status === "asking_agency" ? "관리원문의중" :
-                         inq.status === "completed" ? "완료" : "다음단계"}
+                         "완료"}
                       </Badge>
                     </div>
                     <span className="text-xs text-muted-foreground">

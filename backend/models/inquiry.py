@@ -13,7 +13,6 @@ class InquiryStatus(str, enum.Enum):
     OPEN = "open"                    # 접수
     ASKING_AGENCY = "asking_agency"  # 관리원문의중
     COMPLETED = "completed"          # 완료
-    NEXT_PHASE = "next_phase"        # 다음단계
 
 
 class Inquiry(Base):

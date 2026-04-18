@@ -555,7 +555,7 @@ class InquiryCreateRequest(BaseModel):
 
 class InquiryUpdateRequest(BaseModel):
     reply: str | None = None
-    status: str | None = None  # asking_agency / completed / next_phase
+    status: str | None = None  # asking_agency / completed
 
 
 @router.post("/inquiry")
@@ -640,7 +640,7 @@ def list_inquiries(
     if status_filter == "active":
         query = query.filter(Inquiry.status.in_([InquiryStatus.OPEN, InquiryStatus.ASKING_AGENCY]))
     elif status_filter == "closed":
-        query = query.filter(Inquiry.status.in_([InquiryStatus.COMPLETED, InquiryStatus.NEXT_PHASE]))
+        query = query.filter(Inquiry.status == InquiryStatus.COMPLETED)
 
     total = query.count()
     items = query.order_by(Inquiry.created_at.desc()).offset((page - 1) * size).limit(size).all()

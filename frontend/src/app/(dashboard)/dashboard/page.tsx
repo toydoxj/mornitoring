@@ -98,7 +98,6 @@ const INQUIRY_STATUS_LABELS: Record<string, string> = {
   open: "접수",
   asking_agency: "관리원문의중",
   completed: "완료",
-  next_phase: "다음단계",
 }
 
 const TEMPLATE_LABELS: Record<string, string> = {
@@ -377,11 +376,7 @@ export default function DashboardPage() {
                 >
                   <div className="flex items-center gap-2">
                     <Badge
-                      variant={
-                        q.status === "completed" || q.status === "next_phase"
-                          ? "default"
-                          : "outline"
-                      }
+                      variant={q.status === "completed" ? "default" : "outline"}
                       className="text-xs shrink-0"
                     >
                       {INQUIRY_STATUS_LABELS[q.status] ?? q.status}
