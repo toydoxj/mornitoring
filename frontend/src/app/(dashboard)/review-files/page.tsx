@@ -68,6 +68,23 @@ export default function ReviewFilesPage() {
     }
   }
 
+  const [deletingKey, setDeletingKey] = useState<string | null>(null)
+  const handleDelete = async (key: string, filename: string) => {
+    if (!confirm(`"${filename}" 파일을 삭제할까요?\n관련 검토 결과 이력은 유지되지만 업로드된 파일은 S3 에서 완전히 제거됩니다.`)) return
+    setDeletingKey(key)
+    try {
+      await apiClient.delete("/api/reviews/files", { params: { key } })
+      fetchFiles()
+    } catch (err) {
+      const msg =
+        (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
+        ?? "삭제 실패"
+      alert(msg)
+    } finally {
+      setDeletingKey(null)
+    }
+  }
+
   // 날짜+단계별 그룹핑
   const groups: Record<string, ReviewFile[]> = {}
   for (const f of files) {
@@ -151,6 +168,15 @@ export default function ReviewFilesPage() {
                               onClick={() => handleDownload(f.key, f.filename)}
                             >
                               다운로드
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="destructive"
+                              onClick={() => handleDelete(f.key, f.filename)}
+                              loading={deletingKey === f.key}
+                              loadingText="삭제 중..."
+                            >
+                              삭제
                             </Button>
                           </div>
                         </TableCell>

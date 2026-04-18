@@ -514,16 +514,63 @@ def download_file(
         require_roles(UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY)
     ),
 ):
-    """검토서 파일 다운로드 URL 생성 (presigned URL 반환만).
-
-    이전에는 `delete_after=True` 시 presigned URL을 만든 직후 S3 객체를 삭제했는데,
-    이는 사용자가 URL을 클릭하기 전에 파일이 사라지는 race를 만들었다(404).
-    파일 정리가 필요하면 별도 DELETE 엔드포인트로 분리해야 한다.
-    """
+    """검토서 파일 다운로드 URL 생성 (presigned URL 반환만)."""
     url = get_download_url(key)
     if not url:
         raise HTTPException(status_code=404, detail="파일을 찾을 수 없습니다")
     return {"download_url": url}
+
+
+@router.delete("/files")
+def delete_review_file(
+    key: str = Query(..., description="삭제할 S3 객체 키"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(
+        require_roles(UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY)
+    ),
+):
+    """검토서 파일 삭제 (팀장/총괄간사).
+
+    - S3 객체 삭제
+    - 해당 key 를 참조하던 ReviewStage.s3_file_key 는 NULL 로 비움 (검토 결과/제출일
+      같은 이력은 유지). 필요 시 운영자가 직접 재업로드 또는 초기화.
+    - 감사 로그에 삭제자·key 기록.
+    """
+    # 1) 같은 key 를 가진 stage 조회 (s3_file_key 클리어 대상)
+    affected_stages = (
+        db.query(ReviewStage).filter(ReviewStage.s3_file_key == key).all()
+    )
+    affected_stage_ids = [s.id for s in affected_stages]
+
+    # 2) S3 객체 삭제 시도 (실패해도 DB 변경은 진행 — 감사 로그에 결과 남김)
+    s3_deleted = False
+    try:
+        s3_deleted = delete_file(key)
+    except Exception:
+        s3_deleted = False
+
+    # 3) S3 에도 없고 참조 stage 도 없으면 실제 삭제할 것이 없음 → 404 (audit 생략)
+    if not s3_deleted and not affected_stage_ids:
+        raise HTTPException(status_code=404, detail="파일을 찾을 수 없습니다")
+
+    # 4) 실제 상태 변경 후에만 audit + commit
+    for stage in affected_stages:
+        stage.s3_file_key = None
+    log_action(
+        db, current_user.id, "delete", "review_file",
+        after_data={
+            "key": key,
+            "s3_deleted": s3_deleted,
+            "stage_ids": affected_stage_ids,
+        },
+    )
+    db.commit()
+
+    return {
+        "key": key,
+        "s3_deleted": s3_deleted,
+        "stage_ids": affected_stage_ids,
+    }
 
 
 @router.get("/stages/{building_id}", response_model=list[ReviewStageResponse])
