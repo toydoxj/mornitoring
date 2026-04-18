@@ -28,6 +28,12 @@ function LinkAccountContent() {
     }
     setLinkSessionId(sessionId)
     setKakaoName(sessionStorage.getItem("kakao_link_name") || "")
+    // 비번 셋팅 직후 카카오 OAuth로 자동 이동한 케이스: 이메일 자동 채움
+    const pendingEmail = sessionStorage.getItem("pending_link_email")
+    if (pendingEmail) {
+      setEmail(pendingEmail)
+      sessionStorage.removeItem("pending_link_email")
+    }
   }, [router])
 
   const handleSubmit = async (e: React.FormEvent) => {

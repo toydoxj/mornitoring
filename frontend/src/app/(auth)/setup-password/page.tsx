@@ -28,6 +28,7 @@ function SetupPasswordContent() {
   const [confirmPassword, setConfirmPassword] = useState("")
   const [error, setError] = useState("")
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [kakaoAlreadyLinked, setKakaoAlreadyLinked] = useState(false)
 
   useEffect(() => {
     if (!token) {
@@ -72,16 +73,36 @@ function SetupPasswordContent() {
     }
     setIsSubmitting(true)
     try {
-      await apiClient.post("/api/auth/password-setup", {
+      const { data } = await apiClient.post<{
+        message: string
+        email?: string
+        kakao_linked?: boolean
+      }>("/api/auth/password-setup", {
         token,
         new_password: newPassword,
       })
+      // 카카오 OAuth /link-account 단계에서 이메일 prefill에 사용
+      // (비밀번호는 저장하지 않음 — 사용자가 다시 입력)
+      if (data.email) {
+        sessionStorage.setItem("pending_link_email", data.email)
+      }
+      setKakaoAlreadyLinked(!!data.kakao_linked)
       setStage("done")
     } catch (err: unknown) {
       const axiosErr = err as { response?: { data?: { detail?: string } } }
       setError(axiosErr.response?.data?.detail || "비밀번호 설정 실패")
     } finally {
       setIsSubmitting(false)
+    }
+  }
+
+  const handleConnectKakao = async () => {
+    try {
+      const { data } = await apiClient.get<{ url: string }>("/api/auth/kakao/login")
+      window.location.href = data.url
+    } catch {
+      // 카카오 URL 조회 실패 시 로그인 화면으로 fallback
+      router.push("/login")
     }
   }
 
@@ -120,9 +141,23 @@ function SetupPasswordContent() {
         </CardHeader>
         <CardContent className="space-y-3 text-center text-sm text-muted-foreground">
           <p>이제 새 비밀번호로 로그인할 수 있습니다.</p>
-          <Button className="w-full" onClick={() => router.push("/login")}>
-            로그인하러 가기
-          </Button>
+          {kakaoAlreadyLinked ? (
+            <Button className="w-full" onClick={() => router.push("/login")}>
+              로그인하러 가기
+            </Button>
+          ) : (
+            <>
+              <p className="rounded-md bg-amber-50 p-2 text-xs text-amber-800">
+                카카오 알림을 받으려면 다음 단계에서 카카오 로그인 + 동의가 필요합니다.
+              </p>
+              <Button className="w-full" onClick={handleConnectKakao}>
+                지금 카카오 연동하기
+              </Button>
+              <Button variant="outline" className="w-full" onClick={() => router.push("/login")}>
+                나중에 하기 (로그인 화면으로)
+              </Button>
+            </>
+          )}
         </CardContent>
       </Card>
     )

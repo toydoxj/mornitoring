@@ -422,4 +422,8 @@ def setup_password(body: PasswordSetupRequest, db: Session = Depends(get_db)):
         "info", "password_setup_completed",
         user_id=user.id, purpose=token.purpose.value,
     )
-    return {"message": "비밀번호가 설정되었습니다"}
+    return {
+        "message": "비밀번호가 설정되었습니다",
+        "email": user.email,
+        "kakao_linked": bool(user.kakao_id),
+    }
