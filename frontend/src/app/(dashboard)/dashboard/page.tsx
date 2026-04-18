@@ -28,14 +28,34 @@ interface ReviewerStat {
   completed: number
 }
 
+interface FinalCounts {
+  pass: number
+  pass_supplement: number
+  fail: number
+  fail_no_response: number
+  excluded: number
+}
+
+interface InquiryCounts {
+  open: number
+  asking_agency: number
+  completed: number
+}
+
 interface DashboardStats {
   total: number
-  // 전체 흐름 요약 (서로 겹치지 않음)
+  // 전체 흐름 요약
   unassigned: number
   assigned: number
   docs_waiting_review: number
+  docs_waiting_review_preliminary: number
+  docs_waiting_review_supplement: number
   review_in_progress: number
+  review_in_progress_preliminary: number
+  review_in_progress_supplement: number
   completed: number
+  final_counts: FinalCounts
+  inquiry_counts: InquiryCounts
   // 기존 호환
   doc_received: number
   not_submitted: number
@@ -55,12 +75,7 @@ interface MyStats {
   submitted_preliminary: number
   submitted_supplement: number
   elapsed_buckets: Record<string, number>
-  final_counts: {
-    pass: number
-    pass_supplement: number
-    fail: number
-    excluded: number
-  }
+  final_counts: FinalCounts
 }
 
 const ELAPSED_ORDER = ["1일", "2일", "3일", "4일", "5일", "6일", "7일", "1주", "2주이상"] as const
@@ -403,16 +418,54 @@ export default function DashboardPage() {
         <>
           <div>
             <h2 className="text-lg font-bold mb-2">전체 현황</h2>
-            <p className="text-xs text-muted-foreground mb-2">
-              각 카드는 서로 겹치지 않는 단계군입니다 (합 = 총 등록건).
-            </p>
             <div className="grid gap-4 md:grid-cols-3 lg:grid-cols-6">
               <StatCard title="총 등록건" value={stats.total} />
-              <StatCard title="미배정" value={stats.unassigned} color="red" />
               <StatCard title="배정 완료" value={stats.assigned} />
-              <StatCard title="검토서 대기" value={stats.docs_waiting_review} color="blue" />
-              <StatCard title="검토 진행중" value={stats.review_in_progress} />
-              <StatCard title="최종 완료" value={stats.completed} color="green" />
+              <BreakdownCard
+                title="검토서 미접수"
+                total={stats.docs_waiting_review_preliminary + stats.docs_waiting_review_supplement}
+                accent="blue"
+                items={[
+                  { label: "예비", value: stats.docs_waiting_review_preliminary },
+                  { label: "보완", value: stats.docs_waiting_review_supplement },
+                ]}
+              />
+              <BreakdownCard
+                title="업로드된 검토서"
+                total={stats.review_in_progress_preliminary + stats.review_in_progress_supplement}
+                accent="slate"
+                items={[
+                  { label: "예비", value: stats.review_in_progress_preliminary },
+                  { label: "보완", value: stats.review_in_progress_supplement },
+                ]}
+              />
+              <BreakdownCard
+                title="문의사항"
+                total={
+                  stats.inquiry_counts.open +
+                  stats.inquiry_counts.asking_agency +
+                  stats.inquiry_counts.completed
+                }
+                accent="amber"
+                onClick={() => router.push("/inquiries")}
+                items={[
+                  { label: "접수", value: stats.inquiry_counts.open },
+                  { label: "관리원문의", value: stats.inquiry_counts.asking_agency },
+                  { label: "완료", value: stats.inquiry_counts.completed },
+                ]}
+              />
+              <BreakdownCard
+                title="최종 완료"
+                total={stats.completed}
+                accent="green"
+                items={[
+                  { label: "적합", value: stats.final_counts.pass },
+                  { label: "보완적합", value: stats.final_counts.pass_supplement },
+                  { label: "부적합", value: stats.final_counts.fail },
+                  { label: "부적합(미회신)", value: stats.final_counts.fail_no_response },
+                  { label: "대상제외", value: stats.final_counts.excluded },
+                ]}
+              />
             </div>
           </div>
 
@@ -558,12 +611,9 @@ function SubmittedBucket({
   )
 }
 
-function FinalBucket({
-  counts,
-}: {
-  counts: { pass: number; pass_supplement: number; fail: number; excluded: number }
-}) {
-  const total = counts.pass + counts.pass_supplement + counts.fail + counts.excluded
+function FinalBucket({ counts }: { counts: FinalCounts }) {
+  const total =
+    counts.pass + counts.pass_supplement + counts.fail + counts.fail_no_response + counts.excluded
   return (
     <div className="relative overflow-hidden rounded-xl border bg-white p-4 transition-all hover:shadow-md before:absolute before:left-0 before:top-0 before:h-full before:w-1 before:bg-violet-500">
       <p className="text-xs font-medium text-muted-foreground">최종 완료</p>
@@ -577,7 +627,75 @@ function FinalBucket({
         <span>적합 <strong className="text-emerald-700">{counts.pass}</strong></span>
         <span>보완적합 <strong className="text-blue-700">{counts.pass_supplement}</strong></span>
         <span>부적합 <strong className="text-red-700">{counts.fail}</strong></span>
+        <span>부적합(미회신) <strong className="text-red-700">{counts.fail_no_response}</strong></span>
         <span>대상제외 <strong className="text-slate-700">{counts.excluded}</strong></span>
+      </div>
+    </div>
+  )
+}
+
+type BreakdownAccent = "blue" | "slate" | "amber" | "green" | "violet"
+
+const BREAKDOWN_BAR: Record<BreakdownAccent, string> = {
+  blue: "before:bg-blue-500",
+  slate: "before:bg-slate-500",
+  amber: "before:bg-amber-500",
+  green: "before:bg-emerald-500",
+  violet: "before:bg-violet-500",
+}
+
+const BREAKDOWN_VALUE: Record<BreakdownAccent, string> = {
+  blue: "text-blue-600",
+  slate: "text-slate-700",
+  amber: "text-amber-600",
+  green: "text-emerald-600",
+  violet: "text-violet-600",
+}
+
+function BreakdownCard({
+  title,
+  total,
+  items,
+  accent = "slate",
+  onClick,
+}: {
+  title: string
+  total: number
+  items: { label: string; value: number }[]
+  accent?: BreakdownAccent
+  onClick?: () => void
+}) {
+  return (
+    <div
+      onClick={onClick}
+      role={onClick ? "button" : undefined}
+      tabIndex={onClick ? 0 : undefined}
+      onKeyDown={(e) => {
+        if (!onClick) return
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault()
+          onClick()
+        }
+      }}
+      className={`
+        relative overflow-hidden rounded-xl border bg-white p-4 transition-all hover:shadow-md
+        before:absolute before:left-0 before:top-0 before:h-full before:w-1 ${BREAKDOWN_BAR[accent]}
+        ${onClick ? "cursor-pointer focus:outline-none focus:ring-2 focus:ring-primary/40" : ""}
+      `}
+    >
+      <p className="text-xs font-medium text-muted-foreground">{title}</p>
+      <div className="mt-2 flex items-baseline gap-1">
+        <p className={`text-3xl font-bold tracking-tight ${BREAKDOWN_VALUE[accent]}`}>
+          {total.toLocaleString()}
+        </p>
+        <span className="text-sm text-muted-foreground">건</span>
+      </div>
+      <div className="mt-2 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
+        {items.map((it) => (
+          <span key={it.label}>
+            {it.label} <strong className="text-slate-700">{it.value}</strong>
+          </span>
+        ))}
       </div>
     </div>
   )

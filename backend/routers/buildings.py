@@ -177,6 +177,7 @@ def get_stats(
       4) 위원별 doc_received 상태 중 예비검토서 제출/미제출 (LEFT JOIN + GROUP BY)
     """
     from sqlalchemy import and_, func as sa_func
+    from models.inquiry import Inquiry, InquiryStatus
     from models.review_stage import ReviewStage, PhaseType
 
     # 1) 총 건수 + 최종 완료 건수 (단일 쿼리)
@@ -186,6 +187,36 @@ def get_stats(
     ).one()
     total = totals_row.total or 0
     completed = totals_row.completed or 0
+
+    # 1-1) 최종 판정 5분류 — 전체 현황 카드용
+    final_rows = (
+        db.query(Building.final_result, sa_func.count(Building.id))
+        .filter(Building.final_result.isnot(None))
+        .group_by(Building.final_result)
+        .all()
+    )
+    final_counts = {
+        "pass": 0,
+        "pass_supplement": 0,
+        "fail": 0,
+        "fail_no_response": 0,
+        "excluded": 0,
+    }
+    for key, count in final_rows:
+        if key in final_counts:
+            final_counts[key] = count
+
+    # 1-2) 문의사항 상태별 건수
+    inquiry_rows = (
+        db.query(Inquiry.status, sa_func.count(Inquiry.id))
+        .group_by(Inquiry.status)
+        .all()
+    )
+    inquiry_counts = {"open": 0, "asking_agency": 0, "completed": 0}
+    for status, count in inquiry_rows:
+        key = status.value if isinstance(status, InquiryStatus) else str(status)
+        if key in inquiry_counts:
+            inquiry_counts[key] = count
 
     # 2) phase 별 건수
     phase_counts_raw = (
@@ -207,6 +238,16 @@ def get_stats(
         "supplement_5_received",
     }
     docs_waiting_review = sum(v for k, v in phase_counts.items() if k in received_phases)
+    # 검토서 미접수(= 도서만 접수된 상태) — 전체 현황 카드 예비/보완 구분용
+    docs_waiting_preliminary = phase_counts.get("doc_received", 0)
+    docs_waiting_supplement = sum(
+        phase_counts.get(k, 0)
+        for k in (
+            "supplement_1_received", "supplement_2_received",
+            "supplement_3_received", "supplement_4_received",
+            "supplement_5_received",
+        )
+    )
     # 검토서 제출 완료 (보완 1~5 제출 포함, 예비 제출 포함)
     submission_phases = {
         "preliminary",
@@ -214,6 +255,12 @@ def get_stats(
         "supplement_4", "supplement_5",
     }
     review_in_progress = sum(v for k, v in phase_counts.items() if k in submission_phases)
+    # 업로드된 검토서 — 전체 현황 카드 예비/보완 구분용
+    review_in_progress_preliminary = phase_counts.get("preliminary", 0)
+    review_in_progress_supplement = sum(
+        phase_counts.get(k, 0)
+        for k in ("supplement_1", "supplement_2", "supplement_3", "supplement_4", "supplement_5")
+    )
 
     # 기존 필드 호환 (이미 사용 중인 명칭 유지)
     doc_received = phase_counts.get("doc_received", 0)
@@ -294,8 +341,16 @@ def get_stats(
         "unassigned": unassigned,
         "assigned": assigned,
         "docs_waiting_review": docs_waiting_review,
+        "docs_waiting_review_preliminary": docs_waiting_preliminary,
+        "docs_waiting_review_supplement": docs_waiting_supplement,
         "review_in_progress": review_in_progress,
+        "review_in_progress_preliminary": review_in_progress_preliminary,
+        "review_in_progress_supplement": review_in_progress_supplement,
         "completed": completed,
+        # 최종 판정 5분류 (적합/보완적합/부적합/부적합(미회신)/대상제외)
+        "final_counts": final_counts,
+        # 문의사항 상태별 건수 (전체)
+        "inquiry_counts": inquiry_counts,
         # 기존 호환 필드 (프론트 기존 코드 참조)
         "doc_received": doc_received,
         "not_submitted": not_submitted,
@@ -522,14 +577,14 @@ def my_stats(
             else:  # 14+
                 elapsed_buckets["2주이상"] += 1
 
-    # 최종 완료 건수 (4분류) — 본인 담당 기준
+    # 최종 완료 건수 (5분류) — 본인 담당 기준
     # final_result 값은 향후 '최종 판정용 별도 엑셀 업로드'에서 기입됨
-    # 예상 키: pass (적합), pass_supplement (보완적합), fail (부적합), excluded (대상제외)
     final_counts = {
-        "pass": 0,             # 적합
-        "pass_supplement": 0,  # 보완적합
-        "fail": 0,             # 부적합
-        "excluded": 0,         # 대상제외
+        "pass": 0,               # 적합
+        "pass_supplement": 0,    # 보완적합
+        "fail": 0,               # 부적합
+        "fail_no_response": 0,   # 부적합(미회신)
+        "excluded": 0,           # 대상제외
     }
     for b in buildings:
         if b.final_result and b.final_result in final_counts:
