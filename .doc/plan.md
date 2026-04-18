@@ -1,7 +1,15 @@
 # 건축구조안전 모니터링 시스템 — 구현 계획서
 
-> 최종 갱신: 2026-04-17
-> 진행 상황: Stage 1~3 완료, Stage 4 일부 완료 + 추가 기능 개발 중
+> 최종 갱신: 2026-04-18
+> 진행 상황: Stage 1~4 거의 완료. 보안 P0/P0.5 + P1 D 완료. 운영 투입 직전.
+
+## 운영 문서 (50명 온보딩 직전 참조)
+
+- [first-onboarding-checklist.md](./first-onboarding-checklist.md) — 검토위원 50명 일괄 온보딩 단계별 체크리스트
+- [operator-onboarding-manual.md](./operator-onboarding-manual.md) — 운영자(팀장/간사) 사용자 등록·발송 매뉴얼
+- [troubleshooting.md](./troubleshooting.md) — 자주 발생할 만한 이슈 대응
+- [operational-dry-run.md](./operational-dry-run.md) — 50명 온보딩 전 테스트 계정 2~3개로 end-to-end 점검
+- [operations-policy.md](./operations-policy.md) — 권한/토큰/카카오/데이터 정합성 정책 요약
 
 ## Context
 
