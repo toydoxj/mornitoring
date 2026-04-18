@@ -107,6 +107,21 @@ def _get_registered_names(db: Session) -> set[str]:
     return {u[0] for u in users}
 
 
+def _get_reviewer_for(current_user: User, db: Session) -> Reviewer:
+    """REVIEWER 역할 사용자에 대응하는 Reviewer 행 조회. 없으면 403.
+
+    검토위원 권한 필터링은 동명이인 위험을 피하기 위해 `reviewer_id`만 사용한다.
+    Reviewer 행이 비어 있으면 데이터 정합성 문제이므로 명시적으로 거부한다.
+    """
+    reviewer = db.query(Reviewer).filter(Reviewer.user_id == current_user.id).first()
+    if reviewer is None:
+        raise HTTPException(
+            status_code=403,
+            detail="검토위원 등록이 되어 있지 않습니다. 관리자에게 문의해주세요",
+        )
+    return reviewer
+
+
 def _build_full_address(b: Building) -> str | None:
     """시도 + 시군구 + 법정동 + (본번[-부번]) + 특수지번 을 공백으로 연결"""
     parts: list[str] = []
@@ -152,9 +167,11 @@ class BuildingListResponse(BaseModel):
 @router.get("/stats")
 def get_stats(
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(
+        require_roles(UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY, UserRole.SECRETARY)
+    ),
 ):
-    """대시보드 통계"""
+    """대시보드 통계 (관리자 전용 — 전체 건물 통계 노출)"""
     from models.review_stage import ReviewStage, PhaseType
 
     total = db.query(Building).count()
@@ -284,8 +301,18 @@ def list_buildings(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """건축물 목록 조회 (검색/필터/정렬/페이지네이션)"""
+    """건축물 목록 조회 (검색/필터/정렬/페이지네이션).
+
+    검토위원(REVIEWER)은 본인이 배정된 건물만 조회 가능. `?reviewer=` 파라미터는
+    REVIEWER가 보내도 무시되어 다른 위원 데이터에 접근할 수 없다.
+    """
     query = db.query(Building)
+
+    # REVIEWER는 본인 담당 건물만 강제 필터 (reviewer_id 매칭만 사용 — 동명이인 위험 회피)
+    is_reviewer = current_user.role == UserRole.REVIEWER
+    if is_reviewer:
+        reviewer_record = _get_reviewer_for(current_user, db)
+        query = query.filter(Building.reviewer_id == reviewer_record.id)
 
     if search:
         query = query.filter(
@@ -299,7 +326,8 @@ def list_buildings(
             query = query.filter(Building.current_phase.is_(None))
         else:
             query = query.filter(Building.current_phase == phase)
-    if reviewer:
+    # reviewer 필터는 관리자(REVIEWER 외)만 적용
+    if reviewer and not is_reviewer:
         query = query.filter(Building.assigned_reviewer_name == reviewer)
 
     total = query.count()
@@ -320,9 +348,11 @@ def list_buildings(
 @router.get("/reviewer-names")
 def get_reviewer_names(
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(
+        require_roles(UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY, UserRole.SECRETARY)
+    ),
 ):
-    """배정된 검토위원 이름 목록 (필터용)"""
+    """배정된 검토위원 이름 목록 (관리자 전용 — 위원 enumeration 차단)"""
     names = (
         db.query(Building.assigned_reviewer_name)
         .filter(Building.assigned_reviewer_name.isnot(None))
@@ -549,10 +579,20 @@ def get_building(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """건축물 상세 조회"""
+    """건축물 상세 조회.
+
+    REVIEWER는 본인 담당이 아닌 건물에 대해 존재 여부도 노출하지 않도록 404 반환.
+    """
     building = db.query(Building).filter(Building.id == building_id).first()
     if not building:
         raise HTTPException(status_code=404, detail="건축물을 찾을 수 없습니다")
+
+    if current_user.role == UserRole.REVIEWER:
+        reviewer_record = _get_reviewer_for(current_user, db)
+        if building.reviewer_id != reviewer_record.id:
+            # 존재 자체를 노출하지 않기 위해 403이 아닌 404
+            raise HTTPException(status_code=404, detail="건축물을 찾을 수 없습니다")
+
     return building
 
 

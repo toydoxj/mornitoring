@@ -9,6 +9,7 @@ from jose import JWTError, jwt
 from sqlalchemy.orm import Session
 
 from config import settings
+from models.kakao_link_session import KakaoLinkSession
 from models.user import User
 
 KAKAO_AUTH_URL = "https://kauth.kakao.com"
@@ -34,6 +35,84 @@ def verify_oauth_state(state: str) -> bool:
         return True
     except JWTError:
         return False
+
+
+LINK_SESSION_TTL_SECONDS = 600  # 10분
+
+
+def create_link_session(
+    db: Session,
+    *,
+    kakao_id: str,
+    kakao_access_token: str,
+    kakao_refresh_token: str,
+    kakao_expires_in: int | None,
+) -> str:
+    """카카오 계정 연결용 1회성 세션 생성. 추측 불가한 session_id 반환.
+
+    카카오 토큰을 프론트(URL/JSON/스토리지)에 노출하지 않고 서버에 보관한다.
+    클라이언트는 session_id만 들고 `/link-account`로 돌아오며, 서버는
+    `consume_link_session`으로 1회 검증 후 즉시 소모(consumed_at) 처리한다.
+    """
+    session = KakaoLinkSession(
+        kakao_id=kakao_id,
+        kakao_access_token=kakao_access_token,
+        kakao_refresh_token=kakao_refresh_token or None,
+        kakao_expires_in=kakao_expires_in,
+        expires_at=datetime.now(timezone.utc) + timedelta(seconds=LINK_SESSION_TTL_SECONDS),
+    )
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+    return session.id
+
+
+def _ensure_aware_utc(dt: datetime | None) -> datetime | None:
+    """timezone-naive datetime은 UTC로 보정. SQLite 등 tz 미지원 백엔드 호환."""
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def lock_link_session(db: Session, session_id: str) -> KakaoLinkSession | None:
+    """1회성 세션 행 락 + 만료/소비 검증. 통과 시 행 락된 세션 반환.
+
+    소모(`consumed_at` 마킹)와 commit은 호출자가 모든 비즈니스 검증
+    (사용자 인증·충돌 체크 등)을 통과한 뒤 같은 트랜잭션에서 처리한다.
+    이 패턴으로 잘못된 비밀번호 시도가 세션을 소모해버리는 DoS를 방지한다.
+    """
+    if not session_id:
+        return None
+    session = (
+        db.query(KakaoLinkSession)
+        .filter(KakaoLinkSession.id == session_id)
+        .with_for_update()
+        .first()
+    )
+    if session is None:
+        return None
+    if session.consumed_at is not None:
+        return None
+    if _ensure_aware_utc(session.expires_at) <= datetime.now(timezone.utc):
+        return None
+    return session
+
+
+def purge_expired_link_sessions(db: Session) -> int:
+    """만료/소비된 세션 정리. 호출 시점에 즉시 삭제. 청소 cron이나 필요 시 호출."""
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=1)
+    deleted = (
+        db.query(KakaoLinkSession)
+        .filter(
+            (KakaoLinkSession.expires_at <= datetime.now(timezone.utc))
+            | (KakaoLinkSession.consumed_at <= cutoff)
+        )
+        .delete(synchronize_session=False)
+    )
+    db.commit()
+    return deleted
 
 
 def get_authorize_url() -> str:

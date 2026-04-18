@@ -11,10 +11,26 @@ from sqlalchemy.orm import Session
 from database import get_db
 from models.building import Building
 from models.review_stage import ReviewStage, PhaseType
+from models.reviewer import Reviewer
 from models.user import User, UserRole
 from routers.auth import get_current_user, require_roles
 from engines.review_validator import validate_review_file
 from engines.review_extractor import extract_review_data
+
+
+def _ensure_reviewer_can_access_building(
+    building: Building, current_user: User, db: Session
+) -> None:
+    """REVIEWER는 본인 담당(reviewer_id 매칭) 건물만 접근 허용. 아니면 404로 거부.
+
+    동명이인 위험을 피하기 위해 reviewer_id만 사용한다(`assigned_reviewer_name` 매칭 X).
+    존재 자체를 노출하지 않기 위해 403이 아닌 404를 반환한다.
+    """
+    if current_user.role != UserRole.REVIEWER:
+        return
+    reviewer = db.query(Reviewer).filter(Reviewer.user_id == current_user.id).first()
+    if reviewer is None or building.reviewer_id != reviewer.id:
+        raise HTTPException(status_code=404, detail="건축물을 찾을 수 없습니다")
 
 # 판정결과 한글 라벨
 _RESULT_KOREAN = {
@@ -446,9 +462,10 @@ async def upload_review(
         # 5. 건축물 현재 단계 업데이트
         building.current_phase = actual_phase
 
-        # 6. 건축물 정보 변경 적용
-        _apply_changes(building, validation.extracted_data)
+        # 6. 건축물 정보 변경 적용 — detect를 먼저 호출해야 변경 전 값과 비교 가능.
+        # apply가 먼저 setattr하면 _detect_changes의 getattr이 new_val을 읽어 변경이 사라짐.
         changes = _detect_changes(building, validation.extracted_data)
+        _apply_changes(building, validation.extracted_data)
 
         log_action(db, current_user.id, "upload", "review_stage", stage.id,
                    after_data={"mgmt_no": mgmt_no, "phase": phase})
@@ -489,26 +506,21 @@ def list_uploaded_files(
 @router.get("/files/download")
 def download_file(
     key: str = Query(...),
-    delete_after: bool = Query(False),
     db: Session = Depends(get_db),
     current_user: User = Depends(
         require_roles(UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY)
     ),
 ):
-    """검토서 파일 다운로드 URL 생성 (다운 후 삭제 옵션)"""
+    """검토서 파일 다운로드 URL 생성 (presigned URL 반환만).
+
+    이전에는 `delete_after=True` 시 presigned URL을 만든 직후 S3 객체를 삭제했는데,
+    이는 사용자가 URL을 클릭하기 전에 파일이 사라지는 race를 만들었다(404).
+    파일 정리가 필요하면 별도 DELETE 엔드포인트로 분리해야 한다.
+    """
     url = get_download_url(key)
     if not url:
         raise HTTPException(status_code=404, detail="파일을 찾을 수 없습니다")
-
-    if delete_after:
-        delete_file(key)
-        # DB에서도 s3_file_key 제거
-        stage = db.query(ReviewStage).filter(ReviewStage.s3_file_key == key).first()
-        if stage:
-            stage.s3_file_key = None
-            db.commit()
-
-    return {"download_url": url, "deleted": delete_after}
+    return {"download_url": url}
 
 
 @router.get("/stages/{building_id}", response_model=list[ReviewStageResponse])
@@ -517,7 +529,12 @@ def get_review_stages(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """건축물의 검토 단계 목록 조회"""
+    """건축물의 검토 단계 목록 조회 (REVIEWER는 본인 담당만)"""
+    building = db.query(Building).filter(Building.id == building_id).first()
+    if not building:
+        raise HTTPException(status_code=404, detail="건축물을 찾을 수 없습니다")
+    _ensure_reviewer_can_access_building(building, current_user, db)
+
     stages = (
         db.query(ReviewStage)
         .filter(ReviewStage.building_id == building_id)
@@ -691,8 +708,13 @@ def get_building_inquiries(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """건물별 문의사항 이력 조회"""
+    """건물별 문의사항 이력 조회 (REVIEWER는 본인 담당 건물만)"""
     from models.inquiry import Inquiry
+
+    building = db.query(Building).filter(Building.mgmt_no == mgmt_no).first()
+    if not building:
+        raise HTTPException(status_code=404, detail="건축물을 찾을 수 없습니다")
+    _ensure_reviewer_can_access_building(building, current_user, db)
 
     items = (
         db.query(Inquiry)
@@ -721,12 +743,17 @@ def download_review(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """검토서 파일 다운로드 (S3 presigned URL 반환)"""
+    """검토서 파일 다운로드 (S3 presigned URL 반환). REVIEWER는 본인 담당 stage만."""
     stage = db.query(ReviewStage).filter(ReviewStage.id == stage_id).first()
     if not stage:
         raise HTTPException(status_code=404, detail="검토 단계를 찾을 수 없습니다")
     if not stage.s3_file_key:
         raise HTTPException(status_code=404, detail="업로드된 검토서가 없습니다")
+
+    building = db.query(Building).filter(Building.id == stage.building_id).first()
+    if not building:
+        raise HTTPException(status_code=404, detail="검토 단계를 찾을 수 없습니다")
+    _ensure_reviewer_can_access_building(building, current_user, db)
 
     url = get_download_url(stage.s3_file_key)
     if not url:

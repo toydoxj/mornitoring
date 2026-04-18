@@ -8,6 +8,7 @@ from models.inquiry import Inquiry
 from models.inappropriate_note import InappropriateNote
 from models.announcement import Announcement, AnnouncementComment, AnnouncementAttachment
 from models.discussion import Discussion, DiscussionComment, DiscussionAttachment
+from models.kakao_link_session import KakaoLinkSession
 
 __all__ = [
     "User",
@@ -24,4 +25,5 @@ __all__ = [
     "Discussion",
     "DiscussionComment",
     "DiscussionAttachment",
+    "KakaoLinkSession",
 ]

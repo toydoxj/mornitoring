@@ -3,7 +3,7 @@
 import enum
 from datetime import datetime
 
-from sqlalchemy import String, Boolean, Enum, DateTime, func
+from sqlalchemy import Boolean, DateTime, Enum, Index, String, func, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from database import Base
@@ -18,6 +18,16 @@ class UserRole(str, enum.Enum):
 
 class User(Base):
     __tablename__ = "users"
+    __table_args__ = (
+        # kakao_id partial unique: 한 카카오 계정은 단 하나의 사용자에만 연결.
+        # NULL은 다수 허용(카카오 미연동 사용자 다수 존재 가능).
+        Index(
+            "uq_users_kakao_id_not_null",
+            "kakao_id",
+            unique=True,
+            postgresql_where=text("kakao_id IS NOT NULL"),
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(String(50))

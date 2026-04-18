@@ -45,21 +45,16 @@ export default function ReviewFilesPage() {
     fetchFiles()
   }, [filterPhase])
 
-  const handleDownload = async (key: string, filename: string, deleteAfter: boolean) => {
+  const handleDownload = async (key: string, filename: string) => {
     try {
       const { data } = await apiClient.get("/api/reviews/files/download", {
-        params: { key, delete_after: deleteAfter },
+        params: { key },
       })
       if (data.download_url) {
         const link = document.createElement("a")
         link.href = data.download_url
         link.download = filename
         link.click()
-
-        if (deleteAfter) {
-          // 목록에서 제거
-          setFiles((prev) => prev.filter((f) => f.key !== key))
-        }
       }
     } catch (err) {
       console.error("다운로드 실패:", err)
@@ -69,15 +64,7 @@ export default function ReviewFilesPage() {
   const handleDownloadAll = async (phase: string, date: string) => {
     const targetFiles = files.filter((f) => f.phase === phase && f.date === date)
     for (const f of targetFiles) {
-      await handleDownload(f.key, f.filename, false)
-    }
-  }
-
-  const handleDownloadAndDeleteAll = async (phase: string, date: string) => {
-    if (!confirm(`${phase} / ${date}의 파일을 모두 다운로드하고 서버에서 삭제하시겠습니까?`)) return
-    const targetFiles = files.filter((f) => f.phase === phase && f.date === date)
-    for (const f of targetFiles) {
-      await handleDownload(f.key, f.filename, true)
+      await handleDownload(f.key, f.filename)
     }
   }
 
@@ -140,13 +127,6 @@ export default function ReviewFilesPage() {
                   >
                     전체 다운로드
                   </Button>
-                  <Button
-                    size="sm"
-                    variant="destructive"
-                    onClick={() => handleDownloadAndDeleteAll(phase, date)}
-                  >
-                    다운로드 후 삭제
-                  </Button>
                 </div>
               </div>
               <div className="rounded-md border bg-white">
@@ -168,20 +148,9 @@ export default function ReviewFilesPage() {
                             <Button
                               size="sm"
                               variant="outline"
-                              onClick={() => handleDownload(f.key, f.filename, false)}
+                              onClick={() => handleDownload(f.key, f.filename)}
                             >
                               다운로드
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="destructive"
-                              onClick={() => {
-                                if (confirm("다운로드 후 서버에서 삭제하시겠습니까?")) {
-                                  handleDownload(f.key, f.filename, true)
-                                }
-                              }}
-                            >
-                              다운+삭제
                             </Button>
                           </div>
                         </TableCell>

@@ -1,7 +1,7 @@
 "use client"
 
-import { Suspense, useState } from "react"
-import { useRouter, useSearchParams } from "next/navigation"
+import { Suspense, useEffect, useState } from "react"
+import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -11,18 +11,24 @@ import { useAuthStore } from "@/stores/authStore"
 
 function LinkAccountContent() {
   const router = useRouter()
-  const searchParams = useSearchParams()
   const fetchMe = useAuthStore((s) => s.fetchMe)
 
-  const kakaoId = searchParams.get("kakao_id") || ""
-  const kakaoName = searchParams.get("kakao_name") || ""
-  const kakaoAccessToken = searchParams.get("kakao_access_token") || ""
-  const kakaoRefreshToken = searchParams.get("kakao_refresh_token") || ""
-
+  const [linkSessionId, setLinkSessionId] = useState("")
+  const [kakaoName, setKakaoName] = useState("")
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
   const [error, setError] = useState("")
   const [isSubmitting, setIsSubmitting] = useState(false)
+
+  useEffect(() => {
+    const sessionId = sessionStorage.getItem("kakao_link_session_id") || ""
+    if (!sessionId) {
+      router.replace("/login")
+      return
+    }
+    setLinkSessionId(sessionId)
+    setKakaoName(sessionStorage.getItem("kakao_link_name") || "")
+  }, [router])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -33,11 +39,11 @@ function LinkAccountContent() {
       const { data } = await apiClient.post("/api/auth/link-account", {
         email,
         password,
-        kakao_id: kakaoId,
-        kakao_access_token: kakaoAccessToken,
-        kakao_refresh_token: kakaoRefreshToken,
+        link_session_id: linkSessionId,
       })
 
+      sessionStorage.removeItem("kakao_link_session_id")
+      sessionStorage.removeItem("kakao_link_name")
       localStorage.setItem("access_token", data.access_token)
       await fetchMe()
       router.push("/dashboard")

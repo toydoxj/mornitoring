@@ -7,7 +7,8 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 import bcrypt
 from jose import JWTError, jwt
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr, Field
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from config import settings
@@ -149,7 +150,12 @@ async def kakao_callback(
     db: Session = Depends(get_db),
 ):
     """카카오 인가 코드 → 토큰 교환 → 사용자 조회/생성 → JWT 발급"""
-    from services.kakao import exchange_code, get_user_info, verify_oauth_state
+    from services.kakao import (
+        create_link_session,
+        exchange_code,
+        get_user_info,
+        verify_oauth_state,
+    )
 
     # CSRF 방어: state JWT 검증
     if not verify_oauth_state(state or ""):
@@ -195,45 +201,96 @@ async def kakao_callback(
 
     # 카카오 ID 매칭 실패 → 이메일+비번으로 /link-account 호출 필요
     # (이름 기반 자동 매칭은 동명이인 위험으로 제거)
+    # 카카오 토큰은 프론트(URL/JSON/스토리지)에 노출하지 않고 서버에 1회성 세션으로 보관.
+    session_id = create_link_session(
+        db,
+        kakao_id=kakao_id,
+        kakao_access_token=kakao_access,
+        kakao_refresh_token=kakao_refresh,
+        kakao_expires_in=kakao_expires_in,
+    )
     return {
         "access_token": "",
         "token_type": "bearer",
         "must_change_password": False,
         "need_link": True,
-        "kakao_id": kakao_id,
         "kakao_name": kakao_name or "",
-        "kakao_access_token": kakao_access,
-        "kakao_refresh_token": kakao_refresh,
-        "kakao_expires_in": kakao_expires_in,
+        "link_session_id": session_id,
     }
 
 
 class LinkAccountRequest(BaseModel):
-    email: str
-    password: str
-    kakao_id: str
-    kakao_access_token: str
-    kakao_refresh_token: str
-    kakao_expires_in: int | None = None
+    email: EmailStr
+    password: str = Field(min_length=1, max_length=200)
+    link_session_id: str = Field(min_length=1, max_length=64)
 
 
 @router.post("/link-account")
 def link_account(body: LinkAccountRequest, db: Session = Depends(get_db)):
-    """기존 계정에 카카오 연결"""
+    """기존 계정에 카카오 연결 (1회성 세션 + 중복 연결 방지)
+
+    세션 소모(consumed_at 마킹)는 모든 검증(인증·충돌)을 통과한 뒤에만
+    수행한다. 잘못된 비밀번호 시도가 세션을 소모시키는 DoS를 방지하기 위해
+    `lock_link_session`이 행 락만 잡고 마킹은 미루는 패턴.
+    """
+    from services.kakao import lock_link_session
+
+    invalid_session = HTTPException(
+        status_code=401,
+        detail="연결 요청이 유효하지 않거나 만료되었습니다. 처음부터 다시 시도해주세요",
+    )
+    invalid_credentials = HTTPException(
+        status_code=401, detail="이메일 또는 비밀번호가 올바르지 않습니다"
+    )
+
+    session = lock_link_session(db, body.link_session_id)
+    if session is None:
+        raise invalid_session
+
     user = db.query(User).filter(User.email == body.email).first()
     if not user or not user.password_hash:
-        raise HTTPException(status_code=401, detail="이메일 또는 비밀번호가 올바르지 않습니다")
+        raise invalid_credentials
     if not verify_password(body.password, user.password_hash):
-        raise HTTPException(status_code=401, detail="이메일 또는 비밀번호가 올바르지 않습니다")
+        raise invalid_credentials
 
-    user.kakao_id = body.kakao_id
-    user.kakao_access_token = body.kakao_access_token
-    user.kakao_refresh_token = body.kakao_refresh_token
-    if body.kakao_expires_in:
-        user.kakao_token_expires_at = datetime.now(timezone.utc) + timedelta(
-            seconds=body.kakao_expires_in
+    # 이미 다른 카카오 계정이 연결된 사용자
+    if user.kakao_id and user.kakao_id != session.kakao_id:
+        raise HTTPException(
+            status_code=409,
+            detail="이미 다른 카카오 계정이 연결되어 있습니다. 관리자에게 문의해주세요",
         )
-    db.commit()
+
+    # 이 카카오 계정이 이미 다른 사용자에게 연결되어 있음
+    # (DB unique 제약으로도 막히지만 사용자 친화적 메시지를 위해 사전 체크)
+    other = (
+        db.query(User)
+        .filter(User.kakao_id == session.kakao_id, User.id != user.id)
+        .first()
+    )
+    if other is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="이미 다른 사용자에게 연결된 카카오 계정입니다",
+        )
+
+    # 모든 검증 통과 — 사용자 업데이트 + 세션 소모를 한 트랜잭션에서 commit
+    user.kakao_id = session.kakao_id
+    user.kakao_access_token = session.kakao_access_token
+    user.kakao_refresh_token = session.kakao_refresh_token or ""
+    if session.kakao_expires_in:
+        user.kakao_token_expires_at = datetime.now(timezone.utc) + timedelta(
+            seconds=int(session.kakao_expires_in)
+        )
+    session.consumed_at = datetime.now(timezone.utc)
+    try:
+        db.commit()
+    except IntegrityError:
+        # 동시 요청에서 unique 제약(uq_users_kakao_id_not_null) 위반 시 친화적 메시지
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="이미 다른 사용자에게 연결된 카카오 계정입니다",
+        )
     db.refresh(user)
 
     access_token = create_access_token({"sub": str(user.id), "role": user.role.value})

@@ -25,15 +25,12 @@ function KakaoCallbackContent() {
         if (state) params.set("state", state)
         const { data } = await apiClient.get(`/api/auth/kakao/callback?${params.toString()}`)
 
-        // 계정 연결 필요
+        // 계정 연결 필요 — 카카오 토큰은 서버 세션에 보관되고,
+        // 추측 불가한 session_id만 sessionStorage에 잠시 보관해 URL 노출을 0으로 유지한다.
         if (data.need_link) {
-          const params = new URLSearchParams({
-            kakao_id: data.kakao_id,
-            kakao_name: data.kakao_name,
-            kakao_access_token: data.kakao_access_token,
-            kakao_refresh_token: data.kakao_refresh_token,
-          })
-          router.push(`/link-account?${params.toString()}`)
+          sessionStorage.setItem("kakao_link_session_id", data.link_session_id)
+          sessionStorage.setItem("kakao_link_name", data.kakao_name || "")
+          router.push("/link-account")
           return
         }
 

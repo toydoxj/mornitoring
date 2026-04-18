@@ -1,15 +1,59 @@
 """FastAPI 메인 애플리케이션"""
 
+import asyncio
+import logging
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from config import settings
+from database import SessionLocal
 from routers import auth, users, buildings, ledger, assignments, reviews, audit, distribution, notifications, kakao, announcements, discussions
+
+logger = logging.getLogger(__name__)
+
+# 만료/소비된 카카오 연결 세션 청소 주기 (30분)
+LINK_SESSION_PURGE_INTERVAL_SECONDS = 1800
+
+
+async def _purge_expired_link_sessions_loop() -> None:
+    from services.kakao import purge_expired_link_sessions
+
+    while True:
+        try:
+            await asyncio.sleep(LINK_SESSION_PURGE_INTERVAL_SECONDS)
+            db = SessionLocal()
+            try:
+                deleted = purge_expired_link_sessions(db)
+                if deleted:
+                    logger.info("kakao_link_sessions 정리: %d행 삭제", deleted)
+            finally:
+                db.close()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("kakao_link_sessions 정리 실패")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    purge_task = asyncio.create_task(_purge_expired_link_sessions_loop())
+    try:
+        yield
+    finally:
+        purge_task.cancel()
+        try:
+            await purge_task
+        except asyncio.CancelledError:
+            pass
+
 
 app = FastAPI(
     title="건축구조안전 모니터링 시스템",
     description="통합관리대장 기반 모니터링 업무 자동화 API",
     version="0.1.0",
+    lifespan=lifespan,
 )
 
 # CORS 설정 (프론트엔드 연동) — 허용 origin은 .env의 CORS_ORIGINS로 관리
