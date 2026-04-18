@@ -76,10 +76,17 @@ interface MyStats {
   submitted_preliminary: number
   submitted_supplement: number
   elapsed_buckets: Record<string, number>
+  schedule_counts: {
+    in_progress: number
+    d_minus_3: number
+    d_minus_2: number
+    d_minus_1: number
+    d_day: number
+    overdue: number
+  }
   final_counts: FinalCounts
 }
 
-const ELAPSED_ORDER = ["1일", "2일", "3일", "4일", "5일", "6일", "7일", "1주", "2주이상"] as const
 
 interface PostItem {
   id: number
@@ -110,6 +117,7 @@ interface ReviewerSchedule {
   d_minus_1: number
   d_day: number
   overdue: number
+  on_time_rate: number | null
 }
 
 interface MyInquiryItem {
@@ -318,22 +326,51 @@ export default function DashboardPage() {
             {/* 구분선 */}
             <div className="border-t border-slate-200" />
 
-            {/* 2행: 접수 후 경과일수 9버킷 */}
+            {/* 2행: 검토서 요청 예정일 기준 미제출 6버킷 */}
             <div>
               <p className="mb-2 text-sm font-medium text-slate-700">
-                접수 후 경과일수 <span className="text-xs text-muted-foreground">(검토서 미제출 건)</span>
+                검토서 미제출 일정
+                <span className="ml-2 text-xs text-muted-foreground">
+                  (예정일 기준, 초과는 미제출 지난 건)
+                </span>
               </p>
-              <div className="grid gap-2 grid-cols-3 md:grid-cols-5 lg:grid-cols-9">
-                {ELAPSED_ORDER.map((key) => {
-                  const count = myStats.elapsed_buckets[key] ?? 0
-                  const isLong = key === "1주" || key === "2주이상"
-                  const tint: BucketTint = isLong
-                    ? "red"
-                    : count > 0
-                      ? "amber"
-                      : "slate"
-                  return <Bucket key={key} label={key} value={count} tint={tint} compact />
-                })}
+              <div className="grid gap-2 grid-cols-3 md:grid-cols-6">
+                <Bucket
+                  label="미제출 총합"
+                  value={myStats.schedule_counts.in_progress}
+                  tint={myStats.schedule_counts.in_progress > 0 ? "red" : "slate"}
+                  compact
+                />
+                <Bucket
+                  label="D-3"
+                  value={myStats.schedule_counts.d_minus_3}
+                  tint={myStats.schedule_counts.d_minus_3 > 0 ? "amber" : "slate"}
+                  compact
+                />
+                <Bucket
+                  label="D-2"
+                  value={myStats.schedule_counts.d_minus_2}
+                  tint={myStats.schedule_counts.d_minus_2 > 0 ? "amber" : "slate"}
+                  compact
+                />
+                <Bucket
+                  label="D-1"
+                  value={myStats.schedule_counts.d_minus_1}
+                  tint={myStats.schedule_counts.d_minus_1 > 0 ? "amber" : "slate"}
+                  compact
+                />
+                <Bucket
+                  label="D-day"
+                  value={myStats.schedule_counts.d_day}
+                  tint={myStats.schedule_counts.d_day > 0 ? "orange" : "slate"}
+                  compact
+                />
+                <Bucket
+                  label="초과"
+                  value={myStats.schedule_counts.overdue}
+                  tint={myStats.schedule_counts.overdue > 0 ? "red" : "slate"}
+                  compact
+                />
               </div>
             </div>
           </div>
@@ -506,7 +543,8 @@ export default function DashboardPage() {
                 <TableHeader>
                   <TableRow>
                     <TableHead>검토위원</TableHead>
-                    <TableHead className="w-[90px] text-center">미제출</TableHead>
+                    <TableHead className="w-[150px]">일정 준수율</TableHead>
+                    <TableHead className="w-[80px] text-center">미제출</TableHead>
                     <TableHead className="w-[60px] text-center">D-3</TableHead>
                     <TableHead className="w-[60px] text-center">D-2</TableHead>
                     <TableHead className="w-[60px] text-center">D-1</TableHead>
@@ -519,6 +557,9 @@ export default function DashboardPage() {
                   {reviewerSchedule.map((r) => (
                     <TableRow key={r.reviewer_user_id}>
                       <TableCell className="font-medium">{r.reviewer_name}</TableCell>
+                      <TableCell>
+                        <OnTimeRateBar rate={r.on_time_rate} />
+                      </TableCell>
                       <TableCell className="text-center">{r.in_progress}</TableCell>
                       <TableCell className="text-center">
                         {r.d_minus_3 > 0 ? r.d_minus_3 : "-"}
@@ -740,6 +781,27 @@ function Bucket({
           </span>
         )}
       </div>
+    </div>
+  )
+}
+
+function OnTimeRateBar({ rate }: { rate: number | null }) {
+  if (rate === null) {
+    return <span className="text-xs text-muted-foreground">-</span>
+  }
+  const colorClass =
+    rate >= 80 ? "bg-emerald-500"
+    : rate >= 50 ? "bg-amber-500"
+    : "bg-red-500"
+  return (
+    <div className="flex items-center gap-2">
+      <div className="h-2 w-20 overflow-hidden rounded-full bg-slate-200">
+        <div
+          className={`h-full ${colorClass}`}
+          style={{ width: `${Math.min(100, Math.max(0, rate))}%` }}
+        />
+      </div>
+      <span className="w-10 text-right text-xs font-medium text-slate-700">{rate}%</span>
     </div>
   )
 }

@@ -523,6 +523,9 @@ def reviewer_schedule(
             "d_minus_1": 0,
             "d_day": 0,
             "overdue": 0,
+            "on_time_rate": None,
+            "_due_total": 0,
+            "_due_on_time": 0,
         }
         for u in reviewer_users
     }
@@ -552,6 +555,9 @@ def reviewer_schedule(
             "d_minus_1": 0,
             "d_day": 0,
             "overdue": 0,
+            "on_time_rate": None,
+            "_due_total": 0,
+            "_due_on_time": 0,
         })
         info["in_progress"] += 1
         delta = (stage.report_due_date - today).days
@@ -566,6 +572,39 @@ def reviewer_schedule(
         elif delta < 0:
             info["overdue"] += 1
         # delta > 3 은 in_progress 만 증가, 별도 열 없음
+
+    # 3) 일정 준수율 집계 — 마감 경과(제출 or 초과 미제출) 건 중 정시 제출 비율
+    closure_rows = (
+        db.query(ReviewStage, User)
+        .join(Building, ReviewStage.building_id == Building.id)
+        .join(Reviewer, Building.reviewer_id == Reviewer.id)
+        .join(User, Reviewer.user_id == User.id)
+        .filter(
+            ReviewStage.report_due_date.isnot(None),
+            User.is_active.is_(True),
+        )
+        .all()
+    )
+    for stage, user in closure_rows:
+        # 마감 경과 여부: 제출됐거나 예정일이 이미 지났음
+        is_submitted = stage.report_submitted_at is not None
+        is_past_due = stage.report_due_date < today
+        if not is_submitted and not is_past_due:
+            continue
+        info = by_user.get(user.id)
+        if info is None:
+            continue
+        info["_due_total"] += 1
+        if is_submitted and stage.report_submitted_at <= stage.report_due_date:
+            info["_due_on_time"] += 1
+
+    # 백분율 환산 + 임시 필드 제거
+    for info in by_user.values():
+        total = info.pop("_due_total", 0)
+        on_time = info.pop("_due_on_time", 0)
+        info["on_time_rate"] = (
+            round(on_time / total * 100) if total > 0 else None
+        )
 
     return sorted(
         by_user.values(),
@@ -693,6 +732,39 @@ def my_stats(
             else:  # 14+
                 elapsed_buckets["2주이상"] += 1
 
+    # 검토서 요청 예정일 기준 미제출 건 분류 (D-3 ~ 초과)
+    schedule_counts = {
+        "in_progress": 0,
+        "d_minus_3": 0,
+        "d_minus_2": 0,
+        "d_minus_1": 0,
+        "d_day": 0,
+        "overdue": 0,
+    }
+    if building_ids:
+        unsubmitted_rows = (
+            db.query(ReviewStage)
+            .filter(
+                ReviewStage.building_id.in_(building_ids),
+                ReviewStage.report_submitted_at.is_(None),
+                ReviewStage.report_due_date.isnot(None),
+            )
+            .all()
+        )
+        for s in unsubmitted_rows:
+            schedule_counts["in_progress"] += 1
+            delta = (s.report_due_date - today).days
+            if delta == 3:
+                schedule_counts["d_minus_3"] += 1
+            elif delta == 2:
+                schedule_counts["d_minus_2"] += 1
+            elif delta == 1:
+                schedule_counts["d_minus_1"] += 1
+            elif delta == 0:
+                schedule_counts["d_day"] += 1
+            elif delta < 0:
+                schedule_counts["overdue"] += 1
+
     # 최종 완료 건수 (5분류) — 본인 담당 기준
     # final_result 값은 향후 '최종 판정용 별도 엑셀 업로드'에서 기입됨
     final_counts = {
@@ -716,6 +788,7 @@ def my_stats(
         "submitted_preliminary": submitted_preliminary,
         "submitted_supplement": submitted_supplement,
         "elapsed_buckets": elapsed_buckets,
+        "schedule_counts": schedule_counts,
         "final_counts": final_counts,
     }
 
