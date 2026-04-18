@@ -153,6 +153,101 @@ def make_reviewer(db_session):
 
 
 @pytest.fixture
+def kakao_mock():
+    """카카오 외부 호출 mock fixture (명시 사용).
+
+    사용 예:
+        def test_x(kakao_mock):
+            kakao_mock.token_ok(access_token="t1", refresh_token="r1")
+            kakao_mock.user_info_ok(kakao_id="123", nickname="홍길동")
+            ...
+
+    `assert_all_called=False`로 등록한 라우트가 호출 안 돼도 실패하지 않음.
+    """
+    import respx
+    import httpx
+
+    KAKAO_AUTH = "https://kauth.kakao.com"
+    KAKAO_API = "https://kapi.kakao.com"
+
+    with respx.mock(assert_all_called=False) as mock:
+
+        class _Helper:
+            def token_ok(self, *, access_token="kakao_access_x", refresh_token="kakao_refresh_x", expires_in=21599):
+                return mock.post(f"{KAKAO_AUTH}/oauth/token").mock(
+                    return_value=httpx.Response(
+                        200,
+                        json={
+                            "access_token": access_token,
+                            "refresh_token": refresh_token,
+                            "expires_in": expires_in,
+                            "token_type": "bearer",
+                        },
+                    )
+                )
+
+            def user_info_ok(self, *, kakao_id="98765", nickname="카카오테스트"):
+                return mock.get(f"{KAKAO_API}/v2/user/me").mock(
+                    return_value=httpx.Response(
+                        200,
+                        json={
+                            "id": int(kakao_id),
+                            "properties": {"nickname": nickname},
+                            "kakao_account": {"profile": {"nickname": nickname}},
+                        },
+                    )
+                )
+
+            def friend_send_ok(self, *, success_uuids=None):
+                """친구 메시지 발송 200 + successful_receiver_uuids 응답."""
+                def _handler(request):
+                    import json as _json
+                    body = dict(request.url.params)
+                    # data form 파싱
+                    raw = request.content.decode("utf-8")
+                    fields = dict(p.split("=", 1) for p in raw.split("&") if "=" in p)
+                    receiver_field = fields.get("receiver_uuids", "%5B%5D")
+                    # urldecode
+                    from urllib.parse import unquote
+                    decoded = unquote(receiver_field)
+                    uuids = _json.loads(decoded) if decoded else []
+                    actual_success = success_uuids if success_uuids is not None else uuids
+                    return httpx.Response(
+                        200,
+                        json={
+                            "successful_receiver_uuids": list(actual_success),
+                            "failure_info": [],
+                        },
+                    )
+                return mock.post(f"{KAKAO_API}/v1/api/talk/friends/message/default/send").mock(
+                    side_effect=_handler
+                )
+
+            def friend_send_fail(self, *, status_code=400, msg="not a friend"):
+                return mock.post(f"{KAKAO_API}/v1/api/talk/friends/message/default/send").mock(
+                    return_value=httpx.Response(
+                        status_code,
+                        json={"msg": msg, "code": -1},
+                    )
+                )
+
+            def scopes_ok(self, *, agreed_ids=("profile_nickname", "friends", "talk_message")):
+                scopes = [
+                    {"id": sid, "display_name": sid, "agreed": True}
+                    for sid in agreed_ids
+                ]
+                return mock.get(f"{KAKAO_API}/v2/user/scopes").mock(
+                    return_value=httpx.Response(200, json={"id": 1, "scopes": scopes})
+                )
+
+            @property
+            def routes(self):
+                return mock
+
+        yield _Helper()
+
+
+@pytest.fixture
 def make_building(db_session):
     """건축물 생성. reviewer_id로 담당 위원 지정 가능."""
 

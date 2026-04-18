@@ -199,7 +199,7 @@ async def ensure_valid_token(user: User, db: Session) -> str:
         raise ValueError("카카오 연동이 되어 있지 않습니다")
 
     now = datetime.now(timezone.utc)
-    expires_at = user.kakao_token_expires_at
+    expires_at = _ensure_aware_utc(user.kakao_token_expires_at)
 
     # 만료 5분 전부터 갱신 대상
     needs_refresh = expires_at is None or (expires_at - now) < timedelta(minutes=5)
