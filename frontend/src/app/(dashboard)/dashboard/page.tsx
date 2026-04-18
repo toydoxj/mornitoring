@@ -4,14 +4,6 @@ import { useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table"
 import apiClient from "@/lib/api/client"
 import { useAuthStore } from "@/stores/authStore"
 
@@ -474,70 +466,6 @@ export default function DashboardPage() {
       </div>
 
 
-      {/* 위원별 현황 */}
-      {isAdmin && stats && stats.reviewer_stats.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle>검토위원별 현황</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="rounded-md border max-h-[500px] overflow-y-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>검토위원</TableHead>
-                    <TableHead className="w-[70px] text-center">배정</TableHead>
-                    <TableHead className="w-[100px] text-right">연면적합</TableHead>
-                    <TableHead className="w-[70px] text-center">1000↑</TableHead>
-                    <TableHead className="w-[70px] text-center">고위험</TableHead>
-                    <TableHead className="w-[70px] text-center">배포</TableHead>
-                    <TableHead className="w-[70px] text-center">제출</TableHead>
-                    <TableHead className="w-[70px] text-center">미제출</TableHead>
-                    <TableHead className="w-[70px] text-center">완료</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {stats.reviewer_stats.map((r) => (
-                    <TableRow key={r.name}>
-                      <TableCell className="font-medium">{r.name}</TableCell>
-                      <TableCell className="text-center">{r.total}</TableCell>
-                      <TableCell className="text-right font-mono text-sm">
-                        {r.total_area.toLocaleString(undefined, { maximumFractionDigits: 0 })}
-                      </TableCell>
-                      <TableCell className="text-center">
-                        {r.area_over_1000 > 0 ? (
-                          <Badge variant="secondary">{r.area_over_1000}</Badge>
-                        ) : "0"}
-                      </TableCell>
-                      <TableCell className="text-center">
-                        {r.high_risk > 0 ? (
-                          <Badge variant="destructive">{r.high_risk}</Badge>
-                        ) : "0"}
-                      </TableCell>
-                      <TableCell className="text-center">{r.doc_received}</TableCell>
-                      <TableCell className="text-center">
-                        {r.submitted > 0 ? (
-                          <Badge variant="default">{r.submitted}</Badge>
-                        ) : (
-                          "0"
-                        )}
-                      </TableCell>
-                      <TableCell className="text-center">
-                        {r.not_submitted > 0 ? (
-                          <Badge variant="destructive">{r.not_submitted}</Badge>
-                        ) : (
-                          "0"
-                        )}
-                      </TableCell>
-                      <TableCell className="text-center">{r.completed}</TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
-          </CardContent>
-        </Card>
-      )}
     </div>
   )
 }
