@@ -332,8 +332,9 @@ async def link_account(body: LinkAccountRequest, db: Session = Depends(get_db)):
 
 @router.get("/me", response_model=UserResponse)
 async def get_me(current_user: User = Depends(get_current_user)):
-    """현재 로그인 사용자 정보"""
-    return current_user
+    """현재 로그인 사용자 정보. from_user 명시 호출 — kakao_linked/reauthorize_url 같은
+    파생 필드를 채우기 위해. (자동 변환은 SQLAlchemy attribute만 매핑해서 default 값이 박힘)"""
+    return UserResponse.from_user(current_user)
 
 
 @router.post("/change-password")
