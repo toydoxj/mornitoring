@@ -110,6 +110,16 @@ export default function AdminPage() {
   } | null>(null)
   const [credentialCopied, setCredentialCopied] = useState(false)
 
+  // 초대 발송 결과 다이얼로그 (manual fallback 시 setup_url 노출용)
+  const [inviteDialog, setInviteDialog] = useState<{
+    userName: string
+    setupUrl: string
+    expiresAt: string
+    error?: string | null
+  } | null>(null)
+  const [inviteCopied, setInviteCopied] = useState(false)
+  const [invitingUserId, setInvitingUserId] = useState<number | null>(null)
+
   // 수정 다이얼로그
   const [editTarget, setEditTarget] = useState<User | null>(null)
   const [editData, setEditData] = useState({
@@ -241,6 +251,54 @@ export default function AdminPage() {
     } finally {
       setBulkUploading(false)
       e.target.value = ""
+    }
+  }
+
+  const handleSendInvite = async (userId: number, userName: string, kakaoMatched: boolean) => {
+    const message = kakaoMatched
+      ? `${userName}에게 초대를 발송할까요?\n\n카카오로 발송되며, 실패 시 수동 전달용 링크가 화면에 표시됩니다.`
+      : `${userName}은 카카오 매칭이 안 되어 있습니다.\n\n수동 전달용 링크가 화면에 표시됩니다. 별도 채널(SMS/이메일 등)로 전달해주세요. 진행하시겠습니까?`
+    if (!confirm(message)) return
+    setInvitingUserId(userId)
+    try {
+      const { data } = await apiClient.post<{
+        delivery: string
+        setup_url: string
+        expires_at: string
+        purpose: string
+        error?: string | null
+      }>(`/api/users/${userId}/send-invite`)
+
+      if (data.delivery === "kakao" && !data.error) {
+        // 카카오 발송 성공 → 토스트성 알림 + 사용자 목록 갱신은 불필요(상태 변화 없음)
+        alert(`${userName}에게 카카오 메시지로 초대 링크를 발송했습니다.`)
+      } else {
+        // manual fallback (미매칭 또는 카카오 발송 실패) → 다이얼로그로 setup_url 노출
+        setInviteDialog({
+          userName,
+          setupUrl: data.setup_url,
+          expiresAt: data.expires_at,
+          error: data.error,
+        })
+        setInviteCopied(false)
+      }
+    } catch (err) {
+      const msg =
+        (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
+        ?? "초대 발송 실패"
+      alert(msg)
+    } finally {
+      setInvitingUserId(null)
+    }
+  }
+
+  const handleCopyInviteUrl = async () => {
+    if (!inviteDialog) return
+    try {
+      await navigator.clipboard.writeText(inviteDialog.setupUrl)
+      setInviteCopied(true)
+    } catch {
+      // 일부 브라우저(http 환경)에서 clipboard 실패 — 사용자가 수동 선택 가능하므로 무시
     }
   }
 
@@ -544,6 +602,15 @@ export default function AdminPage() {
                       <Button
                         size="sm"
                         variant="outline"
+                        loading={invitingUserId === user.id}
+                        loadingText="발송 중..."
+                        onClick={() => handleSendInvite(user.id, user.name, !!user.kakao_matched)}
+                      >
+                        초대 발송
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
                         onClick={() => handleResetPassword(user.id, user.name)}
                       >
                         PW초기화
@@ -664,6 +731,50 @@ export default function AdminPage() {
               <p className="text-xs text-muted-foreground">
                 최초 로그인 시 사용자가 반드시 비밀번호를 변경해야 합니다.
                 이 창을 닫으면 비밀번호를 다시 볼 수 없으니 먼저 복사하세요.
+              </p>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* 초대 발송 결과 다이얼로그 (manual fallback 시 setup_url 노출) */}
+      <Dialog
+        open={!!inviteDialog}
+        onOpenChange={(open) => {
+          if (!open) {
+            setInviteDialog(null)
+            setInviteCopied(false)
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>초대 링크 (수동 전달)</DialogTitle>
+          </DialogHeader>
+          {inviteDialog && (
+            <div className="space-y-3">
+              {inviteDialog.error ? (
+                <p className="text-sm text-amber-700">
+                  카카오 발송 실패 — {inviteDialog.error}. 아래 링크를 다른 채널로 전달해주세요.
+                </p>
+              ) : (
+                <p className="text-sm">
+                  <strong>{inviteDialog.userName}</strong>은 카카오 매칭이 안 되어 있습니다.
+                  아래 링크를 SMS·이메일 등 별도 채널로 전달해주세요.
+                </p>
+              )}
+              <div className="flex items-center gap-2 rounded-md border bg-muted p-2">
+                <code className="flex-1 break-all font-mono text-xs">
+                  {inviteDialog.setupUrl}
+                </code>
+                <Button size="sm" variant="outline" onClick={handleCopyInviteUrl}>
+                  {inviteCopied ? "복사됨" : "복사"}
+                </Button>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                만료: {new Date(inviteDialog.expiresAt).toLocaleString("ko-KR")}.
+                72시간 내 사용자가 링크에서 직접 비밀번호를 설정해야 합니다.
+                이 창을 닫으면 같은 링크를 다시 볼 수 없습니다.
               </p>
             </div>
           )}
