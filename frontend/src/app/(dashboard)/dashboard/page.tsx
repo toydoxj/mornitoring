@@ -220,21 +220,21 @@ export default function DashboardPage() {
 
       {/* 단계별 집계 / 현황 — 한 줄 2박스 (xl 이상), 그 이하는 세로 */}
       {isAdmin && stats && (
-        <div className="grid gap-4 xl:grid-cols-5">
-          <Card className="xl:col-span-3">
+        <div className="grid gap-4 xl:grid-cols-5 xl:items-stretch">
+          <Card className="xl:col-span-3 h-full">
             <CardHeader>
               <CardTitle>단계별 집계</CardTitle>
             </CardHeader>
-            <CardContent>
+            <CardContent className="flex-1">
               <FlowStages stats={stats} />
             </CardContent>
           </Card>
 
-          <Card className="xl:col-span-2">
+          <Card className="xl:col-span-2 h-full">
             <CardHeader>
               <CardTitle>현황</CardTitle>
             </CardHeader>
-            <CardContent>
+            <CardContent className="flex-1">
               <div className="grid gap-3 sm:grid-cols-3 xl:grid-cols-3">
                 <BreakdownCard
                   title="검토서 미접수"
