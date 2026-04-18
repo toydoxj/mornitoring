@@ -39,6 +39,10 @@ class User(Base):
     kakao_access_token: Mapped[str | None] = mapped_column(String(500))
     kakao_refresh_token: Mapped[str | None] = mapped_column(String(500))
     kakao_token_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # 카카오 동의 항목 진단 캐시 (단건 진단 호출 시 갱신)
+    # True=필수 scope 모두 동의, False=일부 미동의, NULL=미확인
+    kakao_scopes_ok: Mapped[bool | None] = mapped_column(Boolean)
+    kakao_scopes_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     password_hash: Mapped[str | None] = mapped_column(String(200))
     must_change_password: Mapped[bool] = mapped_column(Boolean, default=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)

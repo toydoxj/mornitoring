@@ -77,6 +77,9 @@ class UserResponse(BaseModel):
     kakao_linked: bool = False        # 카카오 로그인 완료(kakao_id 존재)
     kakao_matched: bool = False       # 친구 매칭 완료(kakao_uuid 존재)
     kakao_uuid: str | None = None
+    # 카카오 동의 캐시 — ok | insufficient | unknown
+    kakao_scopes_status: str | None = None
+    kakao_scopes_checked_at: str | None = None
     # 비밀번호 셋업 상태 (목록 조회 시에만 채워짐)
     # setup_completed | pending | expired | not_invited
     setup_status: str | None = None
@@ -230,6 +233,13 @@ def list_users(
     else:
         total = total_pre
 
+    def _scopes_status(u: User) -> str | None:
+        if u.kakao_scopes_ok is True:
+            return "ok"
+        if u.kakao_scopes_ok is False:
+            return "insufficient"
+        return "unknown"
+
     items = [
         UserResponse(
             id=u.id, name=u.name, email=u.email, role=u.role,
@@ -237,6 +247,11 @@ def list_users(
             kakao_linked=bool(u.kakao_id),
             kakao_matched=bool(u.kakao_uuid),
             kakao_uuid=u.kakao_uuid,
+            kakao_scopes_status=_scopes_status(u),
+            kakao_scopes_checked_at=(
+                u.kakao_scopes_checked_at.isoformat()
+                if u.kakao_scopes_checked_at else None
+            ),
             setup_status=status,
             last_invite_sent_at=last_sent,
         )

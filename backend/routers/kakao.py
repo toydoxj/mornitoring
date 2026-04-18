@@ -300,4 +300,10 @@ async def diagnose_user_scopes(
     agreed_ids = {s.id for s in result.scopes if s.agreed}
     result.missing_scopes = [sid for sid in REQUIRED_SCOPES if sid not in agreed_ids]
     result.all_agreed = len(result.missing_scopes) == 0
+
+    # 진단 결과를 user에 캐시 (목록에서 컬럼 표시용)
+    from datetime import datetime, timezone
+    user.kakao_scopes_ok = result.all_agreed
+    user.kakao_scopes_checked_at = datetime.now(timezone.utc)
+    db.commit()
     return result

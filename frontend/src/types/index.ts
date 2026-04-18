@@ -12,9 +12,20 @@ export interface User {
   kakao_linked?: boolean      // 카카오 로그인 완료
   kakao_matched?: boolean     // 친구 매칭 완료
   kakao_uuid?: string | null
+  // 카카오 동의 캐시 — ok/insufficient/unknown
+  kakao_scopes_status?: KakaoScopesStatus | null
+  kakao_scopes_checked_at?: string | null
   // 비밀번호 셋업 상태 (목록 응답에만 포함)
   setup_status?: SetupStatus | null
   last_invite_sent_at?: string | null
+}
+
+export type KakaoScopesStatus = "ok" | "insufficient" | "unknown"
+
+export const KAKAO_SCOPES_LABELS: Record<KakaoScopesStatus, string> = {
+  ok: "동의 OK",
+  insufficient: "동의 부족",
+  unknown: "미확인",
 }
 
 export type SetupStatus = "setup_completed" | "pending" | "expired" | "not_invited"

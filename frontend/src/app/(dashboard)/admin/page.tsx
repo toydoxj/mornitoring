@@ -20,8 +20,8 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import apiClient from "@/lib/api/client"
-import type { SetupStatus, User, UserRole } from "@/types"
-import { ROLE_LABELS, SETUP_STATUS_LABELS } from "@/types"
+import type { KakaoScopesStatus, SetupStatus, User, UserRole } from "@/types"
+import { KAKAO_SCOPES_LABELS, ROLE_LABELS, SETUP_STATUS_LABELS } from "@/types"
 
 interface UserListResponse {
   items: User[]
@@ -688,6 +688,7 @@ export default function AdminPage() {
               <TableHead className="w-[120px]">전화번호</TableHead>
               <TableHead className="w-[100px] text-center">카카오 로그인</TableHead>
               <TableHead className="w-[100px] text-center">친구 매칭</TableHead>
+              <TableHead className="w-[90px] text-center">동의</TableHead>
               <TableHead className="w-[100px] text-center">비번 상태</TableHead>
               <TableHead className="w-[80px] text-center">상태</TableHead>
               <TableHead className="w-[260px] text-center">관리</TableHead>
@@ -696,13 +697,13 @@ export default function AdminPage() {
           <TableBody>
             {isLoading ? (
               <TableRow>
-                <TableCell colSpan={11} className="h-32 text-center">
+                <TableCell colSpan={12} className="h-32 text-center">
                   로딩 중...
                 </TableCell>
               </TableRow>
             ) : users.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={11} className="h-32 text-center text-muted-foreground">
+                <TableCell colSpan={12} className="h-32 text-center text-muted-foreground">
                   등록된 사용자가 없습니다
                 </TableCell>
               </TableRow>
@@ -738,6 +739,34 @@ export default function AdminPage() {
                     ) : (
                       <Badge variant="outline">미매칭</Badge>
                     )}
+                  </TableCell>
+                  <TableCell className="text-center">
+                    {(() => {
+                      const s = user.kakao_scopes_status as KakaoScopesStatus | undefined
+                      if (!s || s === "unknown") {
+                        return (
+                          <Badge
+                            variant="outline"
+                            className="bg-gray-100 text-gray-500 border-gray-300"
+                            title="진단 버튼으로 확인"
+                          >
+                            {KAKAO_SCOPES_LABELS.unknown}
+                          </Badge>
+                        )
+                      }
+                      const cls =
+                        s === "ok"
+                          ? "bg-green-100 text-green-700 border-green-300"
+                          : "bg-red-100 text-red-700 border-red-300"
+                      const tooltip = user.kakao_scopes_checked_at
+                        ? `진단: ${new Date(user.kakao_scopes_checked_at).toLocaleString("ko-KR")}`
+                        : undefined
+                      return (
+                        <Badge variant="outline" className={cls} title={tooltip}>
+                          {KAKAO_SCOPES_LABELS[s]}
+                        </Badge>
+                      )
+                    })()}
                   </TableCell>
                   <TableCell className="text-center">
                     {(() => {
