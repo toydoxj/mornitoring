@@ -218,14 +218,22 @@ export default function DashboardPage() {
         </p>
       </div>
 
-      {/* 전체 통계 (간사 이상) — 상단 배치 */}
+      {/* 단계별 검토 (간사 이상) */}
       {isAdmin && stats && (
         <>
+          <Card>
+            <CardHeader>
+              <CardTitle>단계별 검토</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <FlowStages stats={stats} />
+            </CardContent>
+          </Card>
+
+          {/* 현황: 검토서 미접수 / 업로드된 검토서 / 문의사항 */}
           <div>
-            <h2 className="text-lg font-bold mb-2">전체 현황</h2>
-            <div className="grid gap-4 md:grid-cols-3 lg:grid-cols-6">
-              <StatCard title="총 등록건" value={stats.total} />
-              <StatCard title="배정 완료" value={stats.assigned} />
+            <h2 className="text-lg font-bold mb-2">현황</h2>
+            <div className="grid gap-4 md:grid-cols-3">
               <BreakdownCard
                 title="검토서 미접수"
                 total={stats.docs_waiting_review_preliminary + stats.docs_waiting_review_supplement}
@@ -260,30 +268,8 @@ export default function DashboardPage() {
                   { label: "완료", value: stats.inquiry_counts.completed },
                 ]}
               />
-              <BreakdownCard
-                title="최종 완료"
-                total={stats.completed}
-                accent="green"
-                items={[
-                  { label: "적합", value: stats.final_counts.pass },
-                  { label: "보완적합", value: stats.final_counts.pass_supplement },
-                  { label: "부적합", value: stats.final_counts.fail },
-                  { label: "부적합(미회신)", value: stats.final_counts.fail_no_response },
-                  { label: "대상제외", value: stats.final_counts.excluded },
-                ]}
-              />
             </div>
           </div>
-
-          {/* 단계별 현황: 배정완료 → 예비검토 → 보완검토 → 완료 플로우 */}
-          <Card>
-            <CardHeader>
-              <CardTitle>단계별 현황</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <FlowStages stats={stats} />
-            </CardContent>
-          </Card>
         </>
       )}
 
@@ -623,7 +609,7 @@ function FinalBucket({ counts }: { counts: FinalCounts }) {
   )
 }
 
-type BreakdownAccent = "blue" | "slate" | "amber" | "green" | "violet"
+type BreakdownAccent = "blue" | "slate" | "amber" | "green" | "violet" | "indigo"
 
 const BREAKDOWN_BAR: Record<BreakdownAccent, string> = {
   blue: "before:bg-blue-500",
@@ -631,6 +617,7 @@ const BREAKDOWN_BAR: Record<BreakdownAccent, string> = {
   amber: "before:bg-amber-500",
   green: "before:bg-emerald-500",
   violet: "before:bg-violet-500",
+  indigo: "before:bg-indigo-500",
 }
 
 const BREAKDOWN_VALUE: Record<BreakdownAccent, string> = {
@@ -639,6 +626,7 @@ const BREAKDOWN_VALUE: Record<BreakdownAccent, string> = {
   amber: "text-amber-600",
   green: "text-emerald-600",
   violet: "text-violet-600",
+  indigo: "text-indigo-600",
 }
 
 function BreakdownCard({
@@ -764,8 +752,12 @@ function FlowStages({ stats }: { stats: DashboardStats }) {
 
   return (
     <div className="flex flex-col items-stretch gap-3 lg:flex-row">
-      <FlowStageCard title="배정완료" total={stats.assigned} accent="blue" items={[]} />
-      <FlowArrow />
+      <FlowStageCard title="총 등록건" total={stats.total} accent="indigo" items={[]} />
+      {/* 총 등록건은 전체 요약. 진행 단계와 구분해 화살표 대신 세로선으로 분리 */}
+      <div
+        className="hidden self-stretch lg:block lg:border-l lg:border-slate-200 lg:mx-1"
+        aria-hidden
+      />
       <FlowStageCard
         title="예비검토"
         total={preliminaryTotal}
@@ -788,7 +780,7 @@ function FlowStages({ stats }: { stats: DashboardStats }) {
       />
       <FlowArrow />
       <FlowStageCard
-        title="완료"
+        title="최종 완료"
         total={finalTotal}
         accent="green"
         items={[
@@ -856,38 +848,3 @@ function FlowStageCard({
   )
 }
 
-function StatCard({
-  title,
-  value,
-  color,
-  suffix,
-}: {
-  title: string
-  value: number
-  color?: "blue" | "red" | "green"
-  suffix?: string
-}) {
-  const colorClass = color === "blue"
-    ? "text-blue-600"
-    : color === "red"
-    ? "text-red-600"
-    : color === "green"
-    ? "text-green-600"
-    : ""
-
-  return (
-    <Card>
-      <CardHeader className="pb-2">
-        <CardTitle className="text-sm font-medium text-muted-foreground">
-          {title}
-        </CardTitle>
-      </CardHeader>
-      <CardContent>
-        <p className={`text-3xl font-bold ${colorClass}`}>
-          {value.toLocaleString()}
-          {suffix && <span className="ml-1 text-base font-normal text-muted-foreground">{suffix}</span>}
-        </p>
-      </CardContent>
-    </Card>
-  )
-}
