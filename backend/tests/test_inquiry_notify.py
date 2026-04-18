@@ -50,6 +50,27 @@ async def test_skips_when_recipient_has_no_kakao_uuid(db_session, make_user):
 
 
 @pytest.mark.asyncio
+async def test_message_includes_sender_name_as_manager(db_session, make_user):
+    """메시지 본문 첫 줄에 '담당간사 : {발신자 이름}'이 기입된다."""
+    sender, _ = make_user(UserRole.CHIEF_SECRETARY, name="김총괄")
+    recipient, _ = make_user(UserRole.REVIEWER, name="이공우")
+    inquiry = _make_inquiry(db_session, submitter_id=recipient.id)
+
+    # kakao_uuid가 없어도 메시지 구성은 수행되고 NotificationLog에 message 가 기록됨
+    await inquiry_notify.notify_inquiry_reply(
+        db_session, sender, inquiry, phase_changed=True
+    )
+    db_session.commit()
+
+    log = db_session.query(NotificationLog).first()
+    assert log is not None
+    assert log.message is not None
+    assert "담당간사 : 김총괄" in log.message
+    assert "답변:" in log.message
+    assert "검토 단계가 변경" in log.message
+
+
+@pytest.mark.asyncio
 async def test_no_log_when_submitter_id_missing(db_session, make_user):
     sender, _ = make_user(UserRole.CHIEF_SECRETARY, name="발신자")
     # historical 데이터: submitter_id가 NULL인 문의

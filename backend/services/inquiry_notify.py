@@ -21,7 +21,9 @@ from services.kakao import ensure_valid_token, send_message_to_friends
 TEMPLATE_TYPE = "inquiry_reply"
 
 
-def _compose_message(inquiry: Inquiry, phase_changed: bool) -> tuple[str, str]:
+def _compose_message(
+    inquiry: Inquiry, sender: User, phase_changed: bool
+) -> tuple[str, str]:
     """문의 답변 알림 제목/본문 구성.
 
     `send_message_to_friends`가 제목을 `[{title}]` 로 한 번 감싸 출력하므로
@@ -31,7 +33,10 @@ def _compose_message(inquiry: Inquiry, phase_changed: bool) -> tuple[str, str]:
     reply = (inquiry.reply or "").strip() or "(답변 내용이 등록되었습니다)"
     if len(reply) > 140:
         reply = reply[:137] + "..."
-    lines = [f"답변: {reply}"]
+    lines = [
+        f"담당간사 : {sender.name or '-'}",
+        f"답변: {reply}",
+    ]
     if phase_changed:
         lines.append("※ 건물의 검토 단계가 변경되었습니다.")
     return title, "\n".join(lines)
@@ -56,7 +61,7 @@ async def notify_inquiry_reply(
     if recipient is None:
         return False
 
-    title, message = _compose_message(inquiry, phase_changed)
+    title, message = _compose_message(inquiry, sender, phase_changed)
     link_url = f"{settings.frontend_base_url}/my-inquiries"
 
     def _write_log(*, is_sent: bool, channel: str, error: str | None) -> None:
