@@ -1,6 +1,7 @@
 """검토서 업로드/조회 라우터"""
 
 import tempfile
+import uuid
 from datetime import date, datetime
 from pathlib import Path
 
@@ -40,7 +41,13 @@ _RESULT_KOREAN = {
     "recalculate": "재계산",
 }
 from engines.phase_machine import get_next_phase, can_advance, is_completed
-from services.s3_storage import upload_review_file, get_download_url, list_review_files, delete_file
+from services.s3_storage import (
+    upload_review_file,
+    upload_generic_file,
+    get_download_url,
+    list_review_files,
+    delete_file,
+)
 from services.audit import log_action
 
 router = APIRouter()
@@ -644,7 +651,9 @@ def create_inquiry(
     )
     db.add(inquiry)
     db.commit()
-    return {"message": "문의가 등록되었습니다"}
+    db.refresh(inquiry)
+    # inquiry.id 를 반환해 프론트가 바로 첨부 업로드를 이어갈 수 있게 한다
+    return {"message": "문의가 등록되었습니다", "id": inquiry.id}
 
 
 @router.patch("/inquiry/{inquiry_id}")
@@ -743,6 +752,8 @@ def list_inquiries(
         )
         current_phase_map = {bid: phase for bid, phase in rows}
 
+    att_map = _inquiry_attachments_map(db, [i.id for i in items])
+
     result = []
     for inq in items:
         result.append({
@@ -757,6 +768,9 @@ def list_inquiries(
             "status": inq.status.value,
             "created_at": str(inq.created_at),
             "updated_at": str(inq.updated_at),
+            "attachments": [
+                _inquiry_attachment_to_dict(a) for a in att_map.get(inq.id, [])
+            ],
         })
 
     return {"items": result, "total": total}
@@ -783,6 +797,7 @@ def list_my_inquiries(
         query.order_by(Inquiry.created_at.desc())
         .offset((page - 1) * size).limit(size).all()
     )
+    att_map = _inquiry_attachments_map(db, [i.id for i in items])
     return {
         "items": [
             {
@@ -796,6 +811,9 @@ def list_my_inquiries(
                 "status": inq.status.value,
                 "created_at": str(inq.created_at),
                 "updated_at": str(inq.updated_at),
+                "attachments": [
+                    _inquiry_attachment_to_dict(a) for a in att_map.get(inq.id, [])
+                ],
             }
             for inq in items
         ],
@@ -810,7 +828,7 @@ def get_building_inquiries(
     current_user: User = Depends(get_current_user),
 ):
     """건물별 문의사항 이력 조회 (REVIEWER는 본인 담당 건물만)"""
-    from models.inquiry import Inquiry
+    from models.inquiry import Inquiry, InquiryAttachment
 
     building = db.query(Building).filter(Building.mgmt_no == mgmt_no).first()
     if not building:
@@ -823,6 +841,7 @@ def get_building_inquiries(
         .order_by(Inquiry.created_at.desc())
         .all()
     )
+    att_map = _inquiry_attachments_map(db, [i.id for i in items])
     return [
         {
             "id": inq.id,
@@ -833,9 +852,169 @@ def get_building_inquiries(
             "status": inq.status.value,
             "created_at": str(inq.created_at),
             "updated_at": str(inq.updated_at),
+            "attachments": [
+                _inquiry_attachment_to_dict(a) for a in att_map.get(inq.id, [])
+            ],
         }
         for inq in items
     ]
+
+
+# ---- 문의사항 첨부파일 ----
+
+class InquiryAttachmentResponse(BaseModel):
+    id: int
+    inquiry_id: int
+    kind: str  # "question" | "reply"
+    filename: str
+    file_size: int
+    content_type: str | None = None
+    uploaded_by: int
+    created_at: datetime
+    download_url: str | None = None
+
+
+def _inquiry_attachment_to_dict(att) -> dict:
+    return {
+        "id": att.id,
+        "inquiry_id": att.inquiry_id,
+        "kind": att.kind.value if hasattr(att.kind, "value") else str(att.kind),
+        "filename": att.filename,
+        "file_size": att.file_size,
+        "content_type": att.content_type,
+        "uploaded_by": att.uploaded_by,
+        "created_at": att.created_at.isoformat() if att.created_at else None,
+        "download_url": get_download_url(att.s3_key),
+    }
+
+
+def _inquiry_attachments_map(db: Session, inquiry_ids: list[int]) -> dict[int, list]:
+    """inquiry_id → [InquiryAttachment, ...] 맵을 한 번의 쿼리로 생성."""
+    from models.inquiry import InquiryAttachment
+    if not inquiry_ids:
+        return {}
+    rows = (
+        db.query(InquiryAttachment)
+        .filter(InquiryAttachment.inquiry_id.in_(inquiry_ids))
+        .order_by(InquiryAttachment.created_at)
+        .all()
+    )
+    out: dict[int, list] = {}
+    for a in rows:
+        out.setdefault(a.inquiry_id, []).append(a)
+    return out
+
+
+@router.post(
+    "/inquiry/{inquiry_id}/attachments",
+    response_model=InquiryAttachmentResponse,
+    status_code=201,
+)
+async def upload_inquiry_attachment(
+    inquiry_id: int,
+    kind: str = Query(..., description="question | reply"),
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """문의사항 첨부 업로드.
+
+    - kind="question": 문의 작성자(submitter_id == current_user.id) 만 허용
+    - kind="reply": 간사 이상(TEAM_LEADER/CHIEF_SECRETARY/SECRETARY) 만 허용
+    """
+    from models.inquiry import Inquiry, InquiryAttachment, InquiryAttachmentKind
+
+    if kind not in {"question", "reply"}:
+        raise HTTPException(status_code=400, detail="kind 는 question 또는 reply")
+
+    inquiry = db.query(Inquiry).filter(Inquiry.id == inquiry_id).first()
+    if not inquiry:
+        raise HTTPException(status_code=404, detail="문의를 찾을 수 없습니다")
+
+    if kind == "question":
+        if inquiry.submitter_id != current_user.id:
+            raise HTTPException(
+                status_code=403, detail="문의 작성자만 질문 첨부를 올릴 수 있습니다"
+            )
+    else:  # reply
+        if current_user.role not in (
+            UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY, UserRole.SECRETARY
+        ):
+            raise HTTPException(status_code=403, detail="답변 첨부 권한이 없습니다")
+
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="파일이 없습니다")
+
+    suffix = Path(file.filename).suffix
+    tmp_path = await stream_upload_to_tempfile(file, max_mb=20, suffix=suffix)
+    try:
+        unique = uuid.uuid4().hex[:8]
+        s3_key = f"inquiries/{inquiry_id}/{kind}/{unique}_{file.filename}"
+        resolved_type = file.content_type or "application/octet-stream"
+        upload_generic_file(tmp_path, s3_key, content_type=resolved_type)
+
+        att = InquiryAttachment(
+            inquiry_id=inquiry_id,
+            kind=InquiryAttachmentKind(kind),
+            filename=file.filename,
+            s3_key=s3_key,
+            file_size=tmp_path.stat().st_size,
+            content_type=resolved_type,
+            uploaded_by=current_user.id,
+        )
+        db.add(att)
+        db.commit()
+        db.refresh(att)
+        return InquiryAttachmentResponse(**_inquiry_attachment_to_dict(att))
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+
+@router.delete("/inquiry-attachments/{attachment_id}", status_code=204)
+def delete_inquiry_attachment(
+    attachment_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    from models.inquiry import InquiryAttachment
+
+    att = (
+        db.query(InquiryAttachment)
+        .filter(InquiryAttachment.id == attachment_id)
+        .first()
+    )
+    if not att:
+        raise HTTPException(status_code=404, detail="첨부파일을 찾을 수 없습니다")
+
+    is_owner = att.uploaded_by == current_user.id
+    is_admin = current_user.role in (UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY)
+    if not is_owner and not is_admin:
+        raise HTTPException(status_code=403, detail="삭제 권한이 없습니다")
+
+    try:
+        delete_file(att.s3_key)
+    except Exception:
+        pass
+    db.delete(att)
+    db.commit()
+
+
+@router.get("/inquiry-attachments/{attachment_id}/download")
+def download_inquiry_attachment(
+    attachment_id: int,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    from models.inquiry import InquiryAttachment
+
+    att = (
+        db.query(InquiryAttachment)
+        .filter(InquiryAttachment.id == attachment_id)
+        .first()
+    )
+    if not att:
+        raise HTTPException(status_code=404, detail="첨부파일을 찾을 수 없습니다")
+    return {"download_url": get_download_url(att.s3_key), "filename": att.filename}
 
 
 @router.get("/download/{stage_id}")

@@ -19,6 +19,13 @@ import apiClient from "@/lib/api/client"
 import { useAuthStore } from "@/stores/authStore"
 import type { Building, ReviewStage, PhaseType, ResultType, InappropriateDecisionType } from "@/types"
 import { PHASE_LABELS, RESULT_LABELS } from "@/types"
+import { AttachmentItem, type AttachmentDisplay } from "@/components/AttachmentItem"
+import { Paperclip, X } from "lucide-react"
+
+interface InquiryAttachmentData extends AttachmentDisplay {
+  inquiry_id: number
+  kind: "question" | "reply"
+}
 
 const RESULT_VARIANT: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
   pass: "default",
@@ -45,9 +52,11 @@ export default function BuildingDetailPage() {
   const [stages, setStages] = useState<ReviewStage[]>([])
   const [inquiries, setInquiries] = useState<{
     id: number; phase: string; submitter_name: string; content: string;
-    reply: string | null; status: string; created_at: string
+    reply: string | null; status: string; created_at: string;
+    attachments?: InquiryAttachmentData[]
   }[]>([])
   const [newInquiry, setNewInquiry] = useState("")
+  const [newInquiryFiles, setNewInquiryFiles] = useState<File[]>([])
   const [submittingInquiry, setSubmittingInquiry] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
   const [phaseEditOpen, setPhaseEditOpen] = useState(false)
@@ -205,19 +214,53 @@ export default function BuildingDetailPage() {
     if (!building || !newInquiry.trim()) return
     setSubmittingInquiry(true)
     try {
-      await apiClient.post("/api/reviews/inquiry", {
-        mgmt_no: building.mgmt_no,
-        phase: building.current_phase || "preliminary",
-        content: newInquiry.trim(),
-      })
+      const { data: created } = await apiClient.post<{ id: number }>(
+        "/api/reviews/inquiry",
+        {
+          mgmt_no: building.mgmt_no,
+          phase: building.current_phase || "preliminary",
+          content: newInquiry.trim(),
+        },
+      )
+      // 첨부 파일이 있으면 순차 업로드 (문의 생성 후 id 로 연결)
+      if (created.id && newInquiryFiles.length > 0) {
+        for (const file of newInquiryFiles) {
+          const formData = new FormData()
+          formData.append("file", file)
+          try {
+            await apiClient.post(
+              `/api/reviews/inquiry/${created.id}/attachments?kind=question`,
+              formData,
+              { headers: { "Content-Type": "multipart/form-data" } },
+            )
+          } catch {
+            // 개별 첨부 실패는 무시하고 다음으로 (사용자가 재시도 가능)
+          }
+        }
+      }
       setNewInquiry("")
-      // 문의 새로고침
+      setNewInquiryFiles([])
       const { data: inqData } = await apiClient.get(`/api/reviews/building-inquiries/${building.mgmt_no}`)
       setInquiries(inqData)
     } catch {
       alert("문의 등록 실패")
     } finally {
       setSubmittingInquiry(false)
+    }
+  }
+
+  const handleDeleteInquiryAttachment = async (attId: number) => {
+    if (!building) return
+    if (!confirm("첨부파일을 삭제하시겠습니까?")) return
+    try {
+      await apiClient.delete(`/api/reviews/inquiry-attachments/${attId}`)
+      const { data: inqData } = await apiClient.get(`/api/reviews/building-inquiries/${building.mgmt_no}`)
+      setInquiries(inqData)
+    } catch (err) {
+      const msg =
+        (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
+        ?? "삭제 실패"
+      alert(msg)
     }
   }
 
@@ -507,21 +550,57 @@ export default function BuildingDetailPage() {
         <CardContent className="space-y-4">
           {/* 문의 등록 — 해당 건물의 담당 검토자만 가능 (역할 무관) */}
           {isAssigned && (
-            <div className="flex gap-2">
-              <Input
-                placeholder="문의 내용을 입력하세요"
-                value={newInquiry}
-                onChange={(e) => setNewInquiry(e.target.value)}
-                className="flex-1"
-              />
-              <Button
-                onClick={handleSubmitInquiry}
-                disabled={!newInquiry.trim()}
-                loading={submittingInquiry}
-                loadingText="등록 중..."
-              >
-                문의 등록
-              </Button>
+            <div className="space-y-2">
+              <div className="flex gap-2">
+                <Input
+                  placeholder="문의 내용을 입력하세요"
+                  value={newInquiry}
+                  onChange={(e) => setNewInquiry(e.target.value)}
+                  className="flex-1"
+                />
+                <Button
+                  onClick={handleSubmitInquiry}
+                  disabled={!newInquiry.trim()}
+                  loading={submittingInquiry}
+                  loadingText="등록 중..."
+                >
+                  문의 등록
+                </Button>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <label className="inline-flex cursor-pointer items-center gap-1 rounded-md border px-2 py-1 text-xs text-muted-foreground hover:bg-muted">
+                  <Paperclip className="h-3.5 w-3.5" />
+                  파일 추가
+                  <input
+                    type="file"
+                    className="hidden"
+                    multiple
+                    onChange={(e) => {
+                      const files = Array.from(e.target.files ?? [])
+                      if (files.length > 0) setNewInquiryFiles((prev) => [...prev, ...files])
+                      e.target.value = ""
+                    }}
+                  />
+                </label>
+                {newInquiryFiles.map((f, i) => (
+                  <span
+                    key={`${f.name}-${i}`}
+                    className="inline-flex items-center gap-1 rounded-md bg-slate-100 px-2 py-1 text-xs text-slate-700"
+                  >
+                    <span className="max-w-[160px] truncate">{f.name}</span>
+                    <button
+                      type="button"
+                      className="text-slate-500 hover:text-slate-900"
+                      onClick={() =>
+                        setNewInquiryFiles((prev) => prev.filter((_, idx) => idx !== i))
+                      }
+                      aria-label="제거"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </span>
+                ))}
+              </div>
             </div>
           )}
 
@@ -554,10 +633,40 @@ export default function BuildingDetailPage() {
                     </span>
                   </div>
                   <p className="text-sm">{inq.content}</p>
+                  {/* 질문 첨부 */}
+                  {(inq.attachments ?? []).filter((a) => a.kind === "question").length > 0 && (
+                    <div className="space-y-2">
+                      {inq.attachments!
+                        .filter((a) => a.kind === "question")
+                        .map((a) => (
+                          <AttachmentItem
+                            key={a.id}
+                            attachment={a}
+                            canDelete={user?.id === a.uploaded_by || !!canManage}
+                            onDelete={() => handleDeleteInquiryAttachment(a.id)}
+                          />
+                        ))}
+                    </div>
+                  )}
                   {inq.reply && (
                     <div className="rounded bg-muted p-2 text-sm">
                       <span className="text-muted-foreground">답변: </span>
                       {inq.reply}
+                    </div>
+                  )}
+                  {/* 답변 첨부 */}
+                  {(inq.attachments ?? []).filter((a) => a.kind === "reply").length > 0 && (
+                    <div className="space-y-2">
+                      {inq.attachments!
+                        .filter((a) => a.kind === "reply")
+                        .map((a) => (
+                          <AttachmentItem
+                            key={a.id}
+                            attachment={a}
+                            canDelete={user?.id === a.uploaded_by || !!canManage}
+                            onDelete={() => handleDeleteInquiryAttachment(a.id)}
+                          />
+                        ))}
                     </div>
                   )}
                 </div>

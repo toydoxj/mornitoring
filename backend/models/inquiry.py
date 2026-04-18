@@ -15,6 +15,11 @@ class InquiryStatus(str, enum.Enum):
     COMPLETED = "completed"          # 완료
 
 
+class InquiryAttachmentKind(str, enum.Enum):
+    QUESTION = "question"  # 문의 작성자(검토위원)가 올린 첨부
+    REPLY = "reply"        # 답변 작성자(간사 이상)가 올린 첨부
+
+
 class Inquiry(Base):
     __tablename__ = "inquiries"
 
@@ -36,4 +41,23 @@ class Inquiry(Base):
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class InquiryAttachment(Base):
+    """문의사항 첨부파일 (질문·답변 공용, kind 로 구분)."""
+    __tablename__ = "inquiry_attachments"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    inquiry_id: Mapped[int] = mapped_column(
+        ForeignKey("inquiries.id", ondelete="CASCADE"), index=True
+    )
+    kind: Mapped[InquiryAttachmentKind] = mapped_column(Enum(InquiryAttachmentKind))
+    filename: Mapped[str] = mapped_column(String(255))
+    s3_key: Mapped[str] = mapped_column(String(500))
+    file_size: Mapped[int] = mapped_column(Integer)
+    content_type: Mapped[str | None] = mapped_column(String(100))
+    uploaded_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
     )

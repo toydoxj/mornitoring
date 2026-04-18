@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import Link from "next/link"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -23,6 +23,14 @@ import {
 } from "@/components/ui/table"
 import apiClient from "@/lib/api/client"
 import { PHASE_LABELS } from "@/types"
+import { AttachmentItem, type AttachmentDisplay } from "@/components/AttachmentItem"
+import { Paperclip } from "lucide-react"
+import { useAuthStore } from "@/stores/authStore"
+
+interface InquiryAttachmentData extends AttachmentDisplay {
+  inquiry_id: number
+  kind: "question" | "reply"
+}
 
 interface InquiryItem {
   id: number
@@ -36,6 +44,7 @@ interface InquiryItem {
   status: string
   created_at: string
   updated_at: string
+  attachments?: InquiryAttachmentData[]
 }
 
 interface InquiryListResponse {
@@ -56,6 +65,9 @@ const STATUS_VARIANT: Record<string, "default" | "secondary" | "destructive" | "
 }
 
 export default function InquiriesPage() {
+  const user = useAuthStore((s) => s.user)
+  const canAdminDelete =
+    !!user && ["team_leader", "chief_secretary"].includes(user.role)
   const [activeData, setActiveData] = useState<InquiryItem[]>([])
   const [activeTotal, setActiveTotal] = useState(0)
   const [closedData, setClosedData] = useState<InquiryItem[]>([])
@@ -133,6 +145,51 @@ export default function InquiriesPage() {
   useEffect(() => {
     fetchData()
   }, [])
+
+  // 답변 첨부 업로드 (진행중 테이블용)
+  const replyFileInputs = useRef<Record<number, HTMLInputElement | null>>({})
+  const [uploadingReplyFor, setUploadingReplyFor] = useState<number | null>(null)
+
+  const handleUploadReplyAttachment = async (
+    e: React.ChangeEvent<HTMLInputElement>,
+    inquiryId: number,
+  ) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setUploadingReplyFor(inquiryId)
+    try {
+      const formData = new FormData()
+      formData.append("file", file)
+      await apiClient.post(
+        `/api/reviews/inquiry/${inquiryId}/attachments?kind=reply`,
+        formData,
+        { headers: { "Content-Type": "multipart/form-data" } },
+      )
+      fetchData()
+    } catch (err) {
+      const msg =
+        (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
+        ?? "업로드 실패"
+      alert(msg)
+    } finally {
+      setUploadingReplyFor(null)
+      const input = replyFileInputs.current[inquiryId]
+      if (input) input.value = ""
+    }
+  }
+
+  const handleDeleteInquiryAttachment = async (attId: number) => {
+    if (!confirm("첨부파일을 삭제하시겠습니까?")) return
+    try {
+      await apiClient.delete(`/api/reviews/inquiry-attachments/${attId}`)
+      fetchData()
+    } catch (err) {
+      const msg =
+        (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
+        ?? "삭제 실패"
+      alert(msg)
+    }
+  }
 
   const handleUpdate = async (id: number, status: string) => {
     try {
@@ -227,19 +284,69 @@ export default function InquiriesPage() {
                         {PHASE_LABELS[item.phase] || item.phase}
                       </Badge>
                     </TableCell>
-                    <TableCell className="text-sm">{item.content}</TableCell>
-                    <TableCell>
+                    <TableCell className="text-sm align-top">
+                      <p className="whitespace-pre-wrap break-words">{item.content}</p>
+                      {(item.attachments ?? []).filter((a) => a.kind === "question").length > 0 && (
+                        <div className="mt-2 space-y-1">
+                          {item.attachments!
+                            .filter((a) => a.kind === "question")
+                            .map((a) => (
+                              <AttachmentItem
+                                key={a.id}
+                                attachment={a}
+                                canDelete={false}
+                                onDelete={() => handleDeleteInquiryAttachment(a.id)}
+                              />
+                            ))}
+                        </div>
+                      )}
+                    </TableCell>
+                    <TableCell className="align-top">
                       <Badge variant={STATUS_VARIANT[item.status]}>
                         {STATUS_LABELS[item.status]}
                       </Badge>
                     </TableCell>
-                    <TableCell>
+                    <TableCell className="align-top">
                       <Input
                         value={replyMap[item.id] ?? item.reply ?? ""}
                         onChange={(e) => setReplyMap({ ...replyMap, [item.id]: e.target.value })}
                         placeholder="답변 입력"
                         className="text-sm"
                       />
+                      {(item.attachments ?? []).filter((a) => a.kind === "reply").length > 0 && (
+                        <div className="mt-2 space-y-1">
+                          {item.attachments!
+                            .filter((a) => a.kind === "reply")
+                            .map((a) => (
+                              <AttachmentItem
+                                key={a.id}
+                                attachment={a}
+                                canDelete={user?.id === a.uploaded_by || canAdminDelete}
+                                onDelete={() => handleDeleteInquiryAttachment(a.id)}
+                              />
+                            ))}
+                        </div>
+                      )}
+                      <div className="mt-2">
+                        <input
+                          ref={(el) => {
+                            replyFileInputs.current[item.id] = el
+                          }}
+                          type="file"
+                          className="hidden"
+                          onChange={(e) => handleUploadReplyAttachment(e, item.id)}
+                        />
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => replyFileInputs.current[item.id]?.click()}
+                          loading={uploadingReplyFor === item.id}
+                          loadingText="업로드 중..."
+                        >
+                          <Paperclip className="mr-1 h-3.5 w-3.5" />
+                          첨부
+                        </Button>
+                      </div>
                     </TableCell>
                     <TableCell>
                       <div className="flex gap-1 flex-wrap">
@@ -387,14 +494,46 @@ export default function InquiriesPage() {
                         {PHASE_LABELS[item.phase] || item.phase}
                       </Badge>
                     </TableCell>
-                    <TableCell className="text-sm">{item.content}</TableCell>
-                    <TableCell>
+                    <TableCell className="text-sm align-top">
+                      <p className="whitespace-pre-wrap break-words">{item.content}</p>
+                      {(item.attachments ?? []).filter((a) => a.kind === "question").length > 0 && (
+                        <div className="mt-2 space-y-1">
+                          {item.attachments!
+                            .filter((a) => a.kind === "question")
+                            .map((a) => (
+                              <AttachmentItem
+                                key={a.id}
+                                attachment={a}
+                                canDelete={false}
+                                onDelete={() => handleDeleteInquiryAttachment(a.id)}
+                              />
+                            ))}
+                        </div>
+                      )}
+                    </TableCell>
+                    <TableCell className="align-top">
                       <Badge variant={STATUS_VARIANT[item.status]}>
                         {STATUS_LABELS[item.status]}
                       </Badge>
                     </TableCell>
-                    <TableCell className="text-sm">{item.reply || "-"}</TableCell>
-                    <TableCell className="text-sm">
+                    <TableCell className="text-sm align-top">
+                      <p className="whitespace-pre-wrap break-words">{item.reply || "-"}</p>
+                      {(item.attachments ?? []).filter((a) => a.kind === "reply").length > 0 && (
+                        <div className="mt-2 space-y-1">
+                          {item.attachments!
+                            .filter((a) => a.kind === "reply")
+                            .map((a) => (
+                              <AttachmentItem
+                                key={a.id}
+                                attachment={a}
+                                canDelete={false}
+                                onDelete={() => handleDeleteInquiryAttachment(a.id)}
+                              />
+                            ))}
+                        </div>
+                      )}
+                    </TableCell>
+                    <TableCell className="text-sm align-top">
                       {new Date(item.updated_at).toLocaleString("ko-KR")}
                     </TableCell>
                   </TableRow>
