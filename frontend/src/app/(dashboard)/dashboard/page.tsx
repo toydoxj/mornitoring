@@ -14,7 +14,6 @@ import {
 } from "@/components/ui/table"
 import apiClient from "@/lib/api/client"
 import { useAuthStore } from "@/stores/authStore"
-import { PHASE_LABELS } from "@/types"
 
 interface ReviewerStat {
   name: string
@@ -474,28 +473,13 @@ export default function DashboardPage() {
             </div>
           </div>
 
-          {/* 단계별 현황 */}
+          {/* 단계별 현황: 배포 → 예비검토 → 보완검토 → 완료 플로우 */}
           <Card>
             <CardHeader>
               <CardTitle>단계별 현황</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="grid gap-3 md:grid-cols-4">
-                {Object.entries(PHASE_LABELS).map(([key, label]) => {
-                  const count = stats.phase_counts[key] || 0
-                  if (count === 0 && !["doc_received", "preliminary", "none"].includes(key)) return null
-                  return (
-                    <div key={key} className="flex items-center justify-between rounded-md border p-3">
-                      <span className="text-sm">{label}</span>
-                      <span className="text-lg font-bold">{count}</span>
-                    </div>
-                  )
-                })}
-                <div className="flex items-center justify-between rounded-md border p-3">
-                  <span className="text-sm">미접수</span>
-                  <span className="text-lg font-bold">{stats.phase_counts["none"] || 0}</span>
-                </div>
-              </div>
+              <FlowStages stats={stats} />
             </CardContent>
           </Card>
         </>
@@ -750,6 +734,124 @@ function Bucket({
           </span>
         )}
       </div>
+    </div>
+  )
+}
+
+function FlowStages({ stats }: { stats: DashboardStats }) {
+  const phaseCounts = stats.phase_counts
+
+  const preliminaryReceived = phaseCounts["doc_received"] || 0
+  const preliminarySubmitted = phaseCounts["preliminary"] || 0
+  const preliminaryTotal = preliminaryReceived + preliminarySubmitted
+
+  const supplementRows = [1, 2, 3].map((n) => ({
+    nth: n,
+    received: phaseCounts[`supplement_${n}_received`] || 0,
+    submitted: phaseCounts[`supplement_${n}`] || 0,
+  }))
+  const supplementTotal = supplementRows.reduce(
+    (acc, r) => acc + r.received + r.submitted,
+    0,
+  )
+
+  const finalTotal =
+    stats.final_counts.pass +
+    stats.final_counts.pass_supplement +
+    stats.final_counts.fail +
+    stats.final_counts.fail_no_response +
+    stats.final_counts.excluded
+
+  return (
+    <div className="flex flex-col items-stretch gap-3 lg:flex-row">
+      <FlowStageCard title="배포" total={stats.assigned} accent="blue" items={[]} />
+      <FlowArrow />
+      <FlowStageCard
+        title="예비검토"
+        total={preliminaryTotal}
+        accent="slate"
+        items={[
+          { label: "접수", value: preliminaryReceived },
+          { label: "제출", value: preliminarySubmitted },
+        ]}
+      />
+      <FlowArrow />
+      <FlowStageCard
+        title="보완검토"
+        total={supplementTotal}
+        accent="amber"
+        items={supplementRows.flatMap((r) => [
+          { label: `${r.nth}차 접수`, value: r.received },
+          { label: `${r.nth}차 제출`, value: r.submitted },
+        ])}
+        itemCols={2}
+      />
+      <FlowArrow />
+      <FlowStageCard
+        title="완료"
+        total={finalTotal}
+        accent="green"
+        items={[
+          { label: "적합", value: stats.final_counts.pass },
+          { label: "보완적합", value: stats.final_counts.pass_supplement },
+          { label: "부적합", value: stats.final_counts.fail },
+          { label: "부적합(미회신)", value: stats.final_counts.fail_no_response },
+          { label: "대상제외", value: stats.final_counts.excluded },
+        ]}
+      />
+    </div>
+  )
+}
+
+function FlowArrow() {
+  return (
+    <div className="flex items-center justify-center text-slate-400">
+      <span className="text-2xl lg:rotate-0 rotate-90 select-none" aria-hidden>→</span>
+    </div>
+  )
+}
+
+function FlowStageCard({
+  title,
+  total,
+  items,
+  accent,
+  itemCols = 1,
+}: {
+  title: string
+  total: number
+  items: { label: string; value: number }[]
+  accent: BreakdownAccent
+  itemCols?: 1 | 2
+}) {
+  return (
+    <div
+      className={`
+        relative flex-1 overflow-hidden rounded-xl border bg-white p-4 transition-all hover:shadow-sm
+        before:absolute before:left-0 before:top-0 before:h-full before:w-1 ${BREAKDOWN_BAR[accent]}
+      `}
+    >
+      <p className="text-xs font-medium text-muted-foreground">{title}</p>
+      <div className="mt-2 flex items-baseline gap-1">
+        <p className={`text-3xl font-bold tracking-tight ${BREAKDOWN_VALUE[accent]}`}>
+          {total.toLocaleString()}
+        </p>
+        <span className="text-sm text-muted-foreground">건</span>
+      </div>
+      {items.length > 0 && (
+        <div
+          className={`mt-3 grid gap-x-3 gap-y-0.5 text-xs text-muted-foreground ${
+            itemCols === 2 ? "grid-cols-2" : "grid-cols-1"
+          }`}
+        >
+          {items.map((it) => (
+            <div key={it.label} className="flex items-center justify-between">
+              <span>{it.label}</span>
+              <strong className="text-slate-700">{it.value}</strong>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }
