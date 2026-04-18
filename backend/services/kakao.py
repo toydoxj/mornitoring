@@ -156,6 +156,30 @@ async def get_user_info(access_token: str) -> dict:
         return response.json()
 
 
+REQUIRED_KAKAO_SCOPES = ("profile_nickname", "friends", "talk_message")
+
+
+async def diagnose_and_cache_scopes(user: User, access_token: str, db: Session) -> bool | None:
+    """카카오 토큰으로 동의 항목 조회 후 user에 캐시 저장.
+
+    True=필수 scope 모두 동의, False=부족, None=조회 실패(네트워크 등).
+    OAuth 콜백/link-account 시점에 자동 호출돼 사용자가 매번 진단 안 해도 캐시 갱신.
+    실패해도 예외를 던지지 않아 로그인 흐름은 영향 없음.
+    """
+    try:
+        data = await get_user_scopes(access_token)
+    except Exception:
+        # 진단 실패는 로그인 자체를 막을 만한 오류는 아님
+        return None
+    scopes = data.get("scopes", []) or []
+    agreed_ids = {s.get("id") for s in scopes if s.get("agreed")}
+    ok = all(sid in agreed_ids for sid in REQUIRED_KAKAO_SCOPES)
+    user.kakao_scopes_ok = ok
+    user.kakao_scopes_checked_at = datetime.now(timezone.utc)
+    db.commit()
+    return ok
+
+
 async def get_user_scopes(access_token: str) -> dict:
     """현재 토큰에 동의된 scope 목록 조회
 

@@ -12,9 +12,13 @@ export interface User {
   kakao_linked?: boolean      // 카카오 로그인 완료
   kakao_matched?: boolean     // 친구 매칭 완료
   kakao_uuid?: string | null
-  // 카카오 동의 캐시 — ok/insufficient/unknown
+  // 카카오 동의 캐시 — ok/insufficient/unknown (관리자 목록 응답)
   kakao_scopes_status?: KakaoScopesStatus | null
   kakao_scopes_checked_at?: string | null
+  // /api/auth/me 응답: 본인 OAuth 콜백 시 자동 갱신된 동의 상태
+  kakao_scopes_ok?: boolean | null
+  kakao_reauthorize_url?: string | null
+  must_change_password?: boolean
   // 비밀번호 셋업 상태 (목록 응답에만 포함)
   setup_status?: SetupStatus | null
   last_invite_sent_at?: string | null

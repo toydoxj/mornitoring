@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect } from "react"
+import { useEffect, useState } from "react"
 import { useRouter, usePathname } from "next/navigation"
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
@@ -9,9 +9,6 @@ import { Separator } from "@/components/ui/separator"
 import { useAuthStore } from "@/stores/authStore"
 import { ROLE_LABELS } from "@/types"
 import apiClient from "@/lib/api/client"
-
-const SCOPE_CHECK_ROLES = ["team_leader", "chief_secretary", "secretary"]
-const SCOPE_CHECK_FLAG = "kakao_scope_checked"
 
 const NAV_ITEMS = [
   { href: "/dashboard", label: "대시보드", roles: ["team_leader", "chief_secretary", "secretary", "reviewer"] },
@@ -46,24 +43,26 @@ export default function DashboardLayout({
     }
   }, [isLoading, user, router])
 
-  // 카카오 scope 자동 체크 — 메시지 발송 권한이 필요한 역할만, 세션당 1회
-  useEffect(() => {
-    if (!user || !user.kakao_linked) return
-    if (!SCOPE_CHECK_ROLES.includes(user.role)) return
-    if (sessionStorage.getItem(SCOPE_CHECK_FLAG)) return
+  // 카카오 안내 배너 dismiss 상태 (sessionStorage 1회 lazy init)
+  const [bannerDismissed, setBannerDismissed] = useState<{
+    notLinked: boolean
+    insufficient: boolean
+  }>(() => {
+    if (typeof window === "undefined") return { notLinked: false, insufficient: false }
+    return {
+      notLinked: !!sessionStorage.getItem("kakao_banner_not_linked_dismissed"),
+      insufficient: !!sessionStorage.getItem("kakao_banner_insufficient_dismissed"),
+    }
+  })
 
-    sessionStorage.setItem(SCOPE_CHECK_FLAG, "1")
-    apiClient
-      .get<{ all_agreed: boolean; reauthorize_url: string | null }>(
-        "/api/kakao/me/scopes"
-      )
-      .then(({ data }) => {
-        if (!data.all_agreed && data.reauthorize_url) {
-          window.location.href = data.reauthorize_url
-        }
-      })
-      .catch((err) => console.error("카카오 scope 체크 실패:", err))
-  }, [user])
+  const dismissBanner = (key: "notLinked" | "insufficient") => {
+    const storageKey =
+      key === "notLinked"
+        ? "kakao_banner_not_linked_dismissed"
+        : "kakao_banner_insufficient_dismissed"
+    sessionStorage.setItem(storageKey, "1")
+    setBannerDismissed((prev) => ({ ...prev, [key]: true }))
+  }
 
   if (isLoading) {
     return (
@@ -111,6 +110,57 @@ export default function DashboardLayout({
           </div>
         </div>
       </header>
+
+      {/* 카카오 연동 안내 배너 */}
+      {!user.kakao_linked && !bannerDismissed.notLinked && (
+        <div className="border-b border-amber-200 bg-amber-50 text-amber-900">
+          <div className="mx-auto flex w-[90%] items-center justify-between gap-3 py-2 text-sm">
+            <span>
+              📱 카카오 알림을 받으려면 <strong>카카오 연동</strong>이 필요합니다. 로그아웃 후
+              카카오로 다시 로그인해주세요.
+            </span>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => dismissBanner("notLinked")}
+              className="text-amber-900"
+            >
+              닫기
+            </Button>
+          </div>
+        </div>
+      )}
+      {user.kakao_linked &&
+        user.kakao_scopes_ok === false &&
+        !bannerDismissed.insufficient && (
+          <div className="border-b border-red-200 bg-red-50 text-red-900">
+            <div className="mx-auto flex w-[90%] items-center justify-between gap-3 py-2 text-sm">
+              <span>
+                ⚠️ 카카오 알림을 받으려면 <strong>추가 동의</strong>가 필요합니다.
+              </span>
+              <div className="flex gap-2">
+                {user.kakao_reauthorize_url && (
+                  <Button
+                    size="sm"
+                    onClick={() => {
+                      window.location.href = user.kakao_reauthorize_url!
+                    }}
+                  >
+                    동의하러 가기
+                  </Button>
+                )}
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => dismissBanner("insufficient")}
+                  className="text-red-900"
+                >
+                  닫기
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
 
       {/* 본문 */}
       <main className="mx-auto w-[90%] py-6">{children}</main>

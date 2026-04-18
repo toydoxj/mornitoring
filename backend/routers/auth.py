@@ -218,6 +218,9 @@ async def kakao_callback(
         user.kakao_refresh_token = kakao_refresh
         user.kakao_token_expires_at = kakao_token_expires_at
         db.commit()
+        # 자동 동의 진단 + 캐시 갱신 (실패해도 로그인 흐름 영향 없음)
+        from services.kakao import diagnose_and_cache_scopes
+        await diagnose_and_cache_scopes(user, kakao_access, db)
         db.refresh(user)
         access_token = create_access_token({"sub": str(user.id), "role": user.role.value})
         return TokenResponse(access_token=access_token, must_change_password=False)
@@ -249,7 +252,7 @@ class LinkAccountRequest(BaseModel):
 
 
 @router.post("/link-account")
-def link_account(body: LinkAccountRequest, db: Session = Depends(get_db)):
+async def link_account(body: LinkAccountRequest, db: Session = Depends(get_db)):
     """기존 계정에 카카오 연결 (1회성 세션 + 중복 연결 방지)
 
     세션 소모(consumed_at 마킹)는 모든 검증(인증·충돌)을 통과한 뒤에만
@@ -318,6 +321,10 @@ def link_account(body: LinkAccountRequest, db: Session = Depends(get_db)):
             detail="이미 다른 사용자에게 연결된 카카오 계정입니다",
         )
     db.refresh(user)
+
+    # 자동 동의 진단 + 캐시 갱신 (실패해도 link 흐름 영향 없음)
+    from services.kakao import diagnose_and_cache_scopes
+    await diagnose_and_cache_scopes(user, user.kakao_access_token, db)
 
     access_token = create_access_token({"sub": str(user.id), "role": user.role.value})
     return TokenResponse(access_token=access_token, must_change_password=False)
