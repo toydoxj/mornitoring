@@ -241,7 +241,7 @@ async def send_notifications(
                 recipient_id=None,
                 channel="kakao",
                 template_type="doc_received",
-                title="예비검토서 접수 알림",
+                title="검토도서 접수 알림",
                 message=notif.get("message", ""),
                 is_sent=False,
                 error_message=f"발신자 카카오 토큰 오류: {exc}",
@@ -270,7 +270,7 @@ async def send_notifications(
             recipient_id=recipient_id,
             channel=channel,
             template_type="doc_received",
-            title="예비검토서 접수 알림",
+            title="검토도서 접수 알림",
             message=message,
             is_sent=is_sent,
             sent_at=datetime.now(timezone.utc) if is_sent else None,
@@ -293,7 +293,7 @@ async def send_notifications(
             try:
                 result = await send_message_to_self(
                     access_token=access_token,
-                    title="예비검토서 접수 알림",
+                    title="검토도서 접수 알림",
                     description=message,
                 )
             except Exception as e:
@@ -319,7 +319,7 @@ async def send_notifications(
             result = await send_message_to_friends(
                 access_token=access_token,
                 receiver_uuids=[user.kakao_uuid],
-                title="예비검토서 접수 알림",
+                title="검토도서 접수 알림",
                 description=message,
             )
         except Exception as e:

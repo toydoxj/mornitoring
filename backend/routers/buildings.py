@@ -94,6 +94,8 @@ class BuildingResponse(BaseModel):
     full_address: str | None = None
     latest_result: str | None = None
     latest_inappropriate: bool = False
+    # 접수 상태(_received)일 때 미제출 stage의 검토서 요청 예정일
+    report_due_date: str | None = None
 
     model_config = {"from_attributes": True}
 
@@ -151,6 +153,7 @@ def _to_response(building: Building, registered_names: set[str]) -> dict:
     # 최근 제출된 stage 판정/부적정 플래그 (호출부에서 셋업, 기본값 제공)
     data.setdefault("latest_result", None)
     data.setdefault("latest_inappropriate", False)
+    data.setdefault("report_due_date", None)
     return data
 
 
@@ -826,6 +829,8 @@ def my_review_buildings(
     # 각 건물별 최근 제출 stage (phase_order 최대, 제출일 존재) 조회
     building_ids = [b.id for b in buildings]
     latest_by_building: dict[int, ReviewStage] = {}
+    # 접수 상태(미제출 + due_date 보유)에서 phase_order 최대 stage
+    pending_by_building: dict[int, ReviewStage] = {}
     if building_ids:
         stages = (
             db.query(ReviewStage)
@@ -840,6 +845,20 @@ def my_review_buildings(
             if s.building_id not in latest_by_building:
                 latest_by_building[s.building_id] = s
 
+        pending_stages = (
+            db.query(ReviewStage)
+            .filter(
+                ReviewStage.building_id.in_(building_ids),
+                ReviewStage.report_submitted_at.is_(None),
+                ReviewStage.report_due_date.isnot(None),
+            )
+            .order_by(ReviewStage.building_id, ReviewStage.phase_order.desc())
+            .all()
+        )
+        for s in pending_stages:
+            if s.building_id not in pending_by_building:
+                pending_by_building[s.building_id] = s
+
     items = []
     for b in buildings:
         data = _to_response(b, registered_names)
@@ -847,6 +866,11 @@ def my_review_buildings(
         if latest:
             data["latest_result"] = latest.result.value if latest.result else None
             data["latest_inappropriate"] = bool(latest.inappropriate_review_needed)
+        # 접수 상태(current_phase가 _received로 끝남)일 때만 예정일 노출
+        if b.current_phase and b.current_phase.endswith("_received"):
+            pending = pending_by_building.get(b.id)
+            if pending and pending.report_due_date:
+                data["report_due_date"] = pending.report_due_date.isoformat()
         items.append(data)
     return BuildingListResponse(items=items, total=total)
 

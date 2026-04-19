@@ -79,6 +79,7 @@ export interface Building {
   full_address?: string | null
   latest_result?: string | null
   latest_inappropriate?: boolean
+  report_due_date?: string | null
 }
 
 export interface BuildingListResponse {

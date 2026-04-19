@@ -268,6 +268,7 @@ export default function MyReviewsPage() {
               <TableHead className="w-[80px] text-center">부적합</TableHead>
               <TableHead className="w-[120px] text-center">현재단계</TableHead>
               <TableHead className="w-[90px] text-center">최근판정</TableHead>
+              <TableHead className="w-[110px] text-center">제출 예정일</TableHead>
               <TableHead className="w-[100px] text-center">검토서</TableHead>
               <TableHead className="w-[80px] text-center">문의</TableHead>
             </TableRow>
@@ -275,13 +276,13 @@ export default function MyReviewsPage() {
           <TableBody>
             {isLoading ? (
               <TableRow>
-                <TableCell colSpan={10} className="h-32 text-center">
+                <TableCell colSpan={11} className="h-32 text-center">
                   로딩 중...
                 </TableCell>
               </TableRow>
             ) : data.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={10} className="h-32 text-center text-muted-foreground">
+                <TableCell colSpan={11} className="h-32 text-center text-muted-foreground">
                   배정된 검토 대상이 없습니다
                 </TableCell>
               </TableRow>
@@ -338,6 +339,13 @@ export default function MyReviewsPage() {
                       <Badge variant={RESULT_VARIANT[b.latest_result] || "outline"}>
                         {RESULT_LABELS[b.latest_result as ResultType] || b.latest_result}
                       </Badge>
+                    ) : (
+                      <span className="text-muted-foreground">-</span>
+                    )}
+                  </TableCell>
+                  <TableCell className="text-center text-sm">
+                    {b.report_due_date ? (
+                      b.report_due_date
                     ) : (
                       <span className="text-muted-foreground">-</span>
                     )}
