@@ -1,5 +1,6 @@
 """도서 접수/배포 라우터"""
 
+import logging
 from datetime import date, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -8,11 +9,102 @@ from sqlalchemy.orm import Session
 
 from database import get_db
 from models.building import Building
+from models.inappropriate_note import InappropriateNote
 from models.review_stage import ReviewStage, PhaseType
 from models.user import User, UserRole
 from routers.auth import require_roles
+from services.audit import log_action
+from services.s3_storage import delete_file
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# 단일 receive 호출에서 감사 로그 items에 보관할 최대 reset 건수.
+# 이 값을 넘으면 잘라서 저장하고 overflow_count로 합계만 남긴다.
+_RESET_AUDIT_ITEMS_CAP = 100
+
+
+def _has_review_history(db: Session, stage: ReviewStage) -> bool:
+    """검토서 제출 이력이 있는지 판정 (도서 재접수 시 초기화 여부 결정).
+
+    필드 외에 InappropriateNote 자식 행이 남아 있어도 "이력 있음"으로 간주한다.
+    """
+    if (
+        stage.report_submitted_at
+        or stage.reviewer_name
+        or stage.result
+        or stage.review_opinion
+        or stage.defect_type_1
+        or stage.defect_type_2
+        or stage.defect_type_3
+        or stage.s3_file_key
+        or stage.inappropriate_review_needed
+        or stage.inappropriate_decision
+        or stage.objection_filed
+        or stage.objection_content
+        or stage.objection_reason
+    ):
+        return True
+    has_note = (
+        db.query(InappropriateNote.id)
+        .filter(InappropriateNote.stage_id == stage.id)
+        .first()
+    )
+    return has_note is not None
+
+
+def _reset_review_history(db: Session, stage: ReviewStage) -> dict:
+    """ReviewStage의 검토서 제출 이력을 초기화한다.
+
+    - S3 파일이 있으면 best-effort 삭제 (실패는 warning 로그 후 계속 진행)
+    - 부적합 의견(InappropriateNote)도 하드 삭제 (검토서 사라지면 의미 상실)
+    - 반환값은 호출 단위 감사 로그용 메타데이터
+    """
+    old_s3_key = stage.s3_file_key
+    s3_deleted = False
+    if old_s3_key:
+        try:
+            s3_deleted = delete_file(old_s3_key)
+            if not s3_deleted:
+                logger.warning(
+                    "도서 재접수: S3 파일 삭제 실패 (없거나 권한 이슈) key=%s stage_id=%s",
+                    old_s3_key, stage.id,
+                )
+        except Exception as exc:
+            logger.warning(
+                "도서 재접수: S3 파일 삭제 중 예외 key=%s stage_id=%s err=%s",
+                old_s3_key, stage.id, exc,
+            )
+            s3_deleted = False
+
+    notes_deleted = (
+        db.query(InappropriateNote)
+        .filter(InappropriateNote.stage_id == stage.id)
+        .delete(synchronize_session=False)
+    )
+
+    stage.report_submitted_at = None
+    stage.reviewer_name = None
+    stage.result = None
+    stage.review_opinion = None
+    stage.defect_type_1 = None
+    stage.defect_type_2 = None
+    stage.defect_type_3 = None
+    stage.s3_file_key = None
+    stage.inappropriate_review_needed = False
+    stage.inappropriate_decision = None
+    stage.objection_filed = False
+    stage.objection_content = None
+    stage.objection_reason = None
+
+    return {
+        "stage_id": stage.id,
+        "phase": stage.phase.value if stage.phase else None,
+        "had_s3_key": bool(old_s3_key),
+        "s3_deleted": s3_deleted,
+        "notes_deleted": int(notes_deleted or 0),
+    }
 
 # 검토서 요청 예정일 기본 유예 기간(접수일 + DEFAULT_DUE_DAYS).
 DEFAULT_DUE_DAYS = 14
@@ -139,6 +231,8 @@ def receive_documents(
     # 4. 건물별 처리
     batch_count = 0
     skipped_final: list[str] = []
+    # 재접수로 검토서 이력이 초기화된 건들 (감사 로그용)
+    reset_records: list[dict] = []
     for mgmt_no in body.mgmt_nos:
         building = building_map.get(mgmt_no)
         if not building:
@@ -157,6 +251,11 @@ def receive_documents(
         key = (building.id, target_phase)
         stage = existing_stages.get(key)
         if stage:
+            # 같은 단계 재접수: 검토서 제출 이력이 있으면 초기화
+            if _has_review_history(db, stage):
+                meta = _reset_review_history(db, stage)
+                meta["mgmt_no"] = mgmt_no
+                reset_records.append(meta)
             stage.doc_received_at = received
             stage.report_due_date = due_date
         else:
@@ -177,6 +276,27 @@ def receive_documents(
         batch_count += 1
         if batch_count % 500 == 0:
             db.flush()
+
+    # 호출 단위 감사 로그 (재접수로 이력이 초기화된 건이 있을 때만)
+    if reset_records:
+        # items 페이로드가 비대해지지 않도록 최대 _RESET_AUDIT_ITEMS_CAP 건까지만 남긴다.
+        cap = _RESET_AUDIT_ITEMS_CAP
+        items_for_log = reset_records[:cap]
+        overflow_count = max(0, len(reset_records) - cap)
+        log_action(
+            db,
+            current_user.id,
+            "reset",
+            "review_stage",
+            None,
+            after_data={
+                "reason": "doc_re_received",
+                "received_date": received.isoformat(),
+                "reset_count": len(reset_records),
+                "items": items_for_log,
+                "overflow_count": overflow_count,
+            },
+        )
 
     db.commit()
 
