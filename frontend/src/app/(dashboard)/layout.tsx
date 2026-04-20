@@ -33,6 +33,7 @@ const NAV_ITEMS = [
   { href: "/reminders", label: "리마인드", roles: ["team_leader", "chief_secretary"] },
   { href: "/notifications", label: "알림 현황", roles: ["team_leader", "chief_secretary"] },
   { href: "/admin", label: "사용자 관리", roles: ["team_leader", "chief_secretary"] },
+  { href: "/audit/logins", label: "로그인 이력", roles: ["team_leader", "chief_secretary"] },
 ] as const
 
 export default function DashboardLayout({

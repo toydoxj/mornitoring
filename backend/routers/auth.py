@@ -3,7 +3,7 @@
 import logging
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 import bcrypt
 from jose import JWTError, jwt
@@ -15,10 +15,48 @@ from config import settings
 from database import get_db
 from logging_config import log_event
 from models.user import User, UserRole
+from services.audit import log_action
 
 router = APIRouter()
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
 logger = logging.getLogger(__name__)
+
+
+def _client_ip(request: Request | None) -> str | None:
+    """원 클라이언트 IP를 안전하게 추출.
+
+    settings.trusted_proxy_hops가 0이면 외부에서 주입한 X-Forwarded-For는
+    스푸핑 위험이 있어 절대 사용하지 않는다(request.client.host만 신뢰).
+    1 이상이면 XFF "client, p1, p2" 우측에서 hops 만큼 떼고 남은 마지막 값을
+    원 클라이언트로 간주한다 — Render/Vercel처럼 LB 1단만 거치면 1로 설정.
+    """
+    if request is None:
+        return None
+
+    hops = settings.trusted_proxy_hops
+    if hops > 0:
+        xff = request.headers.get("x-forwarded-for")
+        if xff:
+            parts = [p.strip() for p in xff.split(",") if p.strip()]
+            if parts:
+                # 우측 hops개는 신뢰 프록시. 그 안쪽(왼쪽)에서 마지막 값이 원 클라.
+                idx = max(0, len(parts) - hops - 1)
+                return parts[idx] or None
+        real_ip = request.headers.get("x-real-ip")
+        if real_ip:
+            return real_ip.strip() or None
+
+    if request.client and request.client.host:
+        return request.client.host
+    return None
+
+
+def _safe_log_action(db: Session, **kwargs) -> None:
+    """감사 로그 기록 실패가 인증 응답을 깨지 않도록 래핑."""
+    try:
+        log_action(db, **kwargs)
+    except Exception:
+        logger.exception("감사 로그 기록 실패: %s", kwargs.get("action"))
 
 
 # --- Pydantic 스키마 ---
@@ -143,19 +181,39 @@ def require_roles(*roles: UserRole):
 
 @router.post("/login", response_model=TokenResponse)
 def login(
+    request: Request,
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: Session = Depends(get_db),
 ):
     """이메일/비밀번호 로그인"""
+    ip = _client_ip(request)
     user = db.query(User).filter(User.email == form_data.username).first()
     if not user or not user.password_hash:
         log_event("warning", "auth_login_failed", email=form_data.username, reason="user_not_found")
+        _safe_log_action(
+            db, user_id=None, action="login_failed", target_type="user",
+            after_data={"email": form_data.username, "reason": "user_not_found", "provider": "password"},
+            ip_address=ip,
+        )
+        db.commit()
         raise HTTPException(status_code=401, detail="이메일 또는 비밀번호가 올바르지 않습니다")
     if not verify_password(form_data.password, user.password_hash):
         log_event("warning", "auth_login_failed", email=form_data.username, reason="bad_password")
+        _safe_log_action(
+            db, user_id=None, action="login_failed", target_type="user", target_id=user.id,
+            after_data={"email": form_data.username, "reason": "bad_password", "provider": "password"},
+            ip_address=ip,
+        )
+        db.commit()
         raise HTTPException(status_code=401, detail="이메일 또는 비밀번호가 올바르지 않습니다")
 
     access_token = create_access_token({"sub": str(user.id), "role": user.role.value})
+    _safe_log_action(
+        db, user_id=user.id, action="login", target_type="user", target_id=user.id,
+        after_data={"provider": "password"},
+        ip_address=ip,
+    )
+    db.commit()
     return TokenResponse(
         access_token=access_token,
         must_change_password=user.must_change_password,
@@ -171,6 +229,7 @@ def kakao_login():
 
 @router.get("/kakao/callback")
 async def kakao_callback(
+    request: Request,
     code: str,
     state: str | None = None,
     db: Session = Depends(get_db),
@@ -233,6 +292,12 @@ async def kakao_callback(
         await diagnose_and_cache_scopes(user, kakao_access, db)
         db.refresh(user)
         access_token = create_access_token({"sub": str(user.id), "role": user.role.value})
+        _safe_log_action(
+            db, user_id=user.id, action="login", target_type="user", target_id=user.id,
+            after_data={"provider": "kakao"},
+            ip_address=_client_ip(request),
+        )
+        db.commit()
         return TokenResponse(access_token=access_token, must_change_password=False)
 
     # 카카오 ID 매칭 실패 → 이메일+비번으로 /link-account 호출 필요
@@ -262,7 +327,11 @@ class LinkAccountRequest(BaseModel):
 
 
 @router.post("/link-account")
-async def link_account(body: LinkAccountRequest, db: Session = Depends(get_db)):
+async def link_account(
+    request: Request,
+    body: LinkAccountRequest,
+    db: Session = Depends(get_db),
+):
     """기존 계정에 카카오 연결 (1회성 세션 + 중복 연결 방지)
 
     세션 소모(consumed_at 마킹)는 모든 검증(인증·충돌)을 통과한 뒤에만
@@ -337,6 +406,12 @@ async def link_account(body: LinkAccountRequest, db: Session = Depends(get_db)):
     await diagnose_and_cache_scopes(user, user.kakao_access_token, db)
 
     access_token = create_access_token({"sub": str(user.id), "role": user.role.value})
+    _safe_log_action(
+        db, user_id=user.id, action="login", target_type="user", target_id=user.id,
+        after_data={"provider": "kakao_link"},
+        ip_address=_client_ip(request),
+    )
+    db.commit()
     return TokenResponse(access_token=access_token, must_change_password=False)
 
 

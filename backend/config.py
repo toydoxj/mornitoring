@@ -31,6 +31,12 @@ class Settings(BaseSettings):
     # 예: https://ksea-m.vercel.app
     frontend_base_url: str = "https://ksea-m.vercel.app"
 
+    # 신뢰하는 프록시 hop 수.
+    # 0 = X-Forwarded-For/X-Real-IP를 신뢰하지 않음(스푸핑 방지). request.client.host만 사용.
+    # 1 = 가장 마지막 hop이 trusted proxy(예: Render/Vercel LB) → XFF 우측에서 1개 안쪽이 원 클라.
+    # 운영(Render)에서 1로 설정하면 LB 헤더만 신뢰한다.
+    trusted_proxy_hops: int = 0
+
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     @field_validator("jwt_secret_key")
