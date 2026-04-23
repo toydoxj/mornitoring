@@ -13,6 +13,10 @@ from models.user import User, UserRole
 from routers.auth import require_roles
 from logging_config import log_event
 from services.kakao import ensure_valid_token, send_message_to_friends, send_message_to_self
+from services.scope import (
+    visible_building_ids_subquery,
+    visible_reviewer_user_ids,
+)
 
 router = APIRouter()
 
@@ -82,6 +86,27 @@ async def send_notifications(
     """
     if not body.recipient_ids:
         raise HTTPException(status_code=400, detail="수신자를 선택해주세요")
+
+    # 가시성 가드: 간사(조 배정)는 같은 조 검토위원에게만 발송 가능.
+    # 위반 user_id 가 하나라도 섞이면 요청 전체 거부 (감사·재시도 명확성).
+    visibility = visible_reviewer_user_ids(current_user)
+    if visibility is not None:
+        allowed_ids = {
+            uid for (uid,) in db.query(User.id).filter(visibility).all()
+        }
+        # 본인에게 보내기는 항상 허용.
+        allowed_ids.add(current_user.id)
+        invalid_ids = [
+            rid for rid in body.recipient_ids if rid not in allowed_ids
+        ]
+        if invalid_ids:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "message": "조 권한 외 수신자가 포함되어 있습니다",
+                    "invalid_recipient_ids": invalid_ids,
+                },
+            )
 
     try:
         access_token = await ensure_valid_token(current_user, db)
@@ -253,10 +278,13 @@ async def send_review_reminder_endpoint(
     body: ReviewReminderRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(
-        require_roles(UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY)
+        require_roles(UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY, UserRole.SECRETARY)
     ),
 ):
-    """검토위원 리마인드 알림 수동 발송 (팀장/총괄간사 전용).
+    """검토위원 리마인드 알림 수동 발송 (팀장/총괄간사/간사).
+
+    간사(조 배정)는 같은 조 검토위원 대상으로만 발송 가능.
+    `recipient_user_ids` 가 가시성 외라면 403 으로 거부.
 
     trigger 값:
       - `within_n_days`: 예정일이 today + days_ahead 이하인 미제출(초과 포함). UI 기본값.
@@ -264,7 +292,6 @@ async def send_review_reminder_endpoint(
       - `within_3_days` / `d_minus_1`: 하위 호환(cron 스크립트용).
 
     `dry_run=true` 이면 대상자 프리뷰만 반환하고 실제 발송·로그 기록은 하지 않는다.
-    `recipient_user_ids` 로 대상 검토위원을 좁힐 수 있다(체크박스 기반 선택 발송).
     응답에는 오늘(UTC) 성공 발송된 리마인드 수 `today_sent_count` 가 포함된다.
     """
     from services.review_reminder import send_review_reminders
@@ -273,6 +300,26 @@ async def send_review_reminder_endpoint(
         raise HTTPException(status_code=400, detail="trigger 값이 올바르지 않습니다")
     if body.trigger == "within_n_days" and body.days_ahead is not None and body.days_ahead < 0:
         raise HTTPException(status_code=400, detail="days_ahead 는 0 이상이어야 합니다")
+
+    # 명시적으로 받은 recipient_user_ids 가시성 검증
+    if body.recipient_user_ids:
+        visibility = visible_reviewer_user_ids(current_user)
+        if visibility is not None:
+            allowed_ids = {
+                uid for (uid,) in db.query(User.id).filter(visibility).all()
+            }
+            allowed_ids.add(current_user.id)
+            invalid_ids = [
+                rid for rid in body.recipient_user_ids if rid not in allowed_ids
+            ]
+            if invalid_ids:
+                raise HTTPException(
+                    status_code=403,
+                    detail={
+                        "message": "조 권한 외 수신자가 포함되어 있습니다",
+                        "invalid_recipient_ids": invalid_ids,
+                    },
+                )
 
     return await send_review_reminders(
         db, current_user, body.trigger,
@@ -289,11 +336,36 @@ def list_notifications(
     size: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db),
     current_user: User = Depends(
-        require_roles(UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY)
+        require_roles(UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY, UserRole.SECRETARY)
     ),
 ):
-    """알림 로그 목록 조회 (관리자용, 전체)"""
+    """알림 로그 목록 조회 (팀장/총괄간사/간사).
+
+    간사(조 배정)는 같은 조 검토위원에게 발송된 알림 + 같은 조 건물 관련
+    알림만 노출 (recipient 또는 related_building 기준).
+    """
+    from sqlalchemy import or_
+
     query = db.query(NotificationLog)
+
+    user_visibility = visible_reviewer_user_ids(current_user)
+    building_visibility_ids = visible_building_ids_subquery(current_user)
+    if user_visibility is not None or building_visibility_ids is not None:
+        from sqlalchemy import select as _select
+        # 가시 reviewer user_id 셋 + 가시 building_id 셋 중 하나라도 매치
+        visible_user_ids_select = (
+            _select(User.id).where(user_visibility)
+            if user_visibility is not None else None
+        )
+        clauses = []
+        if visible_user_ids_select is not None:
+            clauses.append(NotificationLog.recipient_id.in_(visible_user_ids_select))
+        if building_visibility_ids is not None:
+            clauses.append(
+                NotificationLog.related_building_id.in_(building_visibility_ids)
+            )
+        if clauses:
+            query = query.filter(or_(*clauses))
 
     if is_sent is not None:
         query = query.filter(NotificationLog.is_sent == is_sent)

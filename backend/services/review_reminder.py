@@ -60,13 +60,20 @@ def collect_targets(
     today: date | None = None,
     *,
     days_ahead: int | None = None,
+    sender: User | None = None,
 ) -> list[ReminderTarget]:
     """트리거 조건에 해당하는 검토서 미제출 건을 모은다.
 
     `days_ahead` 는 `trigger == "within_n_days"` 일 때 사용되며, 예정일이
     `today + days_ahead` 이하인 미제출 건을 반환한다 (과거 overdue 포함).
     지정되지 않으면 기본 3일.
+
+    `sender` 가 주어지면 그 발신자의 가시성에 맞춰 대상 건을 좁힌다
+    (간사 + group_no 인 경우 같은 조 검토위원만). cron/시스템 호출은
+    sender=None 으로 두면 기존 동작(전체)을 유지.
     """
+    from services.scope import building_visibility_filter
+
     anchor = today or date.today()
     base_query = (
         db.query(ReviewStage, Building, Reviewer, User)
@@ -79,6 +86,10 @@ def collect_targets(
             User.is_active.is_(True),
         )
     )
+    if sender is not None:
+        visibility = building_visibility_filter(sender)
+        if visibility is not None:
+            base_query = base_query.filter(visibility)
     if trigger == "d_minus_1":
         base_query = base_query.filter(
             ReviewStage.report_due_date == anchor + timedelta(days=1)
@@ -190,7 +201,7 @@ async def send_review_reminders(
     응답 dict 에 `today_sent_count` 필드를 포함해 UI 에서 "오늘 발송 횟수" 를
     표시할 수 있도록 한다.
     """
-    targets = collect_targets(db, trigger, today, days_ahead=days_ahead)
+    targets = collect_targets(db, trigger, today, days_ahead=days_ahead, sender=sender)
     if recipient_user_ids is not None:
         allow = set(recipient_user_ids)
         targets = [t for t in targets if t.reviewer_user_id in allow]

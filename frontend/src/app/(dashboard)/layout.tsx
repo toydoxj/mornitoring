@@ -30,8 +30,8 @@ const NAV_ITEMS = [
   { href: "/inquiries", label: "문의사항", roles: ["team_leader", "chief_secretary", "secretary"] },
   { href: "/inappropriate-review", label: "부적합 검토", roles: ["team_leader", "chief_secretary", "secretary"] },
   { href: "/statistics", label: "통계자료", roles: ["team_leader", "chief_secretary", "secretary"] },
-  { href: "/reminders", label: "리마인드", roles: ["team_leader", "chief_secretary"] },
-  { href: "/notifications", label: "알림 현황", roles: ["team_leader", "chief_secretary"] },
+  { href: "/reminders", label: "리마인드", roles: ["team_leader", "chief_secretary", "secretary"] },
+  { href: "/notifications", label: "알림 현황", roles: ["team_leader", "chief_secretary", "secretary"] },
   { href: "/admin", label: "사용자 관리", roles: ["team_leader", "chief_secretary"] },
   { href: "/audit/logins", label: "로그인 이력", roles: ["team_leader", "chief_secretary"] },
 ] as const
