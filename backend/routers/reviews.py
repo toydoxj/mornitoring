@@ -54,6 +54,11 @@ from services.phase_transition import (
     next_phase_for,
     transition_phase,
 )
+from services.scope import (
+    building_visibility_filter,
+    is_building_visible_to,
+    visible_building_ids_subquery,
+)
 
 router = APIRouter()
 
@@ -747,10 +752,14 @@ def list_inquiries(
         require_roles(UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY, UserRole.SECRETARY)
     ),
 ):
-    """문의사항 목록 조회"""
+    """문의사항 목록 조회. 간사(조 배정)는 같은 조 건물의 문의만 노출."""
     from models.inquiry import Inquiry, InquiryStatus
 
     query = db.query(Inquiry)
+
+    visible_ids = visible_building_ids_subquery(current_user)
+    if visible_ids is not None:
+        query = query.filter(Inquiry.building_id.in_(visible_ids))
 
     if status_filter == "active":
         query = query.filter(Inquiry.status.in_([InquiryStatus.OPEN, InquiryStatus.ASKING_AGENCY]))
@@ -846,11 +855,17 @@ def get_building_inquiries(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """건물별 문의사항 이력 조회 (REVIEWER는 본인 담당 건물만)"""
+    """건물별 문의사항 이력 조회.
+
+    가시성 정책: REVIEWER 는 본인 reviewer_id, SECRETARY(조 배정) 는 같은 조 건물,
+    팀장/총괄간사/조 미배정 간사는 전체. 위반 시 404.
+    """
     from models.inquiry import Inquiry, InquiryAttachment
 
     building = db.query(Building).filter(Building.mgmt_no == mgmt_no).first()
     if not building:
+        raise HTTPException(status_code=404, detail="건축물을 찾을 수 없습니다")
+    if not is_building_visible_to(current_user, building, db):
         raise HTTPException(status_code=404, detail="건축물을 찾을 수 없습니다")
     _ensure_reviewer_can_access_building(building, current_user, db)
 
@@ -1172,12 +1187,13 @@ def _address_of(b: Building) -> str | None:
 def list_inappropriate_reviews(
     decision: str | None = None,
     db: Session = Depends(get_db),
-    _: User = Depends(
+    current_user: User = Depends(
         require_roles(UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY, UserRole.SECRETARY)
     ),
 ):
     """부적합 검토 필요로 체크된 stage 목록 (간사 이상).
 
+    간사(조 배정)는 같은 조 건물의 stage 만 노출.
     decision: 'pending' | 'confirmed' | 'rejected' 필터링 (선택)
     """
     query = (
@@ -1185,6 +1201,10 @@ def list_inappropriate_reviews(
         .join(Building, ReviewStage.building_id == Building.id)
         .filter(ReviewStage.inappropriate_review_needed.is_(True))
     )
+
+    visibility = building_visibility_filter(current_user)
+    if visibility is not None:
+        query = query.filter(visibility)
 
     if decision == "pending":
         query = query.filter(

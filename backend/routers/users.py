@@ -6,6 +6,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
 from openpyxl import load_workbook
 from pydantic import BaseModel, EmailStr, Field
+from sqlalchemy import case
 from sqlalchemy.orm import Session
 
 from config import settings
@@ -225,6 +226,19 @@ def list_users(
     query = db.query(User)
     if role:
         query = query.filter(User.role == role)
+
+    # 정렬: 역할 순서(팀장→총괄간사→간사→검토위원) 후 이름 가나다.
+    # SQL CASE 로 직접 정렬해 페이지네이션이 정확히 적용되게 한다.
+    # (case({...}, value=...) 형태는 Enum 컬럼과의 매핑이 dialect 별로 차이가 있어
+    #  명시적 WHEN 비교 형태로 작성)
+    role_rank = case(
+        (User.role == UserRole.TEAM_LEADER, 0),
+        (User.role == UserRole.CHIEF_SECRETARY, 1),
+        (User.role == UserRole.SECRETARY, 2),
+        (User.role == UserRole.REVIEWER, 3),
+        else_=99,
+    )
+    query = query.order_by(role_rank, User.name)
 
     # 페이지네이션 전에 setup_status 필터를 적용하려면 모든 사용자에 대해
     # 상태를 계산해야 한다(60명 규모라 부담 없음). 필터 미지정 시는 페이지만 잘라낸다.

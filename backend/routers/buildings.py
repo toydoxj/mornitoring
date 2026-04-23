@@ -10,6 +10,12 @@ from models.reviewer import Reviewer
 from models.user import User, UserRole
 from routers.auth import get_current_user, require_roles
 from services.audit import log_action
+from services.scope import (
+    building_visibility_filter,
+    is_building_visible_to,
+    visible_building_ids_subquery,
+    visible_reviewer_user_ids,
+)
 
 router = APIRouter()
 
@@ -193,18 +199,33 @@ def get_stats(
     from models.inquiry import Inquiry, InquiryStatus
     from models.review_stage import ReviewStage, PhaseType
 
+    # 가시성 필터: 간사가 자기 조 데이터만 보도록.
+    # visibility=None 이면 무필터(팀장/총괄/조 미배정 간사).
+    visibility = building_visibility_filter(current_user)
+    visible_ids_select = visible_building_ids_subquery(current_user)
+
+    def _scoped(q):
+        return q.filter(visibility) if visibility is not None else q
+
+    def _scoped_by_building_id(q, building_id_col):
+        if visible_ids_select is None:
+            return q
+        return q.filter(building_id_col.in_(visible_ids_select))
+
     # 1) 총 건수 + 최종 완료 건수 (단일 쿼리)
-    totals_row = db.query(
+    totals_row = _scoped(db.query(
         sa_func.count(Building.id).label("total"),
         sa_func.count(Building.id).filter(Building.final_result.isnot(None)).label("completed"),
-    ).one()
+    )).one()
     total = totals_row.total or 0
     completed = totals_row.completed or 0
 
     # 1-1) 최종 판정 5분류 — 전체 현황 카드용
     final_rows = (
-        db.query(Building.final_result, sa_func.count(Building.id))
-        .filter(Building.final_result.isnot(None))
+        _scoped(
+            db.query(Building.final_result, sa_func.count(Building.id))
+            .filter(Building.final_result.isnot(None))
+        )
         .group_by(Building.final_result)
         .all()
     )
@@ -221,7 +242,10 @@ def get_stats(
 
     # 1-2) 문의사항 상태별 건수
     inquiry_rows = (
-        db.query(Inquiry.status, sa_func.count(Inquiry.id))
+        _scoped_by_building_id(
+            db.query(Inquiry.status, sa_func.count(Inquiry.id)),
+            Inquiry.building_id,
+        )
         .group_by(Inquiry.status)
         .all()
     )
@@ -234,8 +258,11 @@ def get_stats(
     # 1-3) 업로드된 검토서 수 (ReviewStage 누적) — 건물 phase 기반이 아니라
     # 제출 기록 자체를 센다. 건물이 보완 단계로 넘어가도 과거 예비 제출이 집계에 남는다.
     uploaded_rows = (
-        db.query(ReviewStage.phase, sa_func.count(ReviewStage.id))
-        .filter(ReviewStage.report_submitted_at.isnot(None))
+        _scoped_by_building_id(
+            db.query(ReviewStage.phase, sa_func.count(ReviewStage.id))
+            .filter(ReviewStage.report_submitted_at.isnot(None)),
+            ReviewStage.building_id,
+        )
         .group_by(ReviewStage.phase)
         .all()
     )
@@ -250,7 +277,7 @@ def get_stats(
 
     # 2) phase 별 건수
     phase_counts_raw = (
-        db.query(Building.current_phase, sa_func.count(Building.id))
+        _scoped(db.query(Building.current_phase, sa_func.count(Building.id)))
         .group_by(Building.current_phase)
         .all()
     )
@@ -300,20 +327,22 @@ def get_stats(
 
     # 3) 위원별 기본 집계
     reviewer_stats_raw = (
-        db.query(
-            Building.assigned_reviewer_name,
-            sa_func.count(Building.id).label("total"),
-            sa_func.count(Building.id).filter(Building.current_phase == "doc_received").label("doc_received"),
-            sa_func.count(Building.id).filter(Building.final_result.isnot(None)).label("completed"),
-            sa_func.sum(sa_func.coalesce(Building.gross_area, 0)).label("total_area"),
-            sa_func.count(Building.id).filter(Building.gross_area >= 1000).label("area_over_1000"),
-            sa_func.count(Building.id).filter(
-                (Building.is_special_structure == True) |
-                (Building.is_high_rise == True) |
-                (Building.is_multi_use == True)
-            ).label("high_risk"),
+        _scoped(
+            db.query(
+                Building.assigned_reviewer_name,
+                sa_func.count(Building.id).label("total"),
+                sa_func.count(Building.id).filter(Building.current_phase == "doc_received").label("doc_received"),
+                sa_func.count(Building.id).filter(Building.final_result.isnot(None)).label("completed"),
+                sa_func.sum(sa_func.coalesce(Building.gross_area, 0)).label("total_area"),
+                sa_func.count(Building.id).filter(Building.gross_area >= 1000).label("area_over_1000"),
+                sa_func.count(Building.id).filter(
+                    (Building.is_special_structure == True) |
+                    (Building.is_high_rise == True) |
+                    (Building.is_multi_use == True)
+                ).label("high_risk"),
+            )
+            .filter(Building.assigned_reviewer_name.isnot(None))
         )
-        .filter(Building.assigned_reviewer_name.isnot(None))
         .group_by(Building.assigned_reviewer_name)
         .order_by(Building.assigned_reviewer_name)
         .all()
@@ -323,22 +352,24 @@ def get_stats(
     # - building당 (phase=PRELIMINARY, submitted_at NOT NULL) review_stage 최대 1건이라는 도메인
     #   전제 하에 COUNT(ReviewStage.id)로 제출 건수를 집계한다. 가정이 깨지면 DISTINCT 필요.
     received_stats_raw = (
-        db.query(
-            Building.assigned_reviewer_name,
-            sa_func.count(Building.id).label("received"),
-            sa_func.count(ReviewStage.id).label("received_submitted"),
-        )
-        .outerjoin(
-            ReviewStage,
-            and_(
-                ReviewStage.building_id == Building.id,
-                ReviewStage.phase == PhaseType.PRELIMINARY,
-                ReviewStage.report_submitted_at.isnot(None),
-            ),
-        )
-        .filter(
-            Building.current_phase == "doc_received",
-            Building.assigned_reviewer_name.isnot(None),
+        _scoped(
+            db.query(
+                Building.assigned_reviewer_name,
+                sa_func.count(Building.id).label("received"),
+                sa_func.count(ReviewStage.id).label("received_submitted"),
+            )
+            .outerjoin(
+                ReviewStage,
+                and_(
+                    ReviewStage.building_id == Building.id,
+                    ReviewStage.phase == PhaseType.PRELIMINARY,
+                    ReviewStage.report_submitted_at.isnot(None),
+                ),
+            )
+            .filter(
+                Building.current_phase == "doc_received",
+                Building.assigned_reviewer_name.isnot(None),
+            )
         )
         .group_by(Building.assigned_reviewer_name)
         .all()
@@ -414,11 +445,12 @@ def list_buildings(
     """
     query = db.query(Building)
 
-    # REVIEWER는 본인 담당 건물만 강제 필터 (reviewer_id 매칭만 사용 — 동명이인 위험 회피)
+    # 가시성 필터: REVIEWER → 본인 reviewer_id, SECRETARY(조 배정) → 같은 조 검토위원,
+    # 그 외(팀장/총괄간사/조 미배정 간사) → 전체. 헬퍼가 None 이면 무필터.
+    visibility = building_visibility_filter(current_user)
+    if visibility is not None:
+        query = query.filter(visibility)
     is_reviewer = current_user.role == UserRole.REVIEWER
-    if is_reviewer:
-        reviewer_record = _get_reviewer_for(current_user, db)
-        query = query.filter(Building.reviewer_id == reviewer_record.id)
 
     if search:
         query = query.filter(
@@ -465,14 +497,17 @@ def get_reviewer_names(
         require_roles(UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY, UserRole.SECRETARY)
     ),
 ):
-    """배정된 검토위원 이름 목록 (관리자 전용 — 위원 enumeration 차단)"""
-    names = (
-        db.query(Building.assigned_reviewer_name)
-        .filter(Building.assigned_reviewer_name.isnot(None))
-        .distinct()
-        .order_by(Building.assigned_reviewer_name)
-        .all()
+    """배정된 검토위원 이름 목록 (관리자 전용 — 위원 enumeration 차단).
+
+    간사(조 배정)는 같은 조 검토위원이 담당하는 건물의 이름만 노출.
+    """
+    visibility = building_visibility_filter(current_user)
+    q = db.query(Building.assigned_reviewer_name).filter(
+        Building.assigned_reviewer_name.isnot(None)
     )
+    if visibility is not None:
+        q = q.filter(visibility)
+    names = q.distinct().order_by(Building.assigned_reviewer_name).all()
     return [n[0] for n in names]
 
 
@@ -518,13 +553,13 @@ def reviewer_schedule(
 
     today = date.today()
 
-    # 1) 활성 사용자 전체(팀장·총괄간사·간사·검토위원)를 0 초기화로 준비
-    reviewer_users = (
-        db.query(User)
-        .filter(User.is_active.is_(True))
-        .order_by(User.name)
-        .all()
-    )
+    # 1) 활성 사용자 전체(팀장·총괄간사·간사·검토위원)를 0 초기화로 준비.
+    #    간사(조 배정)는 같은 조 검토위원만 보도록 visibility 필터.
+    user_visibility = visible_reviewer_user_ids(current_user)
+    reviewer_users_q = db.query(User).filter(User.is_active.is_(True))
+    if user_visibility is not None:
+        reviewer_users_q = reviewer_users_q.filter(user_visibility)
+    reviewer_users = reviewer_users_q.order_by(User.name).all()
     by_user: dict[int, dict] = {
         u.id: {
             "reviewer_user_id": u.id,
@@ -544,7 +579,9 @@ def reviewer_schedule(
     }
 
     # 2) 미제출 stage 를 집계해 위 buckets 에 반영
-    rows = (
+    #    간사는 같은 조 건물의 stage 만 집계 (visibility).
+    visibility = building_visibility_filter(current_user)
+    rows_q = (
         db.query(ReviewStage, Building, User)
         .join(Building, ReviewStage.building_id == Building.id)
         .join(Reviewer, Building.reviewer_id == Reviewer.id)
@@ -554,8 +591,10 @@ def reviewer_schedule(
             ReviewStage.report_due_date.isnot(None),
             User.is_active.is_(True),
         )
-        .all()
     )
+    if visibility is not None:
+        rows_q = rows_q.filter(visibility)
+    rows = rows_q.all()
     for stage, _building, user in rows:
         # 간사/총괄간사가 Reviewer 행을 가진 경우에도 요약을 놓치지 않도록 setdefault
         info = by_user.setdefault(user.id, {
@@ -587,7 +626,7 @@ def reviewer_schedule(
         # delta > 3 은 in_progress 만 증가, 별도 열 없음
 
     # 3) 일정 준수율 집계 — 마감 경과(제출 or 초과 미제출) 건 중 정시 제출 비율
-    closure_rows = (
+    closure_q = (
         db.query(ReviewStage, User)
         .join(Building, ReviewStage.building_id == Building.id)
         .join(Reviewer, Building.reviewer_id == Reviewer.id)
@@ -596,8 +635,10 @@ def reviewer_schedule(
             ReviewStage.report_due_date.isnot(None),
             User.is_active.is_(True),
         )
-        .all()
     )
+    if visibility is not None:
+        closure_q = closure_q.filter(visibility)
+    closure_rows = closure_q.all()
     for stage, user in closure_rows:
         # 마감 경과 여부: 제출됐거나 예정일이 이미 지났음
         is_submitted = stage.report_submitted_at is not None
@@ -893,17 +934,18 @@ def get_building(
 ):
     """건축물 상세 조회.
 
-    REVIEWER는 본인 담당이 아닌 건물에 대해 존재 여부도 노출하지 않도록 404 반환.
+    가시성 정책:
+    - REVIEWER: 본인 reviewer_id 매칭 건물만
+    - SECRETARY(조 배정): 같은 조 검토위원이 담당하는 건물만
+    - 팀장/총괄간사/조 미배정 간사: 전체
+    가시성 위반 시 존재 자체를 노출하지 않기 위해 404 반환.
     """
     building = db.query(Building).filter(Building.id == building_id).first()
     if not building:
         raise HTTPException(status_code=404, detail="건축물을 찾을 수 없습니다")
 
-    if current_user.role == UserRole.REVIEWER:
-        reviewer_record = _get_reviewer_for(current_user, db)
-        if building.reviewer_id != reviewer_record.id:
-            # 존재 자체를 노출하지 않기 위해 403이 아닌 404
-            raise HTTPException(status_code=404, detail="건축물을 찾을 수 없습니다")
+    if not is_building_visible_to(current_user, building, db):
+        raise HTTPException(status_code=404, detail="건축물을 찾을 수 없습니다")
 
     return building
 

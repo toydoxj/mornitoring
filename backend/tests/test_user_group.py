@@ -115,3 +115,32 @@ def test_list_users_returns_resolved_group_no(
 
     assert items[secretary.id]["group_no"] == 2
     assert items[user_rev.id]["group_no"] == 6
+
+
+def test_list_users_sorted_by_role_then_name(
+    client, db_session, make_user, make_reviewer
+):
+    """역할 순서(팀장→총괄간사→간사→검토위원) + 이름 가나다."""
+    _, admin_h = make_user(UserRole.TEAM_LEADER, name="가팀장")
+    make_user(UserRole.REVIEWER, name="가검토")  # 검토위원이지만 Reviewer 행 없음
+    make_user(UserRole.SECRETARY, name="다간사")
+    make_user(UserRole.SECRETARY, name="가간사")
+    make_user(UserRole.CHIEF_SECRETARY, name="나총괄")
+    make_user(UserRole.CHIEF_SECRETARY, name="가총괄")
+    make_reviewer()  # name="검토위원N"
+
+    res = client.get("/api/users", headers=admin_h, params={"size": 100})
+    assert res.status_code == 200
+    items = res.json()["items"]
+    role_seq = [u["role"] for u in items]
+    # 역할 그룹이 끊어지지 않고 정의 순서대로 등장해야 한다.
+    assert role_seq == sorted(
+        role_seq,
+        key=lambda r: ["team_leader", "chief_secretary", "secretary", "reviewer"].index(r),
+    )
+    # 같은 역할 안에서는 이름 가나다.
+    by_role: dict[str, list[str]] = {}
+    for u in items:
+        by_role.setdefault(u["role"], []).append(u["name"])
+    for names in by_role.values():
+        assert names == sorted(names)
