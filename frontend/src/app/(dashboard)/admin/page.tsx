@@ -149,6 +149,7 @@ export default function AdminPage() {
     phone: "",
     role: "reviewer" as UserRole,
     is_active: true,
+    group_no: null as number | null,
   })
 
   // 카카오 매칭 관련
@@ -458,6 +459,7 @@ export default function AdminPage() {
       phone: user.phone || "",
       role: user.role,
       is_active: user.is_active,
+      group_no: user.group_no ?? null,
     })
   }
 
@@ -730,6 +732,7 @@ export default function AdminPage() {
               <TableHead>이름</TableHead>
               <TableHead>이메일</TableHead>
               <TableHead className="w-[100px]">역할</TableHead>
+              <TableHead className="w-[70px] text-center">조</TableHead>
               <TableHead className="w-[120px]">전화번호</TableHead>
               <TableHead className="w-[100px] text-center">카카오 로그인</TableHead>
               <TableHead className="w-[100px] text-center">친구 매칭</TableHead>
@@ -742,13 +745,13 @@ export default function AdminPage() {
           <TableBody>
             {isLoading ? (
               <TableRow>
-                <TableCell colSpan={12} className="h-32 text-center">
+                <TableCell colSpan={13} className="h-32 text-center">
                   로딩 중...
                 </TableCell>
               </TableRow>
             ) : users.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={12} className="h-32 text-center text-muted-foreground">
+                <TableCell colSpan={13} className="h-32 text-center text-muted-foreground">
                   등록된 사용자가 없습니다
                 </TableCell>
               </TableRow>
@@ -769,6 +772,9 @@ export default function AdminPage() {
                   <TableCell>{user.email}</TableCell>
                   <TableCell>
                     <Badge variant="outline">{ROLE_LABELS[user.role]}</Badge>
+                  </TableCell>
+                  <TableCell className="text-center text-sm">
+                    {user.group_no ?? <span className="text-muted-foreground">-</span>}
                   </TableCell>
                   <TableCell>{user.phone || "-"}</TableCell>
                   <TableCell className="text-center">
@@ -1213,6 +1219,29 @@ export default function AdminPage() {
                 value={editData.phone}
                 onChange={(e) => setEditData({ ...editData, phone: e.target.value })}
               />
+            </div>
+            <div className="space-y-2">
+              <Label>조 (1~7, 선택)</Label>
+              <select
+                className="w-full rounded-md border px-3 py-2 text-sm"
+                value={editData.group_no === null ? "" : String(editData.group_no)}
+                onChange={(e) =>
+                  setEditData({
+                    ...editData,
+                    group_no: e.target.value === "" ? null : Number(e.target.value),
+                  })
+                }
+              >
+                <option value="">미배정</option>
+                {[1, 2, 3, 4, 5, 6, 7].map((n) => (
+                  <option key={n} value={n}>
+                    {n}조
+                  </option>
+                ))}
+              </select>
+              <p className="text-xs text-muted-foreground">
+                팀장/총괄간사/일부 간사는 미배정으로 두면 됩니다.
+              </p>
             </div>
             <div className="flex items-center gap-2">
               <input

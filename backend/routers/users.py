@@ -5,7 +5,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
 from openpyxl import load_workbook
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy.orm import Session
 
 from config import settings
@@ -51,6 +51,36 @@ ROLE_MAP = {
 }
 
 
+def _resolve_group_no(user: User, reviewer_by_user: dict[int, Reviewer]) -> int | None:
+    """역할별 group_no 단일 진실 분기.
+
+    - REVIEWER: Reviewer.group_no (없으면 None)
+    - 그 외:    User.group_no
+    """
+    if user.role == UserRole.REVIEWER:
+        r = reviewer_by_user.get(user.id)
+        return r.group_no if r else None
+    return user.group_no
+
+
+def _set_group_no(db: Session, user: User, group_no: int | None) -> None:
+    """역할별 group_no 저장. 검토위원이면 Reviewer 행을 보장 + 갱신.
+
+    1~7 범위 검증은 Pydantic 단에서 끝났으므로 여기선 값만 반영.
+    """
+    if user.role == UserRole.REVIEWER:
+        reviewer = (
+            db.query(Reviewer).filter(Reviewer.user_id == user.id).first()
+        )
+        if reviewer is None:
+            reviewer = Reviewer(user_id=user.id, group_no=group_no)
+            db.add(reviewer)
+        else:
+            reviewer.group_no = group_no
+    else:
+        user.group_no = group_no
+
+
 # --- Pydantic 스키마 ---
 
 class UserCreate(BaseModel):
@@ -58,13 +88,20 @@ class UserCreate(BaseModel):
     email: EmailStr
     role: UserRole
     phone: str | None = None
+    # 조 (1~7). 검토위원이면 Reviewer.group_no에, 그 외엔 User.group_no에 저장.
+    group_no: int | None = Field(default=None, ge=1, le=7)
 
 
 class UserUpdate(BaseModel):
+    """사용자 정보 수정. 알 수 없는 필드는 명시적으로 거부."""
+    model_config = {"extra": "forbid"}
+
     name: str | None = None
     phone: str | None = None
     role: UserRole | None = None
     is_active: bool | None = None
+    # 조 (1~7 또는 null로 해제). 역할에 따라 적절한 곳에 저장됨.
+    group_no: int | None = Field(default=None, ge=1, le=7)
 
 
 class UserResponse(BaseModel):
@@ -85,6 +122,8 @@ class UserResponse(BaseModel):
     # setup_completed | pending | expired | not_invited
     setup_status: str | None = None
     last_invite_sent_at: str | None = None  # 마지막 토큰 발급 시각 (재발송 판단용)
+    # 조 번호 (1~7 또는 null). 검토위원은 Reviewer.group_no, 그 외엔 User.group_no 기준.
+    group_no: int | None = None
 
     model_config = {"from_attributes": True}
 
@@ -197,6 +236,7 @@ def list_users(
 
     user_ids = [u.id for u in candidates]
     latest_tokens: dict[int, PasswordSetupToken] = {}
+    reviewer_by_user: dict[int, Reviewer] = {}
     if user_ids:
         token_rows = (
             db.query(PasswordSetupToken)
@@ -210,6 +250,12 @@ def list_users(
         for t in token_rows:
             if t.user_id not in latest_tokens:
                 latest_tokens[t.user_id] = t
+
+        # 검토위원 group_no 통합 노출용 일괄 조회 (N+1 회피).
+        for r in (
+            db.query(Reviewer).filter(Reviewer.user_id.in_(user_ids)).all()
+        ):
+            reviewer_by_user[r.user_id] = r
 
     now = datetime.now(timezone.utc)
 
@@ -262,6 +308,7 @@ def list_users(
             ),
             setup_status=status,
             last_invite_sent_at=last_sent,
+            group_no=_resolve_group_no(u, reviewer_by_user),
         )
         for (u, status, last_sent) in items_all
     ]
@@ -288,13 +335,23 @@ def create_user(
         phone=body.phone,
         password_hash=get_password_hash(initial_password),
         must_change_password=True,
+        # 검토위원이 아닌 경우의 group_no 만 User 컬럼에 직접 저장.
+        group_no=body.group_no if body.role != UserRole.REVIEWER else None,
     )
     db.add(user)
     db.flush()
     # Reviewer 행 보장 + 배정된 건물 reviewer_id 자동 백필
     ensure_reviewer_link(db, user)
+    if body.role == UserRole.REVIEWER and body.group_no is not None:
+        # ensure_reviewer_link 직후라 Reviewer 행이 보장됨.
+        _set_group_no(db, user, body.group_no)
     db.commit()
     db.refresh(user)
+    reviewer = (
+        db.query(Reviewer).filter(Reviewer.user_id == user.id).first()
+        if user.role == UserRole.REVIEWER else None
+    )
+    reviewer_map: dict[int, Reviewer] = {reviewer.user_id: reviewer} if reviewer else {}
     return UserCreateResponse(
         id=user.id,
         name=user.name,
@@ -306,6 +363,7 @@ def create_user(
         kakao_matched=bool(user.kakao_uuid),
         kakao_uuid=user.kakao_uuid,
         initial_password=initial_password,
+        group_no=_resolve_group_no(user, reviewer_map),
     )
 
 
@@ -443,7 +501,19 @@ def get_user(
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다")
-    return user
+    reviewer = (
+        db.query(Reviewer).filter(Reviewer.user_id == user.id).first()
+        if user.role == UserRole.REVIEWER else None
+    )
+    reviewer_map: dict[int, Reviewer] = {reviewer.user_id: reviewer} if reviewer else {}
+    return UserResponse(
+        id=user.id, name=user.name, email=user.email, role=user.role,
+        phone=user.phone, is_active=user.is_active,
+        kakao_linked=bool(user.kakao_id),
+        kakao_matched=bool(user.kakao_uuid),
+        kakao_uuid=user.kakao_uuid,
+        group_no=_resolve_group_no(user, reviewer_map),
+    )
 
 
 @router.patch("/{user_id}", response_model=UserResponse)
@@ -461,12 +531,31 @@ def update_user(
         raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다")
 
     update_data = body.model_dump(exclude_unset=True)
+    # group_no 는 역할에 따라 Reviewer.group_no 또는 User.group_no 에 저장.
+    group_no_provided = "group_no" in update_data
+    new_group_no = update_data.pop("group_no", None) if group_no_provided else None
+
     for key, value in update_data.items():
         setattr(user, key, value)
+    if group_no_provided:
+        _set_group_no(db, user, new_group_no)
 
     db.commit()
     db.refresh(user)
-    return user
+    # 응답에 통합 group_no 노출 — 갱신 후 reviewer를 다시 조회.
+    reviewer = (
+        db.query(Reviewer).filter(Reviewer.user_id == user.id).first()
+        if user.role == UserRole.REVIEWER else None
+    )
+    reviewer_map: dict[int, Reviewer] = {reviewer.user_id: reviewer} if reviewer else {}
+    return UserResponse(
+        id=user.id, name=user.name, email=user.email, role=user.role,
+        phone=user.phone, is_active=user.is_active,
+        kakao_linked=bool(user.kakao_id),
+        kakao_matched=bool(user.kakao_uuid),
+        kakao_uuid=user.kakao_uuid,
+        group_no=_resolve_group_no(user, reviewer_map),
+    )
 
 
 @router.delete("/{user_id}", status_code=204)

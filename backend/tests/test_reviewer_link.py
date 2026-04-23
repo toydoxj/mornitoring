@@ -75,7 +75,7 @@ def test_skips_linking_when_duplicate_active_user(db_session, make_user):
 def test_does_not_duplicate_existing_reviewer(db_session, make_user):
     """이미 Reviewer 행이 있는 user는 중복 생성하지 않고 연결만 수행."""
     user, _ = make_user(UserRole.REVIEWER, name="이공우")
-    existing = Reviewer(user_id=user.id, group_no="A")
+    existing = Reviewer(user_id=user.id, group_no=1)
     db_session.add(existing)
     db_session.add(Building(
         mgmt_no="EXIST-001",

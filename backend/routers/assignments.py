@@ -26,7 +26,7 @@ class ReviewerResponse(BaseModel):
     id: int
     user_id: int
     user_name: str
-    group_no: str | None = None
+    group_no: int | None = None
 
     model_config = {"from_attributes": True}
 

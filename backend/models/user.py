@@ -3,7 +3,7 @@
 import enum
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Enum, Index, String, func, text
+from sqlalchemy import Boolean, CheckConstraint, DateTime, Enum, Index, Integer, String, func, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from database import Base
@@ -27,6 +27,12 @@ class User(Base):
             unique=True,
             postgresql_where=text("kakao_id IS NOT NULL"),
         ),
+        # 조는 1~7만 허용 (간사 조 편성용; 팀장/총괄간사/일부 간사는 NULL).
+        # 검토위원의 조는 Reviewer.group_no가 SoT — User.group_no는 검토위원 역할에선 사용 안 함.
+        CheckConstraint(
+            "group_no IS NULL OR (group_no >= 1 AND group_no <= 7)",
+            name="ck_users_group_no_range",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -46,6 +52,9 @@ class User(Base):
     password_hash: Mapped[str | None] = mapped_column(String(200))
     must_change_password: Mapped[bool] = mapped_column(Boolean, default=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # 간사 조 번호 (1~7 또는 NULL). 검토위원은 Reviewer.group_no가 SoT라
+    # 이 컬럼을 사용하지 않는다 (조회 응답에서는 두 컬럼 중 적절한 쪽을 노출).
+    group_no: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

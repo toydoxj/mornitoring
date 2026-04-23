@@ -134,7 +134,7 @@ def make_reviewer(db_session):
 
     counter = {"i": 0}
 
-    def _make(group_no: str | None = None) -> tuple[User, Reviewer, dict]:
+    def _make(group_no: int | None = None) -> tuple[User, Reviewer, dict]:
         counter["i"] += 1
         i = counter["i"]
         user = _create_user(

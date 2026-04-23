@@ -22,6 +22,8 @@ export interface User {
   // 비밀번호 셋업 상태 (목록 응답에만 포함)
   setup_status?: SetupStatus | null
   last_invite_sent_at?: string | null
+  // 조 (1~7 또는 null). 검토위원이면 Reviewer.group_no, 그 외엔 User.group_no.
+  group_no?: number | null
 }
 
 export type KakaoScopesStatus = "ok" | "insufficient" | "unknown"
