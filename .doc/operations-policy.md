@@ -70,9 +70,68 @@
 
 ## 백업 / 복구
 
-- **DB**: Supabase 자동 백업
-- **S3**: 검토서 파일 (lifecycle 정책 운영 전 확인 필요)
-- **시크릿**: `JWT_SECRET_KEY`, AWS, 카카오 client secret — 모두 운영 직전 한 차례 회전 완료
+상세 절차·복구 명령·리허설 체크리스트: **[`backup-recovery.md`](./backup-recovery.md)**
+
+- **DB 1차**: Supabase 자동 일일 스냅샷 (벤더 내부)
+- **DB 2차**: GitHub Actions(`.github/workflows/db-backup.yml`) → 매일 KST 03:10 `pg_dump -Fc` → AWS S3 오프사이트 업로드 (SHA-256 + 메타 JSON 동반)
+  - 배포/마이그레이션 직전에는 Actions → Run workflow 로 `label=pre-migration` 수동 백업 권장
+- **S3 첨부 버킷**: Versioning ON + Lifecycle (noncurrent 90일 → Glacier → 1년 Expire)
+- **시크릿**: `JWT_SECRET_KEY`, AWS, 카카오 client secret — 운영 직전 1회 회전 완료. 백업 전용 IAM 키는 별도 발급·최소권한(PutObject only)
+- **RPO/RTO 목표**: RPO 24h · RTO 4h (PITR 미도입 기준). PITR 도입 결정은 P1.
+- **리허설**: 분기 1회, 담당자 로테이션, 결과는 `.doc/backup-drill-YYYYQn.md` 로 기록
+
+## Supabase RLS (Row-Level Security)
+
+Supabase는 PostgREST를 통해 `public` 스키마를 anon/authenticated 역할로 자동 노출한다. 우리는 백엔드(Render FastAPI)가 슈퍼유저(`postgres`, BYPASSRLS)로 직접 접속하므로 RLS 자체에는 영향을 받지 않지만, **RLS가 꺼진 테이블은 anon key + 프로젝트 URL 만으로 외부에서 CRUD 가능**하다.
+
+- **정책**: `public` 스키마의 모든 테이블에 `ENABLE + FORCE ROW LEVEL SECURITY`. 정책(POLICY)은 일부러 추가하지 않아 anon/authenticated는 전부 차단.
+- **자동 적용**: alembic revision `c4d8b71f9a05` (1회) + `alembic/env.py` 의 post-upgrade 훅이 매 `alembic upgrade` 종료 시 누락 테이블을 idempotent 하게 ENABLE+FORCE. 훅은 별도 `connection.begin()` 트랜잭션을 시작해 commit 보장. 훅 실패 시 기본은 stderr 경고만 남기지만, 운영에서 `STRICT_RLS_HOOK=1` 환경변수 설정 시 예외를 raise 해 deploy 자체를 실패시킨다 (보안 드리프트 즉시 탐지).
+- **백엔드 연결 계정 요건**: `BYPASSRLS` 권한 보유. Supabase 기본 `postgres` 역할은 보유함. 운영 점검:
+  ```sql
+  SELECT current_user, rolbypassrls
+  FROM pg_roles
+  WHERE rolname = current_user;
+  ```
+- **RLS 상태 점검 SQL** (일반 테이블 'r' + partitioned 부모 'p' 모두 검사. 결과 0행이 정상):
+  ```sql
+  SELECT c.relname,
+         c.relkind,
+         c.relrowsecurity  AS rls_enabled,
+         c.relforcerowsecurity AS rls_forced
+  FROM pg_class c
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+  WHERE n.nspname = 'public'
+    AND c.relkind IN ('r', 'p')
+    AND (c.relrowsecurity = false OR c.relforcerowsecurity = false);
+  ```
+- **anon/authenticated 권한 점검 SQL** (RLS와 별도로 PostgREST가 호출 가능한 표면 확인):
+  ```sql
+  -- 1) 테이블 권한
+  SELECT grantee, table_name, privilege_type
+  FROM information_schema.role_table_grants
+  WHERE table_schema = 'public'
+    AND grantee IN ('anon', 'authenticated')
+  ORDER BY table_name, privilege_type;
+
+  -- 2) 스키마 USAGE / CREATE 권한 (드리프트 점검)
+  SELECT n.nspname, r.rolname, has_schema_privilege(r.rolname, n.nspname, 'USAGE')  AS usage_ok,
+                                has_schema_privilege(r.rolname, n.nspname, 'CREATE') AS create_ok
+  FROM pg_namespace n
+  CROSS JOIN pg_roles r
+  WHERE n.nspname = 'public' AND r.rolname IN ('anon', 'authenticated');
+
+  -- 3) SECURITY DEFINER 함수 + 실 EXECUTE 권한 보유자 (RLS 우회 위험)
+  SELECT n.nspname AS schema, p.proname, p.prosecdef AS security_definer,
+         pg_get_userbyid(p.proowner) AS owner,
+         (aclexplode(coalesce(p.proacl, acldefault('f', p.proowner)))).grantee::regrole AS grantee,
+         (aclexplode(coalesce(p.proacl, acldefault('f', p.proowner)))).privilege_type
+  FROM pg_proc p
+  JOIN pg_namespace n ON n.oid = p.pronamespace
+  WHERE n.nspname = 'public';
+  ```
+- **비상 우회**: 일시적으로 PostgREST 노출까지 차단하려면 `REVOKE ALL ON SCHEMA public FROM anon, authenticated;` (적용 시 Supabase Studio Table Editor도 익명 조회 못 함).
+- **자동 downgrade 금지**: `c4d8b71f9a05` revision 의 `downgrade()` 는 `NotImplementedError` 를 던진다. 일괄 RLS 해제는 보안 사고와 직결되므로 운영자가 의도적으로 위 점검 SQL을 역방향(`DISABLE ROW LEVEL SECURITY`)으로 작성해 수동 실행해야 한다.
+- **anon/service_role key 회전**: Supabase Dashboard → Settings → API. 회전 시 외부 노출 가능성 차단.
 
 ## 잔여 결정 사항
 
