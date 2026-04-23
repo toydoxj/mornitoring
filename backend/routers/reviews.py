@@ -49,6 +49,11 @@ from services.s3_storage import (
     delete_file,
 )
 from services.audit import log_action
+from services.phase_transition import (
+    InvalidPhaseTransition,
+    next_phase_for,
+    transition_phase,
+)
 
 router = APIRouter()
 
@@ -469,8 +474,15 @@ async def upload_review(
             )
             db.add(stage)
 
-        # 5. 건축물 현재 단계 업데이트
-        building.current_phase = actual_phase
+        # 5. 건축물 current_phase 전환 (매트릭스 UPLOAD).
+        # 출발 phase가 _received일 때만 다음 단계로 전환한다. 그 외(이미 제출 완료
+        # 상태에서의 검토서 재업로드 등)는 phase 그대로 유지하고 stage 데이터만 갱신.
+        target_after_upload = next_phase_for("upload", building.current_phase)
+        if target_after_upload:
+            transition_phase(
+                db, building, to_phase=target_after_upload, trigger="upload",
+                actor_user_id=current_user.id,
+            )
 
         # 6. 건축물 정보 변경 적용 — detect를 먼저 호출해야 변경 전 값과 비교 가능.
         # apply가 먼저 setattr하면 _detect_changes의 getattr이 new_val을 읽어 변경이 사라짐.
@@ -697,7 +709,14 @@ async def update_inquiry(
         if not building:
             raise HTTPException(status_code=404, detail="건축물을 찾을 수 없습니다")
         if building.current_phase != new_phase:
-            building.current_phase = new_phase
+            try:
+                transition_phase(
+                    db, building, to_phase=new_phase, trigger="manual",
+                    actor_user_id=current_user.id,
+                    reason=f"inquiry_reply:#{inquiry.id}",
+                )
+            except InvalidPhaseTransition as exc:
+                raise HTTPException(status_code=400, detail=str(exc))
             phase_changed = True
         inquiry.status = InquiryStatus.COMPLETED
     elif body.status:
@@ -1081,15 +1100,22 @@ def advance_phase(
         db.commit()
         return {"message": "최종 판정 완료", "final_result": current_stage.result.value}
 
-    # 보완 필요 시 다음 단계로 전환
+    # 보완 필요 시 다음 단계로 전환 (간사 수동 → MANUAL 트리거)
     if can_advance(current_stage.result):
         next_phase = get_next_phase(current_phase_type)
         if not next_phase:
             raise HTTPException(status_code=400, detail="더 이상 진행할 단계가 없습니다")
-
-        building.current_phase = next_phase.value
+        next_phase_str = next_phase.value if hasattr(next_phase, "value") else str(next_phase)
+        try:
+            transition_phase(
+                db, building, to_phase=next_phase_str, trigger="manual",
+                actor_user_id=current_user.id,
+                reason="advance_button",
+            )
+        except InvalidPhaseTransition as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
         db.commit()
-        return {"message": f"다음 단계로 전환: {next_phase.value}", "next_phase": next_phase.value}
+        return {"message": f"다음 단계로 전환: {next_phase_str}", "next_phase": next_phase_str}
 
     raise HTTPException(status_code=400, detail="단계 전환 조건이 충족되지 않았습니다")
 

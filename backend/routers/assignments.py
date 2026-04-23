@@ -70,7 +70,12 @@ def assign_reviewer(
 
     building.reviewer_id = reviewer.id
     if not building.current_phase:
-        building.current_phase = "assigned"
+        # 매트릭스 #1: 신규 배정 시 INITIAL → "assigned"
+        from services.phase_transition import transition_phase
+        transition_phase(
+            db, building, to_phase="assigned", trigger="initial",
+            actor_user_id=current_user.id,
+        )
     db.commit()
     return {"message": f"관리번호 {building.mgmt_no}에 검토위원이 배정되었습니다"}
 

@@ -2,7 +2,7 @@ import sys
 import os
 from logging.config import fileConfig
 
-from sqlalchemy import engine_from_config
+from sqlalchemy import engine_from_config, text
 from sqlalchemy import pool
 
 from alembic import context
@@ -75,7 +75,8 @@ def _ensure_rls_on_public_tables(connection) -> None:
     strict = os.environ.get("STRICT_RLS_HOOK", "").strip() in ("1", "true", "True")
     try:
         with connection.begin():
-            connection.exec_driver_sql(_ENSURE_RLS_SQL)
+            # text()로 감싸 SQLAlchemy 2.x의 빈 parameters 처리(immutabledict) 이슈 회피.
+            connection.execute(text(_ENSURE_RLS_SQL))
     except Exception as exc:
         msg = f"[alembic post-upgrade] RLS 자동 적용 실패: {exc}"
         if strict:

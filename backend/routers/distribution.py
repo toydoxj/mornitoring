@@ -14,6 +14,7 @@ from models.review_stage import ReviewStage, PhaseType
 from models.user import User, UserRole
 from routers.auth import require_roles
 from services.audit import log_action
+from services.phase_transition import transition_phase
 from services.s3_storage import delete_file
 
 logger = logging.getLogger(__name__)
@@ -245,8 +246,20 @@ def receive_documents(
             skipped_final.append(mgmt_no)
             continue
 
-        # building.current_phase 업데이트
-        building.current_phase = _STAGE_TO_RECEIVED[target_phase]
+        # building.current_phase 업데이트 (매트릭스 RECEIVE).
+        # 신규 등록 직후(phase 없음)에 도서접수가 들어오면 INITIAL("assigned")을
+        # 먼저 통과시켜 매트릭스 일관성을 유지한다.
+        if not building.current_phase:
+            transition_phase(
+                db, building, to_phase="assigned", trigger="initial",
+                actor_user_id=current_user.id,
+            )
+        new_phase = _STAGE_TO_RECEIVED[target_phase]
+        # 같은 _received로의 재접수는 from==to → no-op (로그 미생성).
+        transition_phase(
+            db, building, to_phase=new_phase, trigger="receive",
+            actor_user_id=current_user.id,
+        )
 
         key = (building.id, target_phase)
         stage = existing_stages.get(key)

@@ -1,6 +1,6 @@
 """건축물(관리대장) 라우터"""
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session, selectinload
 
@@ -41,6 +41,17 @@ class BuildingCreate(BaseModel):
 
 
 class BuildingUpdate(BaseModel):
+    """건축물 일반 정보 수정.
+
+    `current_phase` 는 의도적으로 포함하지 않는다. phase 전환은 도메인 정책상
+    8개 매트릭스 외에 발생해선 안 되며, 별도 엔드포인트
+    `POST /buildings/{id}/phase` 로 분리되어 있다.
+
+    extra='forbid' 로 알 수 없는 필드(특히 `current_phase`)가 들어오면
+    422 로 명시적으로 거부 — 클라이언트 버그를 조용히 무시하지 않기 위함.
+    """
+    model_config = {"extra": "forbid"}
+
     building_name: str | None = None
     sido: str | None = None
     sigungu: str | None = None
@@ -52,7 +63,6 @@ class BuildingUpdate(BaseModel):
     floors_below: int | None = None
     high_risk_type: str | None = None
     reviewer_id: int | None = None
-    current_phase: str | None = None
     final_result: str | None = None
     remarks: str | None = None
 
@@ -907,7 +917,7 @@ def update_building(
         require_roles(UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY, UserRole.SECRETARY)
     ),
 ):
-    """건축물 정보 수정"""
+    """건축물 정보 수정 (current_phase 제외 — 별도 엔드포인트 사용)"""
     building = db.query(Building).filter(Building.id == building_id).first()
     if not building:
         raise HTTPException(status_code=404, detail="건축물을 찾을 수 없습니다")
@@ -918,6 +928,56 @@ def update_building(
 
     db.commit()
     db.refresh(building)
+    return building
+
+
+class PhaseChangeRequest(BaseModel):
+    to_phase: str
+    reason: str | None = None  # 운영 사유(권장)
+
+
+@router.post("/{building_id}/phase", response_model=BuildingResponse)
+def change_building_phase(
+    building_id: int,
+    body: PhaseChangeRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(
+        require_roles(UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY)
+    ),
+):
+    """간사 수동 단계 변경 (MANUAL 트리거).
+
+    매트릭스 안의 (from, to) 쌍만 허용. 임의 점프/역행 시 400.
+    모든 변경은 phase_transition_logs 에 영구 기록.
+    """
+    from services.phase_transition import (
+        InvalidPhaseTransition,
+        transition_phase,
+    )
+
+    building = db.query(Building).filter(Building.id == building_id).first()
+    if not building:
+        raise HTTPException(status_code=404, detail="건축물을 찾을 수 없습니다")
+
+    ip = None
+    if request.client and request.client.host:
+        ip = request.client.host
+
+    try:
+        log = transition_phase(
+            db, building, to_phase=body.to_phase.strip(), trigger="manual",
+            actor_user_id=current_user.id, ip_address=ip,
+            reason=body.reason or "manual_change",
+        )
+    except InvalidPhaseTransition as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    db.commit()
+    db.refresh(building)
+    if log is None:
+        # from == to 인 경우 — 사용자에게 알리되 200으로 반환 (멱등 처리)
+        pass
     return building
 
 
