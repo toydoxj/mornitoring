@@ -45,13 +45,13 @@ export default function RemindersPage() {
   const router = useRouter()
   const user = useAuthStore((s) => s.user)
   const isUserLoading = useAuthStore((s) => s.isLoading)
-  // 리마인드 발송은 팀장/총괄간사 전용 (간사는 접근 금지)
-  const isAdmin =
-    !!user && ["team_leader", "chief_secretary"].includes(user.role)
+  // 리마인드 발송 권한: 팀장/총괄간사/간사 (간사는 같은 조 검토위원 대상으로만 발송 가능 — 백엔드에서 가시성 검증)
+  const canAccess =
+    !!user && ["team_leader", "chief_secretary", "secretary"].includes(user.role)
 
   useEffect(() => {
-    if (!isUserLoading && user && !isAdmin) router.replace("/dashboard")
-  }, [isUserLoading, user, isAdmin, router])
+    if (!isUserLoading && user && !canAccess) router.replace("/dashboard")
+  }, [isUserLoading, user, canAccess, router])
 
   const [trigger, setTrigger] = useState<Trigger>("within_n_days")
   const [daysAhead, setDaysAhead] = useState<number>(3)
@@ -89,8 +89,8 @@ export default function RemindersPage() {
   }, [])
 
   useEffect(() => {
-    if (isAdmin) fetchPreview("within_n_days", 3)
-  }, [isAdmin, fetchPreview])
+    if (canAccess) fetchPreview("within_n_days", 3)
+  }, [canAccess, fetchPreview])
 
   const handleTriggerChange = (t: Trigger) => {
     setTrigger(t)
@@ -164,7 +164,7 @@ export default function RemindersPage() {
   if (isUserLoading || !user) {
     return <div className="flex justify-center py-20 text-muted-foreground">로딩 중...</div>
   }
-  if (!isAdmin) return null
+  if (!canAccess) return null
 
   return (
     <div className="space-y-6">
