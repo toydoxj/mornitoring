@@ -36,7 +36,7 @@ export default function ChangePasswordPage() {
         current_password: currentPassword,
         new_password: newPassword,
       })
-      router.push("/buildings")
+      router.push("/dashboard")
     } catch (err: unknown) {
       const axiosErr = err as { response?: { data?: { detail?: string } } }
       setError(axiosErr.response?.data?.detail || "비밀번호 변경 실패")

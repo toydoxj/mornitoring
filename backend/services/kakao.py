@@ -295,8 +295,8 @@ async def send_message_to_self(
         "object_type": "text",
         "text": f"[{title}]\n{description}",
         "link": {
-            "web_url": link_url or "https://ksea-m.vercel.app",
-            "mobile_web_url": link_url or "https://ksea-m.vercel.app",
+            "web_url": link_url or "https://moni.ksea.or.kr",
+            "mobile_web_url": link_url or "https://moni.ksea.or.kr",
         },
     }
 
@@ -340,8 +340,8 @@ async def send_message_to_friends(
         "object_type": "text",
         "text": f"[{title}]\n{description}",
         "link": {
-            "web_url": link_url or "https://ksea-m.vercel.app",
-            "mobile_web_url": link_url or "https://ksea-m.vercel.app",
+            "web_url": link_url or "https://moni.ksea.or.kr",
+            "mobile_web_url": link_url or "https://moni.ksea.or.kr",
         },
     }
 

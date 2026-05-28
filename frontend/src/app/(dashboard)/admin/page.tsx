@@ -1349,7 +1349,7 @@ export default function AdminPage() {
                     사용자가 본 서비스에 직접 카카오 로그인(OAuth)한 후에만 가능합니다.
                   </p>
                   <p className="text-xs">
-                    👉 사용자에게 안내: <code>https://ksea-m.vercel.app/login</code> 에서 카카오 로그인 1회 완료
+                    👉 사용자에게 안내: <code>https://moni.ksea.or.kr/login</code> 에서 카카오 로그인 1회 완료
                   </p>
                   <p className="text-xs text-muted-foreground">
                     카카오 매칭됐다면 <strong>&ldquo;동의 안내&rdquo;</strong> 버튼으로 카카오 메시지로 안내 가능합니다.
