@@ -95,6 +95,8 @@ export default function AdminPage() {
   })
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState("")
+  const [deleteError, setDeleteError] = useState("")
+  const [deletingUserId, setDeletingUserId] = useState<number | null>(null)
 
   // 엑셀 일괄 등록
   const [bulkUploading, setBulkUploading] = useState(false)
@@ -259,11 +261,25 @@ export default function AdminPage() {
 
   const handleDelete = async (userId: number, userName: string) => {
     if (!confirm(`${userName} 사용자를 삭제하시겠습니까?`)) return
+    setDeleteError("")
+    setDeletingUserId(userId)
     try {
       await apiClient.delete(`/api/users/${userId}`)
-      fetchUsers()
-    } catch (err) {
+      setUsers((prev) => prev.filter((user) => user.id !== userId))
+      setTotal((prev) => Math.max(0, prev - 1))
+      setSelectedUserIds((prev) => {
+        const next = new Set(prev)
+        next.delete(userId)
+        return next
+      })
+      await fetchUsers()
+    } catch (err: unknown) {
       console.error("삭제 실패:", err)
+      const axiosErr = err as { response?: { data?: { detail?: string } } }
+      setDeleteError(axiosErr.response?.data?.detail || "삭제 실패")
+      alert(axiosErr.response?.data?.detail || "삭제 실패")
+    } finally {
+      setDeletingUserId(null)
     }
   }
 
@@ -714,6 +730,12 @@ export default function AdminPage() {
         </div>
       )}
 
+      {deleteError && (
+        <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+          {deleteError}
+        </div>
+      )}
+
       {/* 사용자 목록 */}
       <div className="rounded-md border bg-white overflow-x-auto">
         <Table>
@@ -896,6 +918,8 @@ export default function AdminPage() {
                       <Button
                         size="sm"
                         variant="destructive"
+                        loading={deletingUserId === user.id}
+                        loadingText="삭제 중..."
                         onClick={() => handleDelete(user.id, user.name)}
                       >
                         삭제

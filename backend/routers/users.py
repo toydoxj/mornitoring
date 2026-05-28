@@ -208,6 +208,7 @@ class UserListResponse(BaseModel):
 @router.get("", response_model=UserListResponse)
 def list_users(
     role: UserRole | None = None,
+    include_inactive: bool = Query(False, description="비활성 사용자 포함 여부"),
     setup_status: str | None = Query(
         None, description="필터: setup_completed/pending/expired/not_invited"
     ),
@@ -224,6 +225,8 @@ def list_users(
     from services.password_setup import _ensure_aware_utc
 
     query = db.query(User)
+    if not include_inactive:
+        query = query.filter(User.is_active.is_(True))
     if role:
         query = query.filter(User.role == role)
 
@@ -580,20 +583,25 @@ def delete_user(
         require_roles(UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY)
     ),
 ):
-    """사용자 삭제 (팀장/총괄간사)"""
+    """사용자 삭제 (팀장/총괄간사).
+
+    실제 사용자 행을 지우면 초대 토큰, 감사 로그, 게시글 작성자 등 FK 참조와 충돌한다.
+    운영 이력 보존을 위해 삭제 요청은 비활성화로 처리하고, 기본 목록에서는 제외한다.
+    """
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다")
+    if user.id == current_user.id:
+        raise HTTPException(status_code=400, detail="본인 계정은 삭제할 수 없습니다")
 
-    # reviewer 연결 해제
+    # 검토위원 배정 연결 해제
     reviewer = db.query(Reviewer).filter(Reviewer.user_id == user.id).first()
     if reviewer:
         db.query(Building).filter(Building.reviewer_id == reviewer.id).update(
             {"reviewer_id": None}
         )
-        db.delete(reviewer)
 
-    db.delete(user)
+    user.is_active = False
     db.commit()
 
 
