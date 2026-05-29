@@ -69,6 +69,7 @@ async def notify_inquiry_reply(
 
     def _write_log(*, is_sent: bool, channel: str, error: str | None) -> None:
         db.add(NotificationLog(
+            sender_id=sender.id,
             recipient_id=recipient.id,
             channel=channel,
             template_type=INQUIRY_REPLY_TEMPLATE,
@@ -168,6 +169,7 @@ async def notify_new_inquiry_to_group_secretaries(
         error: str | None,
     ) -> None:
         db.add(NotificationLog(
+            sender_id=reviewer.user_id,
             recipient_id=recipient.id,
             channel="kakao_memo",
             template_type=INQUIRY_CREATED_TEMPLATE,

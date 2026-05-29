@@ -157,6 +157,39 @@ def test_secretary_list_notifications_filters_by_group(
     assert "g2" not in titles
 
 
+def test_notification_list_includes_sender_and_recipient_names(
+    client, db_session, make_user, make_reviewer, make_building
+):
+    sender, headers = make_user(
+        UserRole.CHIEF_SECRETARY,
+        name="발신자",
+        email="sender@example.com",
+    )
+    recipient, _ = make_user(
+        UserRole.REVIEWER,
+        name="수신자",
+        email="recipient@example.com",
+    )
+    db_session.add(NotificationLog(
+        sender_id=sender.id,
+        recipient_id=recipient.id,
+        channel="kakao",
+        template_type="t",
+        title="names",
+        message="names",
+        is_sent=True,
+    ))
+    db_session.commit()
+
+    res = client.get("/api/notifications", headers=headers)
+    assert res.status_code == 200
+    item = res.json()["items"][0]
+    assert item["sender_name"] == "발신자"
+    assert item["sender_email"] == "sender@example.com"
+    assert item["recipient_name"] == "수신자"
+    assert item["recipient_email"] == "recipient@example.com"
+
+
 # ===== /send self 발송 + self+타인 혼합 =====
 
 def test_secretary_send_to_self_allowed(

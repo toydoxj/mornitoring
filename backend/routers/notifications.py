@@ -28,7 +28,12 @@ BATCH_SIZE = 5
 
 class NotificationResponse(BaseModel):
     id: int
+    sender_id: int | None = None
+    sender_name: str | None = None
+    sender_email: str | None = None
     recipient_id: int | None = None
+    recipient_name: str | None = None
+    recipient_email: str | None = None
     channel: str
     template_type: str
     title: str
@@ -67,6 +72,54 @@ class SendResponse(BaseModel):
     sent_count: int
     failed_count: int
     results: list[SendResultItem]
+
+
+def _notification_to_response(
+    log: NotificationLog,
+    users_by_id: dict[int, User],
+) -> NotificationResponse:
+    """알림 로그에 발신자/수신자 표시 정보를 붙여 응답한다."""
+    sender = users_by_id.get(log.sender_id) if log.sender_id else None
+    recipient = users_by_id.get(log.recipient_id) if log.recipient_id else None
+    return NotificationResponse(
+        id=log.id,
+        sender_id=log.sender_id,
+        sender_name=sender.name if sender else None,
+        sender_email=sender.email if sender else None,
+        recipient_id=log.recipient_id,
+        recipient_name=recipient.name if recipient else None,
+        recipient_email=recipient.email if recipient else None,
+        channel=log.channel,
+        template_type=log.template_type,
+        title=log.title,
+        message=log.message,
+        is_sent=log.is_sent,
+        sent_at=log.sent_at,
+        retry_count=log.retry_count,
+        error_message=log.error_message,
+        created_at=log.created_at,
+    )
+
+
+def _notifications_to_response(
+    db: Session,
+    logs: list[NotificationLog],
+    total: int,
+) -> NotificationListResponse:
+    user_ids = {
+        uid
+        for log in logs
+        for uid in (log.sender_id, log.recipient_id)
+        if uid is not None
+    }
+    users_by_id: dict[int, User] = {}
+    if user_ids:
+        users = db.query(User).filter(User.id.in_(user_ids)).all()
+        users_by_id = {u.id: u for u in users}
+    return NotificationListResponse(
+        items=[_notification_to_response(log, users_by_id) for log in logs],
+        total=total,
+    )
 
 
 @router.post("/send", response_model=SendResponse)
@@ -127,6 +180,7 @@ async def send_notifications(
         .filter(
             NotificationLog.is_sent.is_(True),
             NotificationLog.channel == "kakao",
+            NotificationLog.sender_id == current_user.id,
             NotificationLog.created_at >= today_start,
             NotificationLog.recipient_id.in_(body.recipient_ids),
         )
@@ -186,6 +240,7 @@ async def send_notifications(
                 reason=self_result.get("error", "unknown"),
             )
         db.add(NotificationLog(
+            sender_id=current_user.id,
             recipient_id=self_rid,
             channel="kakao_memo",
             template_type=body.template_type,
@@ -238,6 +293,7 @@ async def send_notifications(
                 )
 
             log = NotificationLog(
+                sender_id=current_user.id,
                 recipient_id=rid,
                 channel="kakao",
                 template_type=body.template_type,
@@ -377,7 +433,7 @@ def list_notifications(
         .limit(size)
         .all()
     )
-    return NotificationListResponse(items=items, total=total)
+    return _notifications_to_response(db, items, total)
 
 
 from routers.auth import get_current_user  # noqa: E402
@@ -402,4 +458,4 @@ def list_my_notifications(
         .limit(size)
         .all()
     )
-    return NotificationListResponse(items=items, total=total)
+    return _notifications_to_response(db, items, total)

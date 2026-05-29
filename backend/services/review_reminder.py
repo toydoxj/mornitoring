@@ -234,6 +234,7 @@ async def send_review_reminders(
         for uid, ts in grouped.items():
             title, message = _compose_message(trigger, ts, today)
             db.add(NotificationLog(
+                sender_id=sender.id,
                 recipient_id=uid,
                 channel="kakao",
                 template_type=TEMPLATE_TYPE,
@@ -306,6 +307,7 @@ async def send_review_reminders(
                 err = f"API 예외: {exc}"
 
         db.add(NotificationLog(
+            sender_id=sender.id,
             recipient_id=uid,
             channel=channel,
             template_type=TEMPLATE_TYPE,

@@ -16,6 +16,12 @@ import { SendNotificationDialog } from "./send-dialog"
 
 interface NotificationItem {
   id: number
+  sender_id: number | null
+  sender_name: string | null
+  sender_email: string | null
+  recipient_id: number | null
+  recipient_name: string | null
+  recipient_email: string | null
   channel: string
   template_type: string
   title: string
@@ -36,6 +42,15 @@ const TEMPLATE_LABELS: Record<string, string> = {
   doc_received: "도서 접수",
   review_request: "검토 요청",
   reminder: "리마인더",
+  inquiry_created: "문의 접수",
+  inquiry_reply: "문의 답변",
+}
+
+function formatUser(name: string | null, email: string | null, id: number | null) {
+  if (name) return name
+  if (email) return email
+  if (id) return `#${id}`
+  return "-"
 }
 
 export default function NotificationsPage() {
@@ -106,6 +121,8 @@ export default function NotificationsPage() {
               <TableHead className="w-[60px]">ID</TableHead>
               <TableHead className="w-[80px]">채널</TableHead>
               <TableHead className="w-[100px]">유형</TableHead>
+              <TableHead className="w-[120px]">발신자</TableHead>
+              <TableHead className="w-[120px]">수신자</TableHead>
               <TableHead>내용</TableHead>
               <TableHead className="w-[80px]">상태</TableHead>
               <TableHead className="w-[160px]">발송 시간</TableHead>
@@ -115,13 +132,13 @@ export default function NotificationsPage() {
           <TableBody>
             {isLoading ? (
               <TableRow>
-                <TableCell colSpan={7} className="h-32 text-center">
+                <TableCell colSpan={9} className="h-32 text-center">
                   로딩 중...
                 </TableCell>
               </TableRow>
             ) : data.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={7} className="h-32 text-center text-muted-foreground">
+                <TableCell colSpan={9} className="h-32 text-center text-muted-foreground">
                   알림 로그가 없습니다
                 </TableCell>
               </TableRow>
@@ -134,6 +151,16 @@ export default function NotificationsPage() {
                   </TableCell>
                   <TableCell className="text-sm">
                     {TEMPLATE_LABELS[n.template_type] || n.template_type}
+                  </TableCell>
+                  <TableCell className="text-sm">
+                    <div className="max-w-[140px] truncate" title={n.sender_email ?? undefined}>
+                      {formatUser(n.sender_name, n.sender_email, n.sender_id)}
+                    </div>
+                  </TableCell>
+                  <TableCell className="text-sm">
+                    <div className="max-w-[140px] truncate" title={n.recipient_email ?? undefined}>
+                      {formatUser(n.recipient_name, n.recipient_email, n.recipient_id)}
+                    </div>
                   </TableCell>
                   <TableCell className="text-sm max-w-xs truncate">
                     {n.message || n.title}

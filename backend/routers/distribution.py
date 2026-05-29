@@ -371,6 +371,7 @@ async def send_notifications(
     except ValueError as exc:
         for notif in body:
             log = NotificationLog(
+                sender_id=current_user.id,
                 recipient_id=None,
                 channel="kakao",
                 template_type="doc_received",
@@ -400,6 +401,7 @@ async def send_notifications(
 
     def _log(is_sent: bool, message: str, recipient_id: int | None, channel: str, error: str | None):
         db.add(NotificationLog(
+            sender_id=current_user.id,
             recipient_id=recipient_id,
             channel=channel,
             template_type="doc_received",

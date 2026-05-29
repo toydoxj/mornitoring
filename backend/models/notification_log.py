@@ -12,6 +12,7 @@ class NotificationLog(Base):
     __tablename__ = "notification_logs"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    sender_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     recipient_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     channel: Mapped[str] = mapped_column(String(20))     # kakao / web
     template_type: Mapped[str] = mapped_column(String(50))  # doc_received / review_request / reminder
