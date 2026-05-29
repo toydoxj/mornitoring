@@ -1,10 +1,13 @@
 """건축물(관리대장) 라우터"""
 
+from time import monotonic
+
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 from sqlalchemy import func
 from sqlalchemy.orm import Session, load_only, selectinload
 
+from config import settings
 from database import get_db
 from models.building import Building
 from models.reviewer import Reviewer
@@ -19,6 +22,8 @@ from services.scope import (
 )
 
 router = APIRouter()
+
+_STATS_CACHE: dict[tuple[str, str], tuple[float, dict[str, object]]] = {}
 
 
 RECEIVED_TO_SUBMIT_PHASE = {
@@ -258,6 +263,35 @@ def _empty_report_max_counts() -> dict[str, int]:
     return {label: 0 for label in REPORT_MAX_LABELS}
 
 
+def _stats_cache_key(current_user: User) -> tuple[str, str]:
+    if current_user.role == UserRole.SECRETARY:
+        group_key = str(current_user.group_no) if current_user.group_no is not None else "all"
+        return (current_user.role.value, group_key)
+    return ("all", "all")
+
+
+def _stats_cache_get(db: Session, key: tuple[str, str]) -> dict[str, object] | None:
+    ttl = settings.stats_cache_ttl_seconds
+    # 테스트 SQLite에서는 데이터 변경 직후 검증이 많으므로 캐시를 끈다.
+    if ttl <= 0 or db.get_bind().dialect.name == "sqlite":
+        return None
+    cached = _STATS_CACHE.get(key)
+    if cached is None:
+        return None
+    cached_at, payload = cached
+    if monotonic() - cached_at >= ttl:
+        _STATS_CACHE.pop(key, None)
+        return None
+    return payload
+
+
+def _stats_cache_set(db: Session, key: tuple[str, str], payload: dict[str, object]) -> None:
+    ttl = settings.stats_cache_ttl_seconds
+    if ttl <= 0 or db.get_bind().dialect.name == "sqlite":
+        return
+    _STATS_CACHE[key] = (monotonic(), payload)
+
+
 class BuildingListResponse(BaseModel):
     items: list[BuildingResponse]
     total: int
@@ -286,6 +320,11 @@ def get_stats(
     from models.review_opinion_detail import ReviewOpinionDetail
     from models.review_severity_summary import ReviewSeveritySummary
     from models.review_stage import ReviewStage, PhaseType, ResultType
+
+    cache_key = _stats_cache_key(current_user)
+    cached_stats = _stats_cache_get(db, cache_key)
+    if cached_stats is not None:
+        return cached_stats
 
     # 가시성 필터: 간사가 자기 조 데이터만 보도록.
     # visibility=None 이면 무필터(팀장/총괄/조 미배정 간사).
@@ -656,7 +695,7 @@ def get_stats(
         key=lambda row: (-int(row["total"]), str(row["keyword"])),
     )
 
-    return {
+    result: dict[str, object] = {
         "total": total,
         # 전체 흐름 요약 (서로 겹치지 않고 합산하면 total)
         "unassigned": unassigned,
@@ -699,6 +738,8 @@ def get_stats(
             "by_keyword": keyword_rows,
         },
     }
+    _stats_cache_set(db, cache_key, result)
+    return result
 
 
 @router.get("", response_model=BuildingListResponse)
@@ -972,53 +1013,85 @@ def my_stats(
     Reviewer 행이 없으면 빈 결과를 반환한다(본인 담당이 없으면 자연스러운 결과).
     """
     from datetime import date as _date
+    from sqlalchemy import and_, func as sa_func, or_
     from models.review_stage import ReviewStage
 
+    final_counts = {
+        "pass": 0,               # 적합
+        "pass_supplement": 0,    # 보완적합
+        "fail": 0,               # 부적합
+        "fail_no_response": 0,   # 부적합(미회신)
+        "excluded": 0,           # 대상제외
+    }
     reviewer = db.query(Reviewer).filter(Reviewer.user_id == current_user.id).first()
     if reviewer is None:
-        buildings: list[Building] = []
-    else:
-        buildings = (
-            db.query(Building).filter(Building.reviewer_id == reviewer.id).all()
+        return {
+            "total": 0,
+            "total_area": 0.0,
+            "area_over_1000": 0,
+            "high_risk": 0,
+            "need_review": 0,
+            "submitted": 0,
+            "submitted_preliminary": 0,
+            "submitted_supplement": 0,
+            "elapsed_buckets": {
+                "1일": 0, "2일": 0, "3일": 0, "4일": 0, "5일": 0,
+                "6일": 0, "7일": 0, "1주": 0, "2주이상": 0,
+            },
+            "schedule_counts": {
+                "in_progress": 0,
+                "d_minus_3": 0,
+                "d_minus_2": 0,
+                "d_minus_1": 0,
+                "d_day": 0,
+                "overdue": 0,
+            },
+            "final_counts": final_counts,
+        }
+
+    reviewer_filter = Building.reviewer_id == reviewer.id
+    summary = (
+        db.query(
+            sa_func.count(Building.id).label("total"),
+            sa_func.coalesce(sa_func.sum(Building.gross_area), 0).label("total_area"),
+            sa_func.count(Building.id).filter(Building.gross_area >= 1000).label("area_over_1000"),
+            sa_func.count(Building.id).filter(
+                (Building.is_special_structure == True)
+                | (Building.is_high_rise == True)
+                | (Building.is_multi_use == True)
+            ).label("high_risk"),
+            sa_func.count(Building.id).filter(
+                Building.current_phase.in_(list(RECEIVED_PHASES))
+            ).label("need_review"),
         )
-
-    total = len(buildings)
-    total_area = float(sum((float(b.gross_area) if b.gross_area else 0.0) for b in buildings))
-    area_over_1000 = sum(1 for b in buildings if (b.gross_area or 0) >= 1000)
-    high_risk = sum(
-        1 for b in buildings
-        if b.is_special_structure or b.is_high_rise or b.is_multi_use
+        .filter(reviewer_filter)
+        .one()
     )
-
-    received_buildings = [b for b in buildings if b.current_phase in RECEIVED_PHASES]
-    need_review = len(received_buildings)
+    total = int(summary.total or 0)
+    total_area = float(summary.total_area or 0)
+    area_over_1000 = int(summary.area_over_1000 or 0)
+    high_risk = int(summary.high_risk or 0)
+    need_review = int(summary.need_review or 0)
 
     # 검토서 제출 건수 — 본인 담당 건물들에서 report_submitted_at 있는 stage 수 (예비/보완 분리)
-    building_ids = [b.id for b in buildings]
     submitted_preliminary = 0
     submitted_supplement = 0
-    if building_ids:
-        submitted_preliminary = (
-            db.query(ReviewStage)
-            .filter(
-                ReviewStage.building_id.in_(building_ids),
-                ReviewStage.report_submitted_at.isnot(None),
-                ReviewStage.phase == "preliminary",
-            )
-            .count()
+    submitted_rows = (
+        db.query(ReviewStage.phase, sa_func.count(ReviewStage.id))
+        .join(Building, ReviewStage.building_id == Building.id)
+        .filter(
+            reviewer_filter,
+            ReviewStage.report_submitted_at.isnot(None),
         )
-        submitted_supplement = (
-            db.query(ReviewStage)
-            .filter(
-                ReviewStage.building_id.in_(building_ids),
-                ReviewStage.report_submitted_at.isnot(None),
-                ReviewStage.phase.in_([
-                    "supplement_1", "supplement_2", "supplement_3",
-                    "supplement_4", "supplement_5",
-                ]),
-            )
-            .count()
-        )
+        .group_by(ReviewStage.phase)
+        .all()
+    )
+    for phase, count in submitted_rows:
+        phase_key = phase.value if hasattr(phase, "value") else str(phase)
+        if phase_key == "preliminary":
+            submitted_preliminary += int(count or 0)
+        elif phase_key.startswith("supplement_"):
+            submitted_supplement += int(count or 0)
     submitted = submitted_preliminary + submitted_supplement
 
     # 접수 후 경과일수 버킷 — 현재 '_received' 단계의 doc_received_at 기준
@@ -1027,29 +1100,31 @@ def my_stats(
         "6일": 0, "7일": 0, "1주": 0, "2주이상": 0,
     }
     today = _date.today()
-    if received_buildings:
-        pairs = [(b.id, RECEIVED_TO_SUBMIT_PHASE[b.current_phase]) for b in received_buildings]
-        stage_map: dict[tuple[int, str], ReviewStage] = {}
-        stages = (
-            db.query(ReviewStage)
-            .filter(ReviewStage.building_id.in_([p[0] for p in pairs]))
-            .all()
+    current_stage_match = or_(*[
+        and_(Building.current_phase == received_phase, ReviewStage.phase == submit_phase)
+        for received_phase, submit_phase in RECEIVED_TO_SUBMIT_PHASE.items()
+    ])
+    elapsed_rows = (
+        db.query(ReviewStage.doc_received_at)
+        .join(Building, ReviewStage.building_id == Building.id)
+        .filter(
+            reviewer_filter,
+            Building.current_phase.in_(list(RECEIVED_PHASES)),
+            current_stage_match,
+            ReviewStage.doc_received_at.isnot(None),
         )
-        for s in stages:
-            stage_map[(s.building_id, s.phase.value)] = s
-        for bid, phase in pairs:
-            s = stage_map.get((bid, phase))
-            if not s or not s.doc_received_at:
-                continue
-            days = (today - s.doc_received_at).days
-            if days < 1:
-                elapsed_buckets["1일"] += 1  # 당일 접수는 1일로 합산
-            elif 1 <= days <= 7:
-                elapsed_buckets[f"{days}일"] += 1
-            elif 8 <= days <= 13:
-                elapsed_buckets["1주"] += 1
-            else:  # 14+
-                elapsed_buckets["2주이상"] += 1
+        .all()
+    )
+    for (doc_received_at,) in elapsed_rows:
+        days = (today - doc_received_at).days
+        if days < 1:
+            elapsed_buckets["1일"] += 1  # 당일 접수는 1일로 합산
+        elif 1 <= days <= 7:
+            elapsed_buckets[f"{days}일"] += 1
+        elif 8 <= days <= 13:
+            elapsed_buckets["1주"] += 1
+        else:  # 14+
+            elapsed_buckets["2주이상"] += 1
 
     # 검토서 요청 예정일 기준 미제출 건 분류 (D-3 ~ 초과)
     schedule_counts = {
@@ -1060,46 +1135,46 @@ def my_stats(
         "d_day": 0,
         "overdue": 0,
     }
-    received_by_id = {b.id: b for b in received_buildings}
-    if received_by_id:
-        unsubmitted_rows = (
-            db.query(ReviewStage)
-            .filter(
-                ReviewStage.building_id.in_(list(received_by_id)),
-                ReviewStage.report_submitted_at.is_(None),
-                ReviewStage.report_due_date.isnot(None),
-            )
-            .all()
+    unsubmitted_rows = (
+        db.query(ReviewStage.report_due_date)
+        .join(Building, ReviewStage.building_id == Building.id)
+        .filter(
+            reviewer_filter,
+            Building.current_phase.in_(list(RECEIVED_PHASES)),
+            current_stage_match,
+            ReviewStage.report_submitted_at.is_(None),
+            ReviewStage.report_due_date.isnot(None),
         )
-        for s in unsubmitted_rows:
-            building = received_by_id.get(s.building_id)
-            if building is None or not _is_current_pending_stage(building, s):
-                continue
-            schedule_counts["in_progress"] += 1
-            delta = (s.report_due_date - today).days
-            if delta == 3:
-                schedule_counts["d_minus_3"] += 1
-            elif delta == 2:
-                schedule_counts["d_minus_2"] += 1
-            elif delta == 1:
-                schedule_counts["d_minus_1"] += 1
-            elif delta == 0:
-                schedule_counts["d_day"] += 1
-            elif delta < 0:
-                schedule_counts["overdue"] += 1
+        .all()
+    )
+    for (report_due_date,) in unsubmitted_rows:
+        schedule_counts["in_progress"] += 1
+        delta = (report_due_date - today).days
+        if delta == 3:
+            schedule_counts["d_minus_3"] += 1
+        elif delta == 2:
+            schedule_counts["d_minus_2"] += 1
+        elif delta == 1:
+            schedule_counts["d_minus_1"] += 1
+        elif delta == 0:
+            schedule_counts["d_day"] += 1
+        elif delta < 0:
+            schedule_counts["overdue"] += 1
 
     # 최종 완료 건수 (5분류) — 본인 담당 기준
     # final_result 값은 향후 '최종 판정용 별도 엑셀 업로드'에서 기입됨
-    final_counts = {
-        "pass": 0,               # 적합
-        "pass_supplement": 0,    # 보완적합
-        "fail": 0,               # 부적합
-        "fail_no_response": 0,   # 부적합(미회신)
-        "excluded": 0,           # 대상제외
-    }
-    for b in buildings:
-        if b.final_result and b.final_result in final_counts:
-            final_counts[b.final_result] += 1
+    final_rows = (
+        db.query(Building.final_result, sa_func.count(Building.id))
+        .filter(
+            reviewer_filter,
+            Building.final_result.isnot(None),
+        )
+        .group_by(Building.final_result)
+        .all()
+    )
+    for final_result, count in final_rows:
+        if final_result in final_counts:
+            final_counts[final_result] = int(count or 0)
 
     return {
         "total": total,

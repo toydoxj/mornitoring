@@ -99,18 +99,50 @@ def test_my_stats_returns_zero_when_no_reviewer_row(
 
 
 def test_my_stats_counts_only_own_reviewer_id(
-    client, make_reviewer, make_building
+    client, db_session, make_reviewer, make_building
 ):
     _, reviewer_a, headers_a = make_reviewer()
     _, reviewer_b, _ = make_reviewer()
-    make_building(reviewer_id=reviewer_a.id)
-    make_building(reviewer_id=reviewer_a.id)
-    make_building(reviewer_id=reviewer_b.id)
+    b1 = make_building(reviewer_id=reviewer_a.id)
+    b2 = make_building(reviewer_id=reviewer_a.id)
+    b3 = make_building(reviewer_id=reviewer_b.id)
+    b1.gross_area = 1000
+    b1.is_special_structure = True
+    b1.current_phase = "doc_received"
+    b1.final_result = "pass"
+    b2.gross_area = 500
+    b2.final_result = "fail"
+    b3.gross_area = 9999
+    b3.is_high_rise = True
+    db_session.add_all([
+        ReviewStage(
+            building_id=b1.id,
+            phase=PhaseType.PRELIMINARY,
+            phase_order=0,
+            report_submitted_at=date.today(),
+        ),
+        ReviewStage(
+            building_id=b2.id,
+            phase=PhaseType.SUPPLEMENT_1,
+            phase_order=1,
+            report_submitted_at=date.today(),
+        ),
+    ])
+    db_session.commit()
 
     res = client.get("/api/buildings/my-stats", headers=headers_a)
     assert res.status_code == 200
     payload = res.json()
     assert payload["total"] == 2
+    assert payload["total_area"] == 1500
+    assert payload["area_over_1000"] == 1
+    assert payload["high_risk"] == 1
+    assert payload["need_review"] == 1
+    assert payload["submitted_preliminary"] == 1
+    assert payload["submitted_supplement"] == 1
+    assert payload["submitted"] == 2
+    assert payload["final_counts"]["pass"] == 1
+    assert payload["final_counts"]["fail"] == 1
 
 
 def test_my_stats_schedule_excludes_assigned_pending_stage(

@@ -43,6 +43,10 @@ class Settings(BaseSettings):
     # 운영(Render)에서 1로 설정하면 LB 헤더만 신뢰한다.
     trusted_proxy_hops: int = 0
 
+    # 관리자 통계 API 짧은 캐시 TTL(초). 0이면 비활성화.
+    # 여러 관리자가 같은 대시보드를 동시에 열 때 반복 집계 쿼리를 줄인다.
+    stats_cache_ttl_seconds: int = 5
+
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     @field_validator("cors_origins", mode="before")
