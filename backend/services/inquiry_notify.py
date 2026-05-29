@@ -189,6 +189,17 @@ async def notify_new_inquiry_to_group_secretaries(
                 error=f"수신자 토큰 없음: {exc}",
             )
             continue
+        except Exception as exc:
+            _write_log(
+                recipient,
+                is_sent=False,
+                error=f"토큰 확인 예외: {exc}",
+            )
+            log_event(
+                "error", "new_inquiry_notify_token_exception",
+                inquiry_id=inquiry.id, recipient_id=recipient.id, reason=str(exc),
+            )
+            continue
 
         try:
             result = await send_message_to_self(

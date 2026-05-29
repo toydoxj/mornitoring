@@ -250,8 +250,11 @@ export default function BuildingDetailPage() {
       setNewInquiryFiles([])
       const { data: inqData } = await apiClient.get(`/api/reviews/building-inquiries/${building.mgmt_no}`)
       setInquiries(inqData)
-    } catch {
-      alert("문의 등록 실패")
+    } catch (err) {
+      const msg =
+        (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
+        ?? "문의 등록 실패"
+      alert(msg)
     } finally {
       setSubmittingInquiry(false)
     }

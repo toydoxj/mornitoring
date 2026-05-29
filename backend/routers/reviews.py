@@ -658,9 +658,14 @@ async def create_inquiry(
     `building.reviewer_id == reviewer.id`. 이름 기반 매칭은 동명이인 위험으로 제거.
     역할(role)은 무관 — REVIEWER가 아닌 사용자도 Reviewer 행이 있으면 문의 가능.
     """
+    from logging_config import log_event
     from models.inquiry import Inquiry
     from models.reviewer import Reviewer
     from services.inquiry_notify import notify_new_inquiry_to_group_secretaries
+
+    content = body.content.strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="문의 내용을 입력해주세요")
 
     building = db.query(Building).filter(Building.mgmt_no == body.mgmt_no).first()
     if not building:
@@ -679,19 +684,30 @@ async def create_inquiry(
         phase=body.phase,
         submitter_id=current_user.id,
         submitter_name=current_user.name,
-        content=body.content,
+        content=content,
     )
     db.add(inquiry)
     db.commit()
     db.refresh(inquiry)
-    await notify_new_inquiry_to_group_secretaries(
-        db,
-        inquiry=inquiry,
-        reviewer=reviewer,
-    )
-    db.commit()
+    inquiry_id = inquiry.id
+
+    try:
+        await notify_new_inquiry_to_group_secretaries(
+            db,
+            inquiry=inquiry,
+            reviewer=reviewer,
+        )
+        db.commit()
+    except Exception as exc:
+        # 문의 저장은 이미 완료된 상태다. 알림 예외가 사용자 저장 성공을 막지 않게 한다.
+        db.rollback()
+        log_event(
+            "error", "new_inquiry_notify_unhandled",
+            inquiry_id=inquiry_id, reason=str(exc),
+        )
+
     # inquiry.id 를 반환해 프론트가 바로 첨부 업로드를 이어갈 수 있게 한다
-    return {"message": "문의가 등록되었습니다", "id": inquiry.id}
+    return {"message": "문의가 등록되었습니다", "id": inquiry_id}
 
 
 @router.patch("/inquiry/{inquiry_id}/content")

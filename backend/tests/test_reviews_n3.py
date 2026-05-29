@@ -151,6 +151,78 @@ def test_create_inquiry_notifies_same_group_secretary(
     assert logs[0].is_sent is True
 
 
+def test_create_inquiry_succeeds_when_secretary_token_check_fails(
+    client, db_session, make_reviewer, make_building, make_user, monkeypatch
+):
+    user_a, reviewer_a, headers_a = make_reviewer(group_no=1)
+    same_secretary, _ = make_user(
+        UserRole.SECRETARY,
+        name="토큰오류간사",
+        email="token-error-sec@example.com",
+        group_no=1,
+    )
+    own = make_building(reviewer_id=reviewer_a.id, mgmt_no="INQ-TOKEN-FAIL-001")
+
+    async def fake_ensure_valid_token(user, db):
+        raise RuntimeError("토큰 갱신 실패")
+
+    monkeypatch.setattr(inquiry_notify, "ensure_valid_token", fake_ensure_valid_token)
+
+    res = client.post(
+        "/api/reviews/inquiry",
+        headers=headers_a,
+        json={
+            "mgmt_no": own.mgmt_no,
+            "phase": "preliminary",
+            "content": "알림 실패와 무관하게 저장",
+        },
+    )
+    assert res.status_code == 200
+
+    db_session.expire_all()
+    saved = db_session.query(Inquiry).filter(Inquiry.mgmt_no == own.mgmt_no).first()
+    assert saved is not None
+    assert saved.submitter_id == user_a.id
+
+    logs = db_session.query(NotificationLog).all()
+    assert len(logs) == 1
+    assert logs[0].recipient_id == same_secretary.id
+    assert logs[0].is_sent is False
+    assert "토큰 확인 예외" in (logs[0].error_message or "")
+
+
+def test_create_inquiry_succeeds_when_notify_unexpectedly_fails(
+    client, db_session, make_reviewer, make_building, monkeypatch
+):
+    user_a, reviewer_a, headers_a = make_reviewer(group_no=1)
+    own = make_building(reviewer_id=reviewer_a.id, mgmt_no="INQ-NOTIFY-BOOM-001")
+
+    async def fake_notify_new_inquiry_to_group_secretaries(db, *, inquiry, reviewer):
+        raise RuntimeError("예상 밖 알림 오류")
+
+    monkeypatch.setattr(
+        inquiry_notify,
+        "notify_new_inquiry_to_group_secretaries",
+        fake_notify_new_inquiry_to_group_secretaries,
+    )
+
+    res = client.post(
+        "/api/reviews/inquiry",
+        headers=headers_a,
+        json={
+            "mgmt_no": own.mgmt_no,
+            "phase": "preliminary",
+            "content": "알림 전체 실패와 무관하게 저장",
+        },
+    )
+    assert res.status_code == 200
+
+    db_session.expire_all()
+    saved = db_session.query(Inquiry).filter(Inquiry.mgmt_no == own.mgmt_no).first()
+    assert saved is not None
+    assert saved.submitter_id == user_a.id
+
+
 def test_inquiry_owner_can_update_and_delete_open_inquiry(
     client, db_session, make_reviewer, make_building
 ):

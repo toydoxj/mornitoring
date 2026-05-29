@@ -121,8 +121,11 @@ export default function MyReviewsPage() {
       setReasonTarget(null)
       setReasonText("")
       alert("문의 사유가 저장되었습니다")
-    } catch {
-      alert("저장 실패")
+    } catch (err) {
+      const msg =
+        (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
+        ?? "저장 실패"
+      alert(msg)
     } finally {
       setReasonSubmitting(false)
     }
