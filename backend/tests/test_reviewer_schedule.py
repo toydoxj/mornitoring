@@ -18,8 +18,14 @@ def _seed(
     due: date | None,
     *,
     submitted: date | None = None,
+    current_phase: str = "doc_received",
 ):
-    b = Building(mgmt_no=mgmt_no, reviewer_id=reviewer_id, assigned_reviewer_name="assigned")
+    b = Building(
+        mgmt_no=mgmt_no,
+        reviewer_id=reviewer_id,
+        assigned_reviewer_name="assigned",
+        current_phase=current_phase,
+    )
     db_session.add(b)
     db_session.flush()
     db_session.add(ReviewStage(
@@ -54,6 +60,29 @@ def test_reviewer_schedule_buckets(client, db_session, make_user, make_reviewer)
     assert row["d_day"] == 1
     assert row["d_minus_1"] == 1
     assert row["d_minus_3"] == 1
+
+
+def test_reviewer_schedule_excludes_assigned_pending_stage(
+    client, db_session, make_user, make_reviewer
+):
+    """배정완료로 되돌린 건물의 과거 미제출 예정일은 일정관리에서 제외한다."""
+    _, headers_admin = make_user(UserRole.CHIEF_SECRETARY, name="관리자")
+    _, reviewer, _ = make_reviewer()
+    today = date.today()
+    _seed(db_session, reviewer.id, "S-RECEIVED", today + timedelta(days=1))
+    _seed(
+        db_session,
+        reviewer.id,
+        "S-ASSIGNED",
+        today + timedelta(days=1),
+        current_phase="assigned",
+    )
+
+    res = client.get("/api/buildings/reviewer-schedule", headers=headers_admin)
+    assert res.status_code == 200
+    row = next(r for r in res.json() if r["reviewer_name"].startswith("검토위원"))
+    assert row["in_progress"] == 1
+    assert row["d_minus_1"] == 1
 
 
 def test_reviewer_schedule_denied_for_reviewer(client, make_reviewer):

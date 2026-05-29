@@ -21,6 +21,27 @@ from services.scope import (
 router = APIRouter()
 
 
+RECEIVED_TO_SUBMIT_PHASE = {
+    "doc_received": "preliminary",
+    "supplement_1_received": "supplement_1",
+    "supplement_2_received": "supplement_2",
+    "supplement_3_received": "supplement_3",
+    "supplement_4_received": "supplement_4",
+    "supplement_5_received": "supplement_5",
+}
+RECEIVED_PHASES = set(RECEIVED_TO_SUBMIT_PHASE)
+
+
+def _stage_phase_value(stage) -> str:
+    return stage.phase.value if hasattr(stage.phase, "value") else str(stage.phase)
+
+
+def _is_current_pending_stage(building: Building, stage) -> bool:
+    """건물의 현재 접수 단계와 짝이 맞는 미제출 검토서 stage인지 확인."""
+    expected_phase = RECEIVED_TO_SUBMIT_PHASE.get(building.current_phase or "")
+    return expected_phase is not None and _stage_phase_value(stage) == expected_phase
+
+
 # --- Pydantic 스키마 ---
 
 class BuildingCreate(BaseModel):
@@ -595,6 +616,7 @@ def reviewer_schedule(
     """검토위원별 일정관리 요약 — 대시보드 "검토위원별 일정관리" 테이블 데이터.
 
     활성 REVIEWER 사용자 전체를 행으로 노출하고, 각각에 대해
+    현재 단계가 도서 접수 상태이고, 해당 단계의
     `review_stages.report_submitted_at IS NULL AND report_due_date IS NOT NULL` 인 건을
     오늘 기준 D-3/D-2/D-1/D-day/초과 카운트로 집계한다. D+4 이상 예정이거나 일정이 없는
     건은 in_progress 에만 합산된다. 미제출이 없는 검토위원도 모든 카운트 0으로 표시.
@@ -641,13 +663,16 @@ def reviewer_schedule(
         .filter(
             ReviewStage.report_submitted_at.is_(None),
             ReviewStage.report_due_date.isnot(None),
+            Building.current_phase.in_(list(RECEIVED_PHASES)),
             User.is_active.is_(True),
         )
     )
     if visibility is not None:
         rows_q = rows_q.filter(visibility)
     rows = rows_q.all()
-    for stage, _building, user in rows:
+    for stage, building, user in rows:
+        if not _is_current_pending_stage(building, stage):
+            continue
         # 간사/총괄간사가 Reviewer 행을 가진 경우에도 요약을 놓치지 않도록 setdefault
         info = by_user.setdefault(user.id, {
             "reviewer_user_id": user.id,
@@ -679,7 +704,7 @@ def reviewer_schedule(
 
     # 3) 일정 준수율 집계 — 마감 경과(제출 or 초과 미제출) 건 중 정시 제출 비율
     closure_q = (
-        db.query(ReviewStage, User)
+        db.query(ReviewStage, Building, User)
         .join(Building, ReviewStage.building_id == Building.id)
         .join(Reviewer, Building.reviewer_id == Reviewer.id)
         .join(User, Reviewer.user_id == User.id)
@@ -691,9 +716,11 @@ def reviewer_schedule(
     if visibility is not None:
         closure_q = closure_q.filter(visibility)
     closure_rows = closure_q.all()
-    for stage, user in closure_rows:
+    for stage, building, user in closure_rows:
         # 마감 경과 여부: 제출됐거나 예정일이 이미 지났음
         is_submitted = stage.report_submitted_at is not None
+        if not is_submitted and not _is_current_pending_stage(building, stage):
+            continue
         is_past_due = stage.report_due_date < today
         if not is_submitted and not is_past_due:
             continue
@@ -760,15 +787,6 @@ def my_stats(
         if b.is_special_structure or b.is_high_rise or b.is_multi_use
     )
 
-    # '_received' 상태 (도서 접수 후 검토서 미제출)
-    RECEIVED_PHASES = {
-        "doc_received",
-        "supplement_1_received",
-        "supplement_2_received",
-        "supplement_3_received",
-        "supplement_4_received",
-        "supplement_5_received",
-    }
     received_buildings = [b for b in buildings if b.current_phase in RECEIVED_PHASES]
     need_review = len(received_buildings)
 
@@ -801,14 +819,6 @@ def my_stats(
     submitted = submitted_preliminary + submitted_supplement
 
     # 접수 후 경과일수 버킷 — 현재 '_received' 단계의 doc_received_at 기준
-    RECEIVED_TO_SUBMIT_PHASE = {
-        "doc_received": "preliminary",
-        "supplement_1_received": "supplement_1",
-        "supplement_2_received": "supplement_2",
-        "supplement_3_received": "supplement_3",
-        "supplement_4_received": "supplement_4",
-        "supplement_5_received": "supplement_5",
-    }
     elapsed_buckets = {
         "1일": 0, "2일": 0, "3일": 0, "4일": 0, "5일": 0,
         "6일": 0, "7일": 0, "1주": 0, "2주이상": 0,
@@ -847,17 +857,21 @@ def my_stats(
         "d_day": 0,
         "overdue": 0,
     }
-    if building_ids:
+    received_by_id = {b.id: b for b in received_buildings}
+    if received_by_id:
         unsubmitted_rows = (
             db.query(ReviewStage)
             .filter(
-                ReviewStage.building_id.in_(building_ids),
+                ReviewStage.building_id.in_(list(received_by_id)),
                 ReviewStage.report_submitted_at.is_(None),
                 ReviewStage.report_due_date.isnot(None),
             )
             .all()
         )
         for s in unsubmitted_rows:
+            building = received_by_id.get(s.building_id)
+            if building is None or not _is_current_pending_stage(building, s):
+                continue
             schedule_counts["in_progress"] += 1
             delta = (s.report_due_date - today).days
             if delta == 3:
