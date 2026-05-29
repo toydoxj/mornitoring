@@ -246,6 +246,13 @@ def _to_response(building: Building, registered_names: set[str]) -> dict:
     return data
 
 
+SEVERITY_LABELS = ("L0", "L1", "L2", "L3", "L4")
+
+
+def _empty_severity_counts() -> dict[str, int]:
+    return {label: 0 for label in SEVERITY_LABELS}
+
+
 class BuildingListResponse(BaseModel):
     items: list[BuildingResponse]
     total: int
@@ -270,6 +277,7 @@ def get_stats(
     """
     from sqlalchemy import and_, func as sa_func
     from models.inquiry import Inquiry, InquiryStatus
+    from models.review_severity_summary import ReviewSeveritySummary
     from models.review_stage import ReviewStage, PhaseType
 
     # 가시성 필터: 간사가 자기 조 데이터만 보도록.
@@ -469,6 +477,83 @@ def get_stats(
             "completed": comp_count,
         })
 
+    # 5) 심각도 통계 — 상세의견 분류별 집계 테이블을 기준으로 전체/분류/단계별 피벗 생성
+    severity_total_rows = (
+        _scoped_by_building_id(
+            db.query(
+                ReviewSeveritySummary.severity,
+                sa_func.sum(ReviewSeveritySummary.count),
+            )
+            .join(ReviewStage, ReviewSeveritySummary.stage_id == ReviewStage.id),
+            ReviewStage.building_id,
+        )
+        .group_by(ReviewSeveritySummary.severity)
+        .all()
+    )
+    severity_totals = _empty_severity_counts()
+    for severity, count in severity_total_rows:
+        if severity in severity_totals:
+            severity_totals[severity] = int(count or 0)
+
+    severity_category_rows = (
+        _scoped_by_building_id(
+            db.query(
+                ReviewSeveritySummary.category,
+                ReviewSeveritySummary.severity,
+                sa_func.sum(ReviewSeveritySummary.count),
+            )
+            .join(ReviewStage, ReviewSeveritySummary.stage_id == ReviewStage.id),
+            ReviewStage.building_id,
+        )
+        .group_by(ReviewSeveritySummary.category, ReviewSeveritySummary.severity)
+        .all()
+    )
+    category_map: dict[str, dict[str, int]] = {}
+    for category, severity, count in severity_category_rows:
+        if severity not in SEVERITY_LABELS:
+            continue
+        counts = category_map.setdefault(category, _empty_severity_counts())
+        counts[severity] = int(count or 0)
+    severity_by_category = [
+        {"category": category, "counts": counts, "total": sum(counts.values())}
+        for category, counts in category_map.items()
+    ]
+    severity_by_category.sort(key=lambda row: (-row["total"], row["category"]))
+
+    severity_phase_rows = (
+        _scoped_by_building_id(
+            db.query(
+                ReviewStage.phase,
+                ReviewSeveritySummary.severity,
+                sa_func.sum(ReviewSeveritySummary.count),
+            )
+            .join(ReviewStage, ReviewSeveritySummary.stage_id == ReviewStage.id),
+            ReviewStage.building_id,
+        )
+        .group_by(ReviewStage.phase, ReviewSeveritySummary.severity)
+        .all()
+    )
+    phase_order = {
+        "preliminary": 0,
+        "supplement_1": 1,
+        "supplement_2": 2,
+        "supplement_3": 3,
+        "supplement_4": 4,
+        "supplement_5": 5,
+    }
+    phase_map: dict[str, dict[str, int]] = {}
+    for phase, severity, count in severity_phase_rows:
+        if severity not in SEVERITY_LABELS:
+            continue
+        phase_key = phase.value if hasattr(phase, "value") else str(phase)
+        counts = phase_map.setdefault(phase_key, _empty_severity_counts())
+        counts[severity] = int(count or 0)
+    severity_by_phase = [
+        {"phase": phase, "counts": counts, "total": sum(counts.values())}
+        for phase, counts in phase_map.items()
+    ]
+    severity_by_phase.sort(key=lambda row: phase_order.get(row["phase"], 999))
+
     return {
         "total": total,
         # 전체 흐름 요약 (서로 겹치지 않고 합산하면 total)
@@ -495,6 +580,12 @@ def get_stats(
         "supplement": supplement,
         "phase_counts": phase_counts,
         "reviewer_stats": reviewer_stats,
+        "severity_stats": {
+            "total": sum(severity_totals.values()),
+            "totals": severity_totals,
+            "by_category": severity_by_category,
+            "by_phase": severity_by_phase,
+        },
     }
 
 

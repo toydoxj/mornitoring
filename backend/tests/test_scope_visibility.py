@@ -8,6 +8,7 @@
 """
 
 from models.inquiry import Inquiry, InquiryStatus
+from models.review_severity_summary import ReviewSeveritySummary
 from models.review_stage import InappropriateDecision, PhaseType, ReviewStage
 from models.user import UserRole
 
@@ -128,6 +129,106 @@ def test_secretary_stats_total_excludes_other_group(
     body = res.json()
     # 같은 조 1건만 노출되어야 한다.
     assert body["total"] == 1
+
+
+def test_stats_returns_severity_summary_by_category_and_phase(
+    client, db_session, make_user, make_reviewer, make_building
+):
+    _, headers = make_user(UserRole.CHIEF_SECRETARY)
+    _, reviewer, _ = make_reviewer()
+    building = make_building(reviewer_id=reviewer.id, mgmt_no="SEV-STATS-001")
+
+    stage = ReviewStage(
+        building_id=building.id,
+        phase=PhaseType.PRELIMINARY,
+        phase_order=0,
+    )
+    db_session.add(stage)
+    db_session.commit()
+    db_session.refresh(stage)
+    db_session.add_all([
+        ReviewSeveritySummary(
+            stage_id=stage.id,
+            category="부재설계의 적정성 - 구조설계 요소",
+            severity="L3",
+            count=2,
+        ),
+        ReviewSeveritySummary(
+            stage_id=stage.id,
+            category="기타의견",
+            severity="L0",
+            count=1,
+        ),
+    ])
+    db_session.commit()
+
+    res = client.get("/api/buildings/stats", headers=headers)
+    assert res.status_code == 200
+    severity_stats = res.json()["severity_stats"]
+
+    assert severity_stats["total"] == 3
+    assert severity_stats["totals"]["L0"] == 1
+    assert severity_stats["totals"]["L3"] == 2
+    assert {
+        (row["category"], row["counts"]["L3"], row["total"])
+        for row in severity_stats["by_category"]
+    } == {
+        ("부재설계의 적정성 - 구조설계 요소", 2, 2),
+        ("기타의견", 0, 1),
+    }
+    assert severity_stats["by_phase"] == [{
+        "phase": "preliminary",
+        "counts": {"L0": 1, "L1": 0, "L2": 0, "L3": 2, "L4": 0},
+        "total": 3,
+    }]
+
+
+def test_secretary_stats_severity_excludes_other_group(
+    client, db_session, make_user, make_reviewer, make_building
+):
+    sec, sec_h = make_user(UserRole.SECRETARY)
+    sec.group_no = 1
+    db_session.commit()
+    _, _, b1, _, _, b2 = _make_two_groups(
+        make_user, make_reviewer, make_building, db_session
+    )
+
+    stage1 = ReviewStage(
+        building_id=b1.id,
+        phase=PhaseType.PRELIMINARY,
+        phase_order=0,
+    )
+    stage2 = ReviewStage(
+        building_id=b2.id,
+        phase=PhaseType.PRELIMINARY,
+        phase_order=0,
+    )
+    db_session.add_all([stage1, stage2])
+    db_session.commit()
+    db_session.refresh(stage1)
+    db_session.refresh(stage2)
+    db_session.add_all([
+        ReviewSeveritySummary(
+            stage_id=stage1.id,
+            category="기타의견",
+            severity="L0",
+            count=1,
+        ),
+        ReviewSeveritySummary(
+            stage_id=stage2.id,
+            category="기타의견",
+            severity="L4",
+            count=5,
+        ),
+    ])
+    db_session.commit()
+
+    res = client.get("/api/buildings/stats", headers=sec_h)
+    assert res.status_code == 200
+    severity_stats = res.json()["severity_stats"]
+    assert severity_stats["total"] == 1
+    assert severity_stats["totals"]["L0"] == 1
+    assert severity_stats["totals"]["L4"] == 0
 
 
 # ===== 부적합 검토 (/api/reviews/inappropriate) =====
