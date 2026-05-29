@@ -19,6 +19,7 @@ from models.reviewer import Reviewer
 from models.user import User, UserRole
 from routers.auth import get_current_user, get_password_hash, require_roles
 from services.invite import InviteResult, send_invites
+from services.kakao import get_kakao_token_status
 from services.reviewer_link import ensure_reviewer_link
 
 router = APIRouter()
@@ -116,6 +117,9 @@ class UserResponse(BaseModel):
     kakao_linked: bool = False        # 카카오 로그인 완료(kakao_id 존재)
     kakao_matched: bool = False       # 친구 매칭 완료(kakao_uuid 존재)
     kakao_uuid: str | None = None
+    # 카카오 토큰 상태 — not_linked/valid/refresh_needed/refresh_unavailable/invalid/...
+    kakao_token_status: str | None = None
+    kakao_token_expires_at: str | None = None
     # 카카오 동의 캐시 — ok | insufficient | unknown
     kakao_scopes_status: str | None = None
     kakao_scopes_checked_at: str | None = None
@@ -311,13 +315,17 @@ def list_users(
             return "insufficient"
         return "unknown"
 
-    items = [
-        UserResponse(
+    items: list[UserResponse] = []
+    for (u, status, last_sent) in items_all:
+        kakao_token_status, kakao_token_expires_at = get_kakao_token_status(u)
+        items.append(UserResponse(
             id=u.id, name=u.name, email=u.email, role=u.role,
             phone=u.phone, is_active=u.is_active,
             kakao_linked=bool(u.kakao_id),
             kakao_matched=bool(u.kakao_uuid),
             kakao_uuid=u.kakao_uuid,
+            kakao_token_status=kakao_token_status,
+            kakao_token_expires_at=kakao_token_expires_at,
             kakao_scopes_status=_scopes_status(u),
             kakao_scopes_checked_at=(
                 u.kakao_scopes_checked_at.isoformat()
@@ -326,9 +334,7 @@ def list_users(
             setup_status=status,
             last_invite_sent_at=last_sent,
             group_no=_resolve_group_no(u, reviewer_by_user),
-        )
-        for (u, status, last_sent) in items_all
-    ]
+        ))
     return UserListResponse(items=items, total=total)
 
 
@@ -369,6 +375,7 @@ def create_user(
         if user.role == UserRole.REVIEWER else None
     )
     reviewer_map: dict[int, Reviewer] = {reviewer.user_id: reviewer} if reviewer else {}
+    kakao_token_status, kakao_token_expires_at = get_kakao_token_status(user)
     return UserCreateResponse(
         id=user.id,
         name=user.name,
@@ -379,6 +386,8 @@ def create_user(
         kakao_linked=bool(user.kakao_id),
         kakao_matched=bool(user.kakao_uuid),
         kakao_uuid=user.kakao_uuid,
+        kakao_token_status=kakao_token_status,
+        kakao_token_expires_at=kakao_token_expires_at,
         initial_password=initial_password,
         group_no=_resolve_group_no(user, reviewer_map),
     )
@@ -523,12 +532,15 @@ def get_user(
         if user.role == UserRole.REVIEWER else None
     )
     reviewer_map: dict[int, Reviewer] = {reviewer.user_id: reviewer} if reviewer else {}
+    kakao_token_status, kakao_token_expires_at = get_kakao_token_status(user)
     return UserResponse(
         id=user.id, name=user.name, email=user.email, role=user.role,
         phone=user.phone, is_active=user.is_active,
         kakao_linked=bool(user.kakao_id),
         kakao_matched=bool(user.kakao_uuid),
         kakao_uuid=user.kakao_uuid,
+        kakao_token_status=kakao_token_status,
+        kakao_token_expires_at=kakao_token_expires_at,
         group_no=_resolve_group_no(user, reviewer_map),
     )
 
@@ -565,12 +577,15 @@ def update_user(
         if user.role == UserRole.REVIEWER else None
     )
     reviewer_map: dict[int, Reviewer] = {reviewer.user_id: reviewer} if reviewer else {}
+    kakao_token_status, kakao_token_expires_at = get_kakao_token_status(user)
     return UserResponse(
         id=user.id, name=user.name, email=user.email, role=user.role,
         phone=user.phone, is_active=user.is_active,
         kakao_linked=bool(user.kakao_id),
         kakao_matched=bool(user.kakao_uuid),
         kakao_uuid=user.kakao_uuid,
+        kakao_token_status=kakao_token_status,
+        kakao_token_expires_at=kakao_token_expires_at,
         group_no=_resolve_group_no(user, reviewer_map),
     )
 

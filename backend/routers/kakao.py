@@ -7,7 +7,12 @@ from sqlalchemy.orm import Session
 from database import get_db
 from models.user import User, UserRole
 from routers.auth import require_roles
-from services.kakao import ensure_valid_token, get_friends, get_user_scopes
+from services.kakao import (
+    ensure_valid_token,
+    get_friends,
+    get_kakao_token_status,
+    get_user_scopes,
+)
 
 router = APIRouter()
 
@@ -201,9 +206,13 @@ class UserMatchStatus(BaseModel):
     name: str
     email: str
     role: UserRole
+    group_no: int | None = None
     kakao_oauth_linked: bool  # 본 서비스에 카카오 로그인 완료 (kakao_id 존재)
     kakao_linked: bool  # 내 친구 목록에서 매칭 완료 (kakao_uuid 존재) — 기존 필드 유지
     kakao_uuid: str | None = None
+    kakao_token_status: str | None = None
+    kakao_token_expires_at: str | None = None
+    kakao_scopes_status: str | None = None
 
 
 @router.get("/reviewers", response_model=list[UserMatchStatus])
@@ -220,18 +229,30 @@ async def list_users_match_status(
         .order_by(User.role, User.name)
         .all()
     )
-    return [
-        UserMatchStatus(
+    def _scopes_status(u: User) -> str:
+        if u.kakao_scopes_ok is True:
+            return "ok"
+        if u.kakao_scopes_ok is False:
+            return "insufficient"
+        return "unknown"
+
+    items: list[UserMatchStatus] = []
+    for u in users:
+        kakao_token_status, kakao_token_expires_at = get_kakao_token_status(u)
+        items.append(UserMatchStatus(
             user_id=u.id,
             name=u.name,
             email=u.email,
             role=u.role,
+            group_no=u.group_no,
             kakao_oauth_linked=bool(u.kakao_id),
             kakao_linked=bool(u.kakao_uuid),
             kakao_uuid=u.kakao_uuid,
-        )
-        for u in users
-    ]
+            kakao_token_status=kakao_token_status,
+            kakao_token_expires_at=kakao_token_expires_at,
+            kakao_scopes_status=_scopes_status(u),
+        ))
+    return items
 
 
 class UserScopeDiagnosis(BaseModel):
@@ -240,6 +261,9 @@ class UserScopeDiagnosis(BaseModel):
     kakao_id: str | None
     oauth_linked: bool
     token_expired: bool
+    kakao_token_status: str
+    kakao_token_expires_at: str | None = None
+    token_error: str | None = None
     all_agreed: bool | None
     missing_scopes: list[str]
     scopes: list[ScopeItem]
@@ -264,12 +288,19 @@ async def diagnose_user_scopes(
     if not user:
         raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다")
 
+    kakao_token_status, kakao_token_expires_at = get_kakao_token_status(user)
     result = UserScopeDiagnosis(
         user_id=user.id,
         user_name=user.name,
         kakao_id=user.kakao_id,
         oauth_linked=bool(user.kakao_id),
-        token_expired=False,
+        token_expired=kakao_token_status in {
+            "missing_token",
+            "refresh_needed",
+            "refresh_unavailable",
+        },
+        kakao_token_status=kakao_token_status,
+        kakao_token_expires_at=kakao_token_expires_at,
         all_agreed=None,
         missing_scopes=[],
         scopes=[],
@@ -285,9 +316,24 @@ async def diagnose_user_scopes(
     try:
         access_token = await ensure_valid_token(user, db)
     except ValueError as exc:
+        kakao_token_status, kakao_token_expires_at = get_kakao_token_status(user)
+        result.kakao_token_status = kakao_token_status
+        result.kakao_token_expires_at = kakao_token_expires_at
         result.token_expired = True
+        result.token_error = str(exc)
         result.error = f"토큰 유효하지 않음: {exc}"
         return result
+    except Exception as exc:
+        result.kakao_token_status = "invalid"
+        result.token_expired = True
+        result.token_error = str(exc)
+        result.error = f"토큰 갱신 실패: {exc}"
+        return result
+
+    kakao_token_status, kakao_token_expires_at = get_kakao_token_status(user)
+    result.kakao_token_status = kakao_token_status
+    result.kakao_token_expires_at = kakao_token_expires_at
+    result.token_expired = kakao_token_status != "valid"
 
     try:
         data = await get_user_scopes(access_token)

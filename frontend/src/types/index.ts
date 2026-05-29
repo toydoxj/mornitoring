@@ -12,6 +12,9 @@ export interface User {
   kakao_linked?: boolean      // 카카오 로그인 완료
   kakao_matched?: boolean     // 친구 매칭 완료
   kakao_uuid?: string | null
+  // 카카오 토큰 상태 (access token 만료/refresh 가능 여부)
+  kakao_token_status?: KakaoTokenStatus | null
+  kakao_token_expires_at?: string | null
   // 카카오 동의 캐시 — ok/insufficient/unknown (관리자 목록 응답)
   kakao_scopes_status?: KakaoScopesStatus | null
   kakao_scopes_checked_at?: string | null
@@ -31,6 +34,25 @@ export type KakaoScopesStatus = "ok" | "insufficient" | "unknown"
 export const KAKAO_SCOPES_LABELS: Record<KakaoScopesStatus, string> = {
   ok: "동의 OK",
   insufficient: "동의 부족",
+  unknown: "미확인",
+}
+
+export type KakaoTokenStatus =
+  | "not_linked"
+  | "missing_token"
+  | "valid"
+  | "refresh_needed"
+  | "refresh_unavailable"
+  | "invalid"
+  | "unknown"
+
+export const KAKAO_TOKEN_STATUS_LABELS: Record<KakaoTokenStatus, string> = {
+  not_linked: "미연동",
+  missing_token: "토큰 없음",
+  valid: "유효",
+  refresh_needed: "갱신 필요",
+  refresh_unavailable: "갱신 불가",
+  invalid: "갱신 실패",
   unknown: "미확인",
 }
 

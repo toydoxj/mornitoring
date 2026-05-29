@@ -206,6 +206,14 @@ def kakao_mock():
                     side_effect=_handler
                 )
 
+            def token_fail(self, *, status_code=401, msg="invalid refresh token"):
+                return mock.post(f"{KAKAO_AUTH}/oauth/token").mock(
+                    return_value=httpx.Response(
+                        status_code,
+                        json={"msg": msg, "code": -401},
+                    )
+                )
+
             def user_info_ok(self, *, kakao_id="98765", nickname="카카오테스트"):
                 return mock.get(f"{KAKAO_API}/v2/user/me").mock(
                     return_value=httpx.Response(

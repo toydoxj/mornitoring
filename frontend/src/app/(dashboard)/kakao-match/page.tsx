@@ -20,6 +20,8 @@ import {
 } from "@/components/ui/table"
 import apiClient from "@/lib/api/client"
 import { useAuthStore } from "@/stores/authStore"
+import type { KakaoTokenStatus } from "@/types"
+import { KAKAO_TOKEN_STATUS_LABELS } from "@/types"
 
 type UserRole = "team_leader" | "chief_secretary" | "secretary" | "reviewer"
 
@@ -31,6 +33,9 @@ interface UserStatus {
   kakao_oauth_linked: boolean
   kakao_linked: boolean
   kakao_uuid: string | null
+  kakao_token_status: KakaoTokenStatus | null
+  kakao_token_expires_at: string | null
+  kakao_scopes_status: string | null
 }
 
 interface UserScopeDiagnosis {
@@ -39,6 +44,9 @@ interface UserScopeDiagnosis {
   kakao_id: string | null
   oauth_linked: boolean
   token_expired: boolean
+  kakao_token_status: KakaoTokenStatus
+  kakao_token_expires_at: string | null
+  token_error: string | null
   all_agreed: boolean | null
   missing_scopes: string[]
   scopes: ScopeItem[]
@@ -172,6 +180,9 @@ export default function KakaoMatchPage() {
       kakao_id: null,
       oauth_linked: false,
       token_expired: false,
+      kakao_token_status: "unknown",
+      kakao_token_expires_at: null,
+      token_error: null,
       all_agreed: null,
       missing_scopes: [],
       scopes: [],
@@ -182,6 +193,7 @@ export default function KakaoMatchPage() {
         `/api/kakao/user/${user.user_id}/scopes`
       )
       setDiagnosis(data)
+      await fetchUsers()
     } catch (err) {
       const msg =
         (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
@@ -192,6 +204,9 @@ export default function KakaoMatchPage() {
         kakao_id: null,
         oauth_linked: false,
         token_expired: false,
+        kakao_token_status: "unknown",
+        kakao_token_expires_at: null,
+        token_error: null,
         all_agreed: null,
         missing_scopes: [],
         scopes: [],
@@ -219,6 +234,29 @@ export default function KakaoMatchPage() {
     const nick = (f.profile_nickname ?? "").toLowerCase()
     return nick.includes(search.toLowerCase())
   })
+
+  const renderKakaoTokenBadge = (
+    status?: KakaoTokenStatus | null,
+    expiresAt?: string | null,
+  ) => {
+    const s = status ?? "unknown"
+    const cls =
+      s === "valid"
+        ? "bg-green-100 text-green-700 border-green-300"
+        : s === "refresh_needed"
+          ? "bg-blue-100 text-blue-700 border-blue-300"
+          : s === "refresh_unavailable" || s === "invalid" || s === "missing_token"
+            ? "bg-red-100 text-red-700 border-red-300"
+            : "bg-gray-100 text-gray-500 border-gray-300"
+    const tooltip = expiresAt
+      ? `만료: ${new Date(expiresAt).toLocaleString("ko-KR")}`
+      : undefined
+    return (
+      <Badge variant="outline" className={cls} title={tooltip}>
+        {KAKAO_TOKEN_STATUS_LABELS[s]}
+      </Badge>
+    )
+  }
 
   return (
     <div className="space-y-4">
@@ -306,6 +344,7 @@ export default function KakaoMatchPage() {
               <TableHead className="w-[100px]">역할</TableHead>
               <TableHead>이메일</TableHead>
               <TableHead className="w-[120px]">카카오 로그인</TableHead>
+              <TableHead className="w-[110px]">토큰</TableHead>
               <TableHead className="w-[120px]">친구 매칭</TableHead>
               <TableHead className="w-[260px]">작업</TableHead>
             </TableRow>
@@ -313,13 +352,13 @@ export default function KakaoMatchPage() {
           <TableBody>
             {isLoading ? (
               <TableRow>
-                <TableCell colSpan={7} className="h-32 text-center">
+                <TableCell colSpan={8} className="h-32 text-center">
                   로딩 중...
                 </TableCell>
               </TableRow>
             ) : users.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={7} className="h-32 text-center text-muted-foreground">
+                <TableCell colSpan={8} className="h-32 text-center text-muted-foreground">
                   사용자가 없습니다
                 </TableCell>
               </TableRow>
@@ -342,6 +381,12 @@ export default function KakaoMatchPage() {
                       <Badge>완료</Badge>
                     ) : (
                       <Badge variant="outline">미완료</Badge>
+                    )}
+                  </TableCell>
+                  <TableCell>
+                    {renderKakaoTokenBadge(
+                      r.kakao_token_status,
+                      r.kakao_token_expires_at,
                     )}
                   </TableCell>
                   <TableCell>
@@ -452,7 +497,7 @@ export default function KakaoMatchPage() {
         <DialogContent className="max-w-lg">
           <DialogHeader>
             <DialogTitle>
-              {diagnosis?.user_name}님 카카오 동의 항목 진단
+              {diagnosis?.user_name}님 카카오 토큰/동의 진단
             </DialogTitle>
           </DialogHeader>
           {diagnosisLoading ? (
@@ -471,6 +516,18 @@ export default function KakaoMatchPage() {
                 <div className="flex items-center gap-2">
                   <span className="text-muted-foreground">카카오 ID:</span>
                   <code className="text-xs">{diagnosis.kakao_id}</code>
+                </div>
+              )}
+              <div className="flex items-center gap-2">
+                <span className="text-muted-foreground">토큰 상태:</span>
+                {renderKakaoTokenBadge(
+                  diagnosis.kakao_token_status,
+                  diagnosis.kakao_token_expires_at,
+                )}
+              </div>
+              {diagnosis.token_error && (
+                <div className="rounded-md border border-red-200 bg-red-50 p-3 text-red-700">
+                  토큰 오류: {diagnosis.token_error}
                 </div>
               )}
               {diagnosis.error ? (

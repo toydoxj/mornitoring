@@ -257,3 +257,27 @@ def test_send_message_to_self_requires_result_code_zero(kakao_mock):
 
     assert result["error"] == "unexpected_result"
     assert result["detail"]["result_code"] == -1
+
+
+def test_diagnose_user_scopes_reports_invalid_refresh_token(
+    client, kakao_mock, make_user
+):
+    """사용자 진단에서 refresh token 401을 500이 아닌 갱신 실패 상태로 노출한다."""
+    _, headers = make_user(UserRole.TEAM_LEADER)
+    target, _ = make_user(
+        UserRole.SECRETARY,
+        email="token-invalid@example.com",
+        kakao_id="token-invalid",
+        kakao_access_token="expired_access",
+        kakao_refresh_token="invalid_refresh",
+        kakao_token_expires_at=datetime.now(timezone.utc) - timedelta(hours=1),
+    )
+
+    kakao_mock.token_fail(status_code=401, msg="invalid refresh token")
+
+    res = client.get(f"/api/kakao/user/{target.id}/scopes", headers=headers)
+    assert res.status_code == 200
+    body = res.json()
+    assert body["kakao_token_status"] == "invalid"
+    assert body["token_expired"] is True
+    assert "토큰 갱신 실패" in body["error"]

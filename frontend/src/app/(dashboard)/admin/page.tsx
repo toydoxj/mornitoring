@@ -20,8 +20,13 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import apiClient from "@/lib/api/client"
-import type { KakaoScopesStatus, SetupStatus, User, UserRole } from "@/types"
-import { KAKAO_SCOPES_LABELS, ROLE_LABELS, SETUP_STATUS_LABELS } from "@/types"
+import type { KakaoScopesStatus, KakaoTokenStatus, SetupStatus, User, UserRole } from "@/types"
+import {
+  KAKAO_SCOPES_LABELS,
+  KAKAO_TOKEN_STATUS_LABELS,
+  ROLE_LABELS,
+  SETUP_STATUS_LABELS,
+} from "@/types"
 
 interface UserListResponse {
   items: User[]
@@ -60,6 +65,9 @@ interface UserScopeDiagnosis {
   kakao_id: string | null
   oauth_linked: boolean
   token_expired: boolean
+  kakao_token_status: KakaoTokenStatus
+  kakao_token_expires_at: string | null
+  token_error: string | null
   all_agreed: boolean | null
   missing_scopes: string[]
   scopes: ScopeItem[]
@@ -523,6 +531,9 @@ export default function AdminPage() {
       kakao_id: null,
       oauth_linked: false,
       token_expired: false,
+      kakao_token_status: "unknown",
+      kakao_token_expires_at: null,
+      token_error: null,
       all_agreed: null,
       missing_scopes: [],
       scopes: [],
@@ -533,6 +544,7 @@ export default function AdminPage() {
         `/api/kakao/user/${user.id}/scopes`
       )
       setDiagnosis(data)
+      await fetchUsers()
     } catch (err) {
       const axiosErr = err as {
         response?: { status?: number; data?: { detail?: string } }
@@ -549,6 +561,9 @@ export default function AdminPage() {
         kakao_id: null,
         oauth_linked: false,
         token_expired: false,
+        kakao_token_status: "unknown",
+        kakao_token_expires_at: null,
+        token_error: null,
         all_agreed: null,
         missing_scopes: [],
         scopes: [],
@@ -566,6 +581,29 @@ export default function AdminPage() {
     const nick = (f.profile_nickname ?? "").toLowerCase()
     return nick.includes(friendSearch.toLowerCase())
   })
+
+  const renderKakaoTokenBadge = (
+    status?: KakaoTokenStatus | null,
+    expiresAt?: string | null,
+  ) => {
+    const s = status ?? "unknown"
+    const cls =
+      s === "valid"
+        ? "bg-green-100 text-green-700 border-green-300"
+        : s === "refresh_needed"
+          ? "bg-blue-100 text-blue-700 border-blue-300"
+          : s === "refresh_unavailable" || s === "invalid" || s === "missing_token"
+            ? "bg-red-100 text-red-700 border-red-300"
+            : "bg-gray-100 text-gray-500 border-gray-300"
+    const tooltip = expiresAt
+      ? `만료: ${new Date(expiresAt).toLocaleString("ko-KR")}`
+      : undefined
+    return (
+      <Badge variant="outline" className={cls} title={tooltip}>
+        {KAKAO_TOKEN_STATUS_LABELS[s]}
+      </Badge>
+    )
+  }
 
   return (
     <div className="space-y-4">
@@ -757,6 +795,7 @@ export default function AdminPage() {
               <TableHead className="w-[70px] text-center">조</TableHead>
               <TableHead className="w-[120px]">전화번호</TableHead>
               <TableHead className="w-[100px] text-center">카카오 로그인</TableHead>
+              <TableHead className="w-[100px] text-center">토큰</TableHead>
               <TableHead className="w-[100px] text-center">친구 매칭</TableHead>
               <TableHead className="w-[90px] text-center">동의</TableHead>
               <TableHead className="w-[100px] text-center">비번 상태</TableHead>
@@ -767,13 +806,13 @@ export default function AdminPage() {
           <TableBody>
             {isLoading ? (
               <TableRow>
-                <TableCell colSpan={13} className="h-32 text-center">
+                <TableCell colSpan={14} className="h-32 text-center">
                   로딩 중...
                 </TableCell>
               </TableRow>
             ) : users.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={13} className="h-32 text-center text-muted-foreground">
+                <TableCell colSpan={14} className="h-32 text-center text-muted-foreground">
                   등록된 사용자가 없습니다
                 </TableCell>
               </TableRow>
@@ -804,6 +843,12 @@ export default function AdminPage() {
                       <Badge>완료</Badge>
                     ) : (
                       <Badge variant="outline">미완료</Badge>
+                    )}
+                  </TableCell>
+                  <TableCell className="text-center">
+                    {renderKakaoTokenBadge(
+                      user.kakao_token_status,
+                      user.kakao_token_expires_at,
                     )}
                   </TableCell>
                   <TableCell className="text-center">
@@ -1347,7 +1392,7 @@ export default function AdminPage() {
         <DialogContent className="max-w-lg">
           <DialogHeader>
             <DialogTitle>
-              {diagnosis?.user_name}님 카카오 동의 항목 진단
+              {diagnosis?.user_name}님 카카오 토큰/동의 진단
             </DialogTitle>
           </DialogHeader>
           {diagnosisLoading ? (
@@ -1362,6 +1407,18 @@ export default function AdminPage() {
                 <div className="flex items-center gap-2">
                   <span className="text-muted-foreground">카카오 ID:</span>
                   <code className="text-xs">{diagnosis.kakao_id}</code>
+                </div>
+              )}
+              <div className="flex items-center gap-2">
+                <span className="text-muted-foreground">토큰 상태:</span>
+                {renderKakaoTokenBadge(
+                  diagnosis.kakao_token_status,
+                  diagnosis.kakao_token_expires_at,
+                )}
+              </div>
+              {diagnosis.token_error && (
+                <div className="rounded-md border border-red-200 bg-red-50 p-3 text-red-700">
+                  토큰 오류: {diagnosis.token_error}
                 </div>
               )}
               {!diagnosis.oauth_linked ? (

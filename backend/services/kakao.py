@@ -14,6 +14,7 @@ from models.user import User
 
 KAKAO_AUTH_URL = "https://kauth.kakao.com"
 KAKAO_API_URL = "https://kapi.kakao.com"
+TOKEN_REFRESH_MARGIN = timedelta(minutes=5)
 
 
 def generate_oauth_state() -> str:
@@ -74,6 +75,33 @@ def _ensure_aware_utc(dt: datetime | None) -> datetime | None:
     if dt.tzinfo is None:
         return dt.replace(tzinfo=timezone.utc)
     return dt
+
+
+def get_kakao_token_status(
+    user: User,
+    now: datetime | None = None,
+) -> tuple[str, str | None]:
+    """사용자 카카오 토큰 상태를 UI 표시용 문자열로 분류한다.
+
+    refresh token 자체의 만료/폐기 여부는 카카오 갱신 API를 호출해야만 확정된다.
+    여기서는 저장된 access token 만료시각과 refresh token 존재 여부만 판단한다.
+    """
+    if not user.kakao_id:
+        return "not_linked", None
+    if not user.kakao_access_token:
+        return "missing_token", None
+
+    expires_at = _ensure_aware_utc(user.kakao_token_expires_at)
+    expires_iso = expires_at.isoformat() if expires_at else None
+    if now is None:
+        now = datetime.now(timezone.utc)
+
+    if expires_at is None or (expires_at - now) < TOKEN_REFRESH_MARGIN:
+        if user.kakao_refresh_token:
+            return "refresh_needed", expires_iso
+        return "refresh_unavailable", expires_iso
+
+    return "valid", expires_iso
 
 
 def lock_link_session(db: Session, session_id: str) -> KakaoLinkSession | None:
@@ -230,7 +258,7 @@ async def ensure_valid_token(user: User, db: Session) -> str:
     expires_at = _ensure_aware_utc(user.kakao_token_expires_at)
 
     # 만료 5분 전부터 갱신 대상
-    needs_refresh = expires_at is None or (expires_at - now) < timedelta(minutes=5)
+    needs_refresh = expires_at is None or (expires_at - now) < TOKEN_REFRESH_MARGIN
 
     if not needs_refresh:
         return user.kakao_access_token
