@@ -13,7 +13,7 @@ from models.inquiry import Inquiry
 from models.notification_log import NotificationLog
 from models.reviewer import Reviewer
 from models.user import User, UserRole
-from services.kakao import ensure_valid_token, send_message_to_friends, send_message_to_self
+from services.kakao import ensure_valid_token, send_message_to_friends
 
 
 INQUIRY_REPLY_TEMPLATE = "inquiry_reply"
@@ -130,14 +130,22 @@ async def notify_new_inquiry_to_group_secretaries(
     inquiry: Inquiry,
     reviewer: Reviewer,
 ) -> int:
-    """검토위원 새 문의를 같은 조 간사에게 카카오톡 나에게 보내기로 알린다.
+    """검토위원 새 문의를 작성자 카카오 계정에서 같은 조 간사에게 보낸다.
 
-    친구 관계에 의존하지 않도록 각 간사의 카카오 토큰으로 `나에게 보내기`를 사용한다.
-    성공 발송 수를 반환하며, 실패/스킵은 NotificationLog에 남긴다.
+    카카오 친구 메시지 API를 사용하므로 작성자 토큰과 수신 간사의 kakao_uuid가
+    필요하다. 성공 발송 수를 반환하며, 실패/스킵은 NotificationLog에 남긴다.
     """
     if reviewer.group_no is None:
         log_event(
             "warning", "new_inquiry_notify_reviewer_group_missing",
+            inquiry_id=inquiry.id, reviewer_id=reviewer.id,
+        )
+        return 0
+
+    sender = db.query(User).filter(User.id == reviewer.user_id).first()
+    if sender is None:
+        log_event(
+            "error", "new_inquiry_notify_sender_missing",
             inquiry_id=inquiry.id, reviewer_id=reviewer.id,
         )
         return 0
@@ -169,9 +177,9 @@ async def notify_new_inquiry_to_group_secretaries(
         error: str | None,
     ) -> None:
         db.add(NotificationLog(
-            sender_id=reviewer.user_id,
+            sender_id=sender.id,
             recipient_id=recipient.id,
-            channel="kakao_memo",
+            channel="kakao",
             template_type=INQUIRY_CREATED_TEMPLATE,
             title=title,
             message=message,
@@ -182,30 +190,52 @@ async def notify_new_inquiry_to_group_secretaries(
         ))
 
     for recipient in recipients:
-        try:
-            access_token = await ensure_valid_token(recipient, db)
-        except ValueError as exc:
+        if not recipient.kakao_uuid:
             _write_log(
                 recipient,
                 is_sent=False,
-                error=f"수신자 토큰 없음: {exc}",
+                error="수신자 kakao 매칭 미완료",
             )
-            continue
-        except Exception as exc:
+
+    sendable_recipients = [recipient for recipient in recipients if recipient.kakao_uuid]
+    if not sendable_recipients:
+        return 0
+
+    try:
+        access_token = await ensure_valid_token(sender, db)
+    except ValueError as exc:
+        for recipient in sendable_recipients:
             _write_log(
                 recipient,
                 is_sent=False,
-                error=f"토큰 확인 예외: {exc}",
+                error=f"발신자 토큰 없음: {exc}",
             )
-            log_event(
-                "error", "new_inquiry_notify_token_exception",
-                inquiry_id=inquiry.id, recipient_id=recipient.id, reason=str(exc),
+        log_event(
+            "warning", "new_inquiry_notify_sender_token_missing",
+            inquiry_id=inquiry.id, sender_id=sender.id,
+        )
+        return 0
+    except Exception as exc:
+        for recipient in sendable_recipients:
+            _write_log(
+                recipient,
+                is_sent=False,
+                error=f"발신자 토큰 확인 예외: {exc}",
             )
+        log_event(
+            "error", "new_inquiry_notify_token_exception",
+            inquiry_id=inquiry.id, sender_id=sender.id, reason=str(exc),
+        )
+        return 0
+
+    for recipient in recipients:
+        if not recipient.kakao_uuid:
             continue
 
         try:
-            result = await send_message_to_self(
+            result = await send_message_to_friends(
                 access_token=access_token,
+                receiver_uuids=[recipient.kakao_uuid],
                 title=title,
                 description=message,
                 link_url=link_url,
@@ -227,7 +257,17 @@ async def notify_new_inquiry_to_group_secretaries(
             )
             continue
 
-        _write_log(recipient, is_sent=True, error=None)
-        sent_count += 1
+        successful = set(result.get("successful_receiver_uuids", []))
+        if recipient.kakao_uuid in successful:
+            _write_log(recipient, is_sent=True, error=None)
+            sent_count += 1
+            continue
+
+        error = str(result.get("failure_info") or result.get("detail") or "발송 실패")
+        _write_log(recipient, is_sent=False, error=error)
+        log_event(
+            "error", "new_inquiry_notify_failed",
+            inquiry_id=inquiry.id, recipient_id=recipient.id, reason=error,
+        )
 
     return sent_count

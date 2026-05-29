@@ -100,6 +100,7 @@ def test_create_inquiry_notifies_same_group_secretary(
         name="같은조간사",
         email="same-sec@example.com",
         group_no=1,
+        kakao_uuid="uuid-same-secretary",
     )
     make_user(
         UserRole.SECRETARY,
@@ -113,17 +114,25 @@ def test_create_inquiry_notifies_same_group_secretary(
     async def fake_ensure_valid_token(user, db):
         return f"token-{user.id}"
 
-    async def fake_send_message_to_self(access_token, title, description, link_url=""):
+    async def fake_send_message_to_friends(
+        access_token, receiver_uuids, title, description, link_url=""
+    ):
         sent.append({
             "access_token": access_token,
+            "receiver_uuids": receiver_uuids,
             "title": title,
             "description": description,
             "link_url": link_url,
         })
-        return {"result_code": 0}
+        return {
+            "successful_receiver_uuids": ["uuid-same-secretary"],
+            "failure_info": [],
+        }
 
     monkeypatch.setattr(inquiry_notify, "ensure_valid_token", fake_ensure_valid_token)
-    monkeypatch.setattr(inquiry_notify, "send_message_to_self", fake_send_message_to_self)
+    monkeypatch.setattr(
+        inquiry_notify, "send_message_to_friends", fake_send_message_to_friends
+    )
 
     res = client.post(
         "/api/reviews/inquiry",
@@ -136,7 +145,8 @@ def test_create_inquiry_notifies_same_group_secretary(
     )
     assert res.status_code == 200
     assert sent == [{
-        "access_token": f"token-{same_secretary.id}",
+        "access_token": f"token-{user_a.id}",
+        "receiver_uuids": ["uuid-same-secretary"],
         "title": "새 문의 - INQ-NOTIFY-001",
         "description": f"관리번호: {own.mgmt_no}\n검토위원: {user_a.name}\n문의: 검토 중 확인 요청",
         "link_url": "http://localhost:3000/inquiries",
@@ -145,13 +155,14 @@ def test_create_inquiry_notifies_same_group_secretary(
     db_session.expire_all()
     logs = db_session.query(NotificationLog).all()
     assert len(logs) == 1
+    assert logs[0].sender_id == user_a.id
     assert logs[0].recipient_id == same_secretary.id
     assert logs[0].template_type == "inquiry_created"
-    assert logs[0].channel == "kakao_memo"
+    assert logs[0].channel == "kakao"
     assert logs[0].is_sent is True
 
 
-def test_create_inquiry_succeeds_when_secretary_token_check_fails(
+def test_create_inquiry_succeeds_when_sender_token_check_fails(
     client, db_session, make_reviewer, make_building, make_user, monkeypatch
 ):
     user_a, reviewer_a, headers_a = make_reviewer(group_no=1)
@@ -160,6 +171,7 @@ def test_create_inquiry_succeeds_when_secretary_token_check_fails(
         name="토큰오류간사",
         email="token-error-sec@example.com",
         group_no=1,
+        kakao_uuid="uuid-token-error-secretary",
     )
     own = make_building(reviewer_id=reviewer_a.id, mgmt_no="INQ-TOKEN-FAIL-001")
 
@@ -186,9 +198,10 @@ def test_create_inquiry_succeeds_when_secretary_token_check_fails(
 
     logs = db_session.query(NotificationLog).all()
     assert len(logs) == 1
+    assert logs[0].sender_id == user_a.id
     assert logs[0].recipient_id == same_secretary.id
     assert logs[0].is_sent is False
-    assert "토큰 확인 예외" in (logs[0].error_message or "")
+    assert "발신자 토큰 확인 예외" in (logs[0].error_message or "")
 
 
 def test_create_inquiry_succeeds_when_notify_unexpectedly_fails(
