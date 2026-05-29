@@ -632,8 +632,22 @@ class InquiryUpdateRequest(BaseModel):
     new_phase: str | None = None
 
 
+class InquiryContentUpdateRequest(BaseModel):
+    content: str
+
+
+def _can_manage_inquiry(inquiry, current_user: User, db: Session) -> bool:
+    """간사 이상 사용자가 해당 문의를 관리할 수 있는지 확인."""
+    if current_user.role in (UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY):
+        return True
+    if current_user.role == UserRole.SECRETARY:
+        building = db.query(Building).filter(Building.id == inquiry.building_id).first()
+        return bool(building and is_building_visible_to(current_user, building, db))
+    return False
+
+
 @router.post("/inquiry")
-def create_inquiry(
+async def create_inquiry(
     body: InquiryCreateRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -646,6 +660,7 @@ def create_inquiry(
     """
     from models.inquiry import Inquiry
     from models.reviewer import Reviewer
+    from services.inquiry_notify import notify_new_inquiry_to_group_secretaries
 
     building = db.query(Building).filter(Building.mgmt_no == body.mgmt_no).first()
     if not building:
@@ -669,8 +684,87 @@ def create_inquiry(
     db.add(inquiry)
     db.commit()
     db.refresh(inquiry)
+    await notify_new_inquiry_to_group_secretaries(
+        db,
+        inquiry=inquiry,
+        reviewer=reviewer,
+    )
+    db.commit()
     # inquiry.id 를 반환해 프론트가 바로 첨부 업로드를 이어갈 수 있게 한다
     return {"message": "문의가 등록되었습니다", "id": inquiry.id}
+
+
+@router.patch("/inquiry/{inquiry_id}/content")
+def update_inquiry_content(
+    inquiry_id: int,
+    body: InquiryContentUpdateRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """문의 본문 수정.
+
+    작성자는 완료 전 문의만 수정할 수 있고, 간사 이상은 가시 범위 내 문의를 수정할 수 있다.
+    """
+    from models.inquiry import Inquiry, InquiryStatus
+
+    content = body.content.strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="문의 내용을 입력해주세요")
+
+    inquiry = db.query(Inquiry).filter(Inquiry.id == inquiry_id).first()
+    if not inquiry:
+        raise HTTPException(status_code=404, detail="문의를 찾을 수 없습니다")
+
+    is_owner = inquiry.submitter_id == current_user.id
+    can_manage = _can_manage_inquiry(inquiry, current_user, db)
+    if not is_owner and not can_manage:
+        raise HTTPException(status_code=403, detail="수정 권한이 없습니다")
+    if is_owner and not can_manage and inquiry.status == InquiryStatus.COMPLETED:
+        raise HTTPException(status_code=400, detail="완료된 문의는 수정할 수 없습니다")
+
+    inquiry.content = content
+    db.commit()
+    db.refresh(inquiry)
+    return {"message": "문의가 수정되었습니다", "id": inquiry.id, "content": inquiry.content}
+
+
+@router.delete("/inquiry/{inquiry_id}", status_code=204)
+def delete_inquiry(
+    inquiry_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """문의 삭제.
+
+    작성자는 완료 전 문의만 삭제할 수 있고, 간사 이상은 가시 범위 내 문의를 삭제할 수 있다.
+    첨부 파일은 S3 삭제를 시도하되 실패해도 DB 삭제를 막지 않는다.
+    """
+    from models.inquiry import Inquiry, InquiryAttachment, InquiryStatus
+
+    inquiry = db.query(Inquiry).filter(Inquiry.id == inquiry_id).first()
+    if not inquiry:
+        raise HTTPException(status_code=404, detail="문의를 찾을 수 없습니다")
+
+    is_owner = inquiry.submitter_id == current_user.id
+    can_manage = _can_manage_inquiry(inquiry, current_user, db)
+    if not is_owner and not can_manage:
+        raise HTTPException(status_code=403, detail="삭제 권한이 없습니다")
+    if is_owner and not can_manage and inquiry.status == InquiryStatus.COMPLETED:
+        raise HTTPException(status_code=400, detail="완료된 문의는 삭제할 수 없습니다")
+
+    attachments = (
+        db.query(InquiryAttachment)
+        .filter(InquiryAttachment.inquiry_id == inquiry.id)
+        .all()
+    )
+    for att in attachments:
+        try:
+            delete_file(att.s3_key)
+        except Exception:
+            pass
+        db.delete(att)
+    db.delete(inquiry)
+    db.commit()
 
 
 @router.patch("/inquiry/{inquiry_id}")
@@ -697,6 +791,8 @@ async def update_inquiry(
     inquiry = db.query(Inquiry).filter(Inquiry.id == inquiry_id).first()
     if not inquiry:
         raise HTTPException(status_code=404, detail="문의를 찾을 수 없습니다")
+    if not _can_manage_inquiry(inquiry, current_user, db):
+        raise HTTPException(status_code=403, detail="수정 권한이 없습니다")
 
     previous_status = inquiry.status
     phase_changed = False
@@ -790,6 +886,7 @@ def list_inquiries(
             "mgmt_no": inq.mgmt_no,
             "phase": inq.phase,
             "current_phase": current_phase_map.get(inq.building_id),
+            "submitter_id": inq.submitter_id,
             "submitter_name": inq.submitter_name,
             "content": inq.content,
             "reply": inq.reply,
@@ -833,6 +930,7 @@ def list_my_inquiries(
                 "building_id": inq.building_id,
                 "mgmt_no": inq.mgmt_no,
                 "phase": inq.phase,
+                "submitter_id": inq.submitter_id,
                 "submitter_name": inq.submitter_name,
                 "content": inq.content,
                 "reply": inq.reply,
@@ -879,6 +977,7 @@ def get_building_inquiries(
     return [
         {
             "id": inq.id,
+            "submitter_id": inq.submitter_id,
             "phase": inq.phase,
             "submitter_name": inq.submitter_name,
             "content": inq.content,

@@ -23,6 +23,39 @@ def test_my_reviews_returns_only_own_buildings(
     assert payload["items"][0]["mgmt_no"] == own.mgmt_no
 
 
+def test_my_reviews_supports_server_sorting(
+    client, db_session, make_reviewer, make_building
+):
+    _, reviewer, headers = make_reviewer()
+    b1 = make_building(reviewer_id=reviewer.id, mgmt_no="SORT-001")
+    b2 = make_building(reviewer_id=reviewer.id, mgmt_no="SORT-003")
+    b3 = make_building(reviewer_id=reviewer.id, mgmt_no="SORT-002")
+    b1.gross_area = 100
+    b2.gross_area = 300
+    b3.gross_area = 200
+    db_session.commit()
+
+    default_res = client.get("/api/buildings/my-reviews", headers=headers)
+    assert default_res.status_code == 200
+    assert [item["mgmt_no"] for item in default_res.json()["items"]] == [
+        "SORT-001",
+        "SORT-002",
+        "SORT-003",
+    ]
+
+    sorted_res = client.get(
+        "/api/buildings/my-reviews",
+        headers=headers,
+        params={"sort_by": "gross_area", "sort_order": "desc"},
+    )
+    assert sorted_res.status_code == 200
+    assert [item["mgmt_no"] for item in sorted_res.json()["items"]] == [
+        "SORT-003",
+        "SORT-002",
+        "SORT-001",
+    ]
+
+
 def test_my_reviews_ignores_assigned_reviewer_name_match(
     client, db_session, make_user, make_building
 ):

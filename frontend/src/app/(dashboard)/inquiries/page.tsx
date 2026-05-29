@@ -38,6 +38,7 @@ interface InquiryItem {
   mgmt_no: string
   phase: string
   current_phase: string | null
+  submitter_id: number | null
   submitter_name: string
   content: string
   reply: string | null
@@ -68,12 +69,18 @@ export default function InquiriesPage() {
   const user = useAuthStore((s) => s.user)
   const canAdminDelete =
     !!user && ["team_leader", "chief_secretary"].includes(user.role)
+  const canManageInquiry =
+    !!user && ["team_leader", "chief_secretary", "secretary"].includes(user.role)
   const [activeData, setActiveData] = useState<InquiryItem[]>([])
   const [activeTotal, setActiveTotal] = useState(0)
   const [closedData, setClosedData] = useState<InquiryItem[]>([])
   const [closedTotal, setClosedTotal] = useState(0)
   const [isLoading, setIsLoading] = useState(true)
   const [replyMap, setReplyMap] = useState<Record<number, string>>({})
+  const [editTarget, setEditTarget] = useState<InquiryItem | null>(null)
+  const [editContent, setEditContent] = useState("")
+  const [savingEdit, setSavingEdit] = useState(false)
+  const [deletingInquiryId, setDeletingInquiryId] = useState<number | null>(null)
   // 단계 변경 다이얼로그 상태
   const [phaseEditTarget, setPhaseEditTarget] = useState<InquiryItem | null>(null)
   const [phaseDraft, setPhaseDraft] = useState<string>("")
@@ -200,6 +207,52 @@ export default function InquiriesPage() {
       fetchData()
     } catch (err) {
       console.error("업데이트 실패:", err)
+    }
+  }
+
+  const openEditDialog = (item: InquiryItem) => {
+    setEditTarget(item)
+    setEditContent(item.content)
+  }
+
+  const handleSaveInquiryContent = async () => {
+    if (!editTarget) return
+    const content = editContent.trim()
+    if (!content) {
+      alert("문의 내용을 입력해주세요")
+      return
+    }
+    setSavingEdit(true)
+    try {
+      await apiClient.patch(`/api/reviews/inquiry/${editTarget.id}/content`, {
+        content,
+      })
+      setEditTarget(null)
+      setEditContent("")
+      fetchData()
+    } catch (err) {
+      const msg =
+        (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
+        ?? "수정 실패"
+      alert(msg)
+    } finally {
+      setSavingEdit(false)
+    }
+  }
+
+  const handleDeleteInquiry = async (item: InquiryItem) => {
+    if (!confirm(`${item.mgmt_no} 문의를 삭제하시겠습니까?`)) return
+    setDeletingInquiryId(item.id)
+    try {
+      await apiClient.delete(`/api/reviews/inquiry/${item.id}`)
+      fetchData()
+    } catch (err) {
+      const msg =
+        (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
+        ?? "삭제 실패"
+      alert(msg)
+    } finally {
+      setDeletingInquiryId(null)
     }
   }
 
@@ -364,6 +417,26 @@ export default function InquiriesPage() {
                         >
                           답변저장
                         </Button>
+                        {canManageInquiry && (
+                          <>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => openEditDialog(item)}
+                            >
+                              수정
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="destructive"
+                              loading={deletingInquiryId === item.id}
+                              loadingText="삭제 중..."
+                              onClick={() => handleDeleteInquiry(item)}
+                            >
+                              삭제
+                            </Button>
+                          </>
+                        )}
                       </div>
                     </TableCell>
                   </TableRow>
@@ -373,6 +446,56 @@ export default function InquiriesPage() {
           </Table>
         </div>
       </div>
+
+      {/* 문의 내용 수정 다이얼로그 */}
+      <Dialog
+        open={!!editTarget}
+        onOpenChange={(open) => {
+          if (!open) {
+            setEditTarget(null)
+            setEditContent("")
+          }
+        }}
+      >
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>문의 내용 수정</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            {editTarget && (
+              <p className="text-xs text-muted-foreground">
+                관리번호{" "}
+                <span className="font-mono font-medium">{editTarget.mgmt_no}</span>
+              </p>
+            )}
+            <textarea
+              className="min-h-[140px] w-full rounded-md border px-3 py-2 text-sm"
+              value={editContent}
+              onChange={(e) => setEditContent(e.target.value)}
+              placeholder="문의 내용을 입력해주세요"
+            />
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setEditTarget(null)
+                setEditContent("")
+              }}
+              disabled={savingEdit}
+            >
+              취소
+            </Button>
+            <Button
+              onClick={handleSaveInquiryContent}
+              loading={savingEdit}
+              loadingText="저장 중..."
+            >
+              저장
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* 답변저장 후 후속 조치 선택 다이얼로그 */}
       <Dialog
@@ -475,6 +598,7 @@ export default function InquiriesPage() {
                   <TableHead className="w-[80px]">상태</TableHead>
                   <TableHead>답변</TableHead>
                   <TableHead className="w-[130px]">처리일시</TableHead>
+                  <TableHead className="w-[120px]">관리</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -535,6 +659,28 @@ export default function InquiriesPage() {
                     </TableCell>
                     <TableCell className="text-sm align-top">
                       {new Date(item.updated_at).toLocaleString("ko-KR")}
+                    </TableCell>
+                    <TableCell className="align-top">
+                      {canManageInquiry && (
+                        <div className="flex flex-wrap gap-1">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => openEditDialog(item)}
+                          >
+                            수정
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="destructive"
+                            loading={deletingInquiryId === item.id}
+                            loadingText="삭제 중..."
+                            onClick={() => handleDeleteInquiry(item)}
+                          >
+                            삭제
+                          </Button>
+                        </div>
+                      )}
                     </TableCell>
                   </TableRow>
                 ))}

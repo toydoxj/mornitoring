@@ -1,9 +1,6 @@
-"""문의사항 답변 완료 시 검토자(작성자)에게 카카오톡 알림을 전송한다.
+"""문의사항 관련 카카오톡 알림을 전송한다.
 
-발신자(관리자)의 카카오 친구 메시지 API를 사용한다. 수신자가 카카오 매칭이 안 되어
-있거나 발신자 토큰이 유효하지 않으면 조용히 스킵하고 NotificationLog에 이유를
-남긴다. 본 함수는 inquiry 본체 저장과 독립적이어야 하므로 예외를 삼키고 결과만
-반환한다.
+알림 실패는 inquiry 본체 저장과 독립적이어야 하므로 예외를 삼키고 결과만 반환한다.
 """
 
 from datetime import datetime, timezone
@@ -14,11 +11,13 @@ from config import settings
 from logging_config import log_event
 from models.inquiry import Inquiry
 from models.notification_log import NotificationLog
-from models.user import User
-from services.kakao import ensure_valid_token, send_message_to_friends
+from models.reviewer import Reviewer
+from models.user import User, UserRole
+from services.kakao import ensure_valid_token, send_message_to_friends, send_message_to_self
 
 
-TEMPLATE_TYPE = "inquiry_reply"
+INQUIRY_REPLY_TEMPLATE = "inquiry_reply"
+INQUIRY_CREATED_TEMPLATE = "inquiry_created"
 
 
 def _compose_message(inquiry: Inquiry, phase_changed: bool) -> tuple[str, str]:
@@ -35,6 +34,15 @@ def _compose_message(inquiry: Inquiry, phase_changed: bool) -> tuple[str, str]:
     if phase_changed:
         lines.append("※ 건물의 검토 단계가 변경되었습니다.")
     return title, "\n".join(lines)
+
+
+def _compose_new_inquiry_message(inquiry: Inquiry) -> tuple[str, str]:
+    """새 문의 접수 알림 제목/본문 구성."""
+    title = f"새 문의 - {inquiry.mgmt_no}"
+    content = (inquiry.content or "").strip() or "(문의 내용 없음)"
+    if len(content) > 140:
+        content = content[:137] + "..."
+    return title, f"검토위원: {inquiry.submitter_name}\n문의: {content}"
 
 
 async def notify_inquiry_reply(
@@ -63,7 +71,7 @@ async def notify_inquiry_reply(
         db.add(NotificationLog(
             recipient_id=recipient.id,
             channel=channel,
-            template_type=TEMPLATE_TYPE,
+            template_type=INQUIRY_REPLY_TEMPLATE,
             title=title,
             message=message,
             related_building_id=inquiry.building_id,
@@ -113,3 +121,100 @@ async def notify_inquiry_reply(
 
     _write_log(is_sent=is_sent, channel="kakao", error=error)
     return is_sent
+
+
+async def notify_new_inquiry_to_group_secretaries(
+    db: Session,
+    *,
+    inquiry: Inquiry,
+    reviewer: Reviewer,
+) -> int:
+    """검토위원 새 문의를 같은 조 간사에게 카카오톡 나에게 보내기로 알린다.
+
+    친구 관계에 의존하지 않도록 각 간사의 카카오 토큰으로 `나에게 보내기`를 사용한다.
+    성공 발송 수를 반환하며, 실패/스킵은 NotificationLog에 남긴다.
+    """
+    if reviewer.group_no is None:
+        log_event(
+            "warning", "new_inquiry_notify_reviewer_group_missing",
+            inquiry_id=inquiry.id, reviewer_id=reviewer.id,
+        )
+        return 0
+
+    recipients = (
+        db.query(User)
+        .filter(
+            User.role == UserRole.SECRETARY,
+            User.group_no == reviewer.group_no,
+            User.is_active.is_(True),
+        )
+        .all()
+    )
+    if not recipients:
+        log_event(
+            "warning", "new_inquiry_notify_secretary_missing",
+            inquiry_id=inquiry.id, group_no=reviewer.group_no,
+        )
+        return 0
+
+    title, message = _compose_new_inquiry_message(inquiry)
+    link_url = f"{settings.frontend_base_url}/inquiries"
+    sent_count = 0
+
+    def _write_log(
+        recipient: User,
+        *,
+        is_sent: bool,
+        error: str | None,
+    ) -> None:
+        db.add(NotificationLog(
+            recipient_id=recipient.id,
+            channel="kakao_memo",
+            template_type=INQUIRY_CREATED_TEMPLATE,
+            title=title,
+            message=message,
+            related_building_id=inquiry.building_id,
+            is_sent=is_sent,
+            sent_at=datetime.now(timezone.utc) if is_sent else None,
+            error_message=error,
+        ))
+
+    for recipient in recipients:
+        try:
+            access_token = await ensure_valid_token(recipient, db)
+        except ValueError as exc:
+            _write_log(
+                recipient,
+                is_sent=False,
+                error=f"수신자 토큰 없음: {exc}",
+            )
+            continue
+
+        try:
+            result = await send_message_to_self(
+                access_token=access_token,
+                title=title,
+                description=message,
+                link_url=link_url,
+            )
+        except Exception as exc:  # 외부 호출 실패를 문의 저장과 분리
+            _write_log(recipient, is_sent=False, error=f"API 예외: {exc}")
+            log_event(
+                "error", "new_inquiry_notify_exception",
+                inquiry_id=inquiry.id, recipient_id=recipient.id, reason=str(exc),
+            )
+            continue
+
+        if "error" in result:
+            error = str(result.get("detail", "발송 실패"))
+            _write_log(recipient, is_sent=False, error=error)
+            log_event(
+                "error", "new_inquiry_notify_failed",
+                inquiry_id=inquiry.id, recipient_id=recipient.id, reason=error,
+            )
+            continue
+
+        _write_log(recipient, is_sent=True, error=None)
+        sent_count += 1
+
+    return sent_count

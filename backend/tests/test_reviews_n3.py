@@ -7,8 +7,10 @@
 
 import io
 
-from models.inquiry import Inquiry
+from models.inquiry import Inquiry, InquiryStatus
+from models.notification_log import NotificationLog
 from models.user import UserRole
+from services import inquiry_notify
 
 
 def _fake_xlsx_upload(client, url, headers, mgmt_no, phase):
@@ -87,6 +89,229 @@ def test_reviewer_can_create_inquiry_on_own_building(
     assert saved is not None
     assert saved.submitter_id == user_a.id  # FK가 정확히 기록되어야 함
     assert saved.submitter_name == user_a.name
+
+
+def test_create_inquiry_notifies_same_group_secretary(
+    client, db_session, make_reviewer, make_building, make_user, monkeypatch
+):
+    user_a, reviewer_a, headers_a = make_reviewer(group_no=1)
+    same_secretary, _ = make_user(
+        UserRole.SECRETARY,
+        name="같은조간사",
+        email="same-sec@example.com",
+        group_no=1,
+    )
+    make_user(
+        UserRole.SECRETARY,
+        name="다른조간사",
+        email="other-sec@example.com",
+        group_no=2,
+    )
+    own = make_building(reviewer_id=reviewer_a.id, mgmt_no="INQ-NOTIFY-001")
+    sent: list[dict[str, str]] = []
+
+    async def fake_ensure_valid_token(user, db):
+        return f"token-{user.id}"
+
+    async def fake_send_message_to_self(access_token, title, description, link_url=""):
+        sent.append({
+            "access_token": access_token,
+            "title": title,
+            "description": description,
+            "link_url": link_url,
+        })
+        return {"result_code": 0}
+
+    monkeypatch.setattr(inquiry_notify, "ensure_valid_token", fake_ensure_valid_token)
+    monkeypatch.setattr(inquiry_notify, "send_message_to_self", fake_send_message_to_self)
+
+    res = client.post(
+        "/api/reviews/inquiry",
+        headers=headers_a,
+        json={
+            "mgmt_no": own.mgmt_no,
+            "phase": "preliminary",
+            "content": "검토 중 확인 요청",
+        },
+    )
+    assert res.status_code == 200
+    assert sent == [{
+        "access_token": f"token-{same_secretary.id}",
+        "title": "새 문의 - INQ-NOTIFY-001",
+        "description": f"검토위원: {user_a.name}\n문의: 검토 중 확인 요청",
+        "link_url": "http://localhost:3000/inquiries",
+    }]
+
+    db_session.expire_all()
+    logs = db_session.query(NotificationLog).all()
+    assert len(logs) == 1
+    assert logs[0].recipient_id == same_secretary.id
+    assert logs[0].template_type == "inquiry_created"
+    assert logs[0].channel == "kakao_memo"
+    assert logs[0].is_sent is True
+
+
+def test_inquiry_owner_can_update_and_delete_open_inquiry(
+    client, db_session, make_reviewer, make_building
+):
+    user, reviewer, headers = make_reviewer(group_no=1)
+    building = make_building(reviewer_id=reviewer.id, mgmt_no="INQ-EDIT-001")
+    inquiry = Inquiry(
+        building_id=building.id,
+        mgmt_no=building.mgmt_no,
+        phase="preliminary",
+        submitter_id=user.id,
+        submitter_name=user.name,
+        content="수정 전",
+    )
+    db_session.add(inquiry)
+    db_session.commit()
+    db_session.refresh(inquiry)
+
+    update_res = client.patch(
+        f"/api/reviews/inquiry/{inquiry.id}/content",
+        headers=headers,
+        json={"content": "수정 후"},
+    )
+    assert update_res.status_code == 200
+
+    db_session.expire_all()
+    refreshed = db_session.query(Inquiry).filter(Inquiry.id == inquiry.id).first()
+    assert refreshed.content == "수정 후"
+
+    delete_res = client.delete(f"/api/reviews/inquiry/{inquiry.id}", headers=headers)
+    assert delete_res.status_code == 204
+    assert db_session.query(Inquiry).filter(Inquiry.id == inquiry.id).first() is None
+
+
+def test_inquiry_owner_cannot_update_or_delete_completed_inquiry(
+    client, db_session, make_reviewer, make_building
+):
+    user, reviewer, headers = make_reviewer(group_no=1)
+    building = make_building(reviewer_id=reviewer.id, mgmt_no="INQ-LOCK-001")
+    inquiry = Inquiry(
+        building_id=building.id,
+        mgmt_no=building.mgmt_no,
+        phase="preliminary",
+        submitter_id=user.id,
+        submitter_name=user.name,
+        content="완료 문의",
+        status=InquiryStatus.COMPLETED,
+    )
+    db_session.add(inquiry)
+    db_session.commit()
+    db_session.refresh(inquiry)
+
+    update_res = client.patch(
+        f"/api/reviews/inquiry/{inquiry.id}/content",
+        headers=headers,
+        json={"content": "수정 시도"},
+    )
+    assert update_res.status_code == 400
+
+    delete_res = client.delete(f"/api/reviews/inquiry/{inquiry.id}", headers=headers)
+    assert delete_res.status_code == 400
+
+
+def test_same_group_secretary_can_update_and_delete_inquiry(
+    client, db_session, make_reviewer, make_building, make_user
+):
+    reviewer_user, reviewer, _ = make_reviewer(group_no=2)
+    secretary, secretary_headers = make_user(
+        UserRole.SECRETARY,
+        name="2조간사",
+        email="sec2@example.com",
+        group_no=2,
+    )
+    building = make_building(reviewer_id=reviewer.id, mgmt_no="INQ-MANAGE-001")
+    inquiry = Inquiry(
+        building_id=building.id,
+        mgmt_no=building.mgmt_no,
+        phase="preliminary",
+        submitter_id=reviewer_user.id,
+        submitter_name=reviewer_user.name,
+        content="관리 전",
+        status=InquiryStatus.COMPLETED,
+    )
+    db_session.add(inquiry)
+    db_session.commit()
+    db_session.refresh(inquiry)
+
+    update_res = client.patch(
+        f"/api/reviews/inquiry/{inquiry.id}/content",
+        headers=secretary_headers,
+        json={"content": "관리 수정"},
+    )
+    assert update_res.status_code == 200
+
+    db_session.expire_all()
+    refreshed = db_session.query(Inquiry).filter(Inquiry.id == inquiry.id).first()
+    assert refreshed.content == "관리 수정"
+
+    delete_res = client.delete(
+        f"/api/reviews/inquiry/{inquiry.id}",
+        headers=secretary_headers,
+    )
+    assert delete_res.status_code == 204
+    assert db_session.query(Inquiry).filter(Inquiry.id == inquiry.id).first() is None
+
+
+def test_other_group_secretary_cannot_delete_inquiry(
+    client, db_session, make_reviewer, make_building, make_user
+):
+    reviewer_user, reviewer, _ = make_reviewer(group_no=3)
+    _, secretary_headers = make_user(
+        UserRole.SECRETARY,
+        name="다른조간사",
+        email="other-group-sec@example.com",
+        group_no=4,
+    )
+    building = make_building(reviewer_id=reviewer.id, mgmt_no="INQ-BLOCK-001")
+    inquiry = Inquiry(
+        building_id=building.id,
+        mgmt_no=building.mgmt_no,
+        phase="preliminary",
+        submitter_id=reviewer_user.id,
+        submitter_name=reviewer_user.name,
+        content="다른 조 문의",
+    )
+    db_session.add(inquiry)
+    db_session.commit()
+    db_session.refresh(inquiry)
+
+    res = client.delete(f"/api/reviews/inquiry/{inquiry.id}", headers=secretary_headers)
+    assert res.status_code == 403
+
+
+def test_other_group_secretary_cannot_update_inquiry_status(
+    client, db_session, make_reviewer, make_building, make_user
+):
+    reviewer_user, reviewer, _ = make_reviewer(group_no=5)
+    _, secretary_headers = make_user(
+        UserRole.SECRETARY,
+        name="5조아닌간사",
+        email="not-group5-sec@example.com",
+        group_no=6,
+    )
+    building = make_building(reviewer_id=reviewer.id, mgmt_no="INQ-PATCH-BLOCK-001")
+    inquiry = Inquiry(
+        building_id=building.id,
+        mgmt_no=building.mgmt_no,
+        phase="preliminary",
+        submitter_id=reviewer_user.id,
+        submitter_name=reviewer_user.name,
+        content="다른 조 상태 변경 차단",
+    )
+    db_session.add(inquiry)
+    db_session.commit()
+    db_session.refresh(inquiry)
+
+    res = client.patch(
+        f"/api/reviews/inquiry/{inquiry.id}",
+        headers=secretary_headers,
+        json={"status": "completed"},
+    )
+    assert res.status_code == 403
 
 
 def test_my_inquiries_only_returns_own_by_submitter_id(

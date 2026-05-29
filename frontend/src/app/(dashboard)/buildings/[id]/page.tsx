@@ -51,12 +51,18 @@ export default function BuildingDetailPage() {
   const [building, setBuilding] = useState<Building | null>(null)
   const [stages, setStages] = useState<ReviewStage[]>([])
   const [inquiries, setInquiries] = useState<{
-    id: number; phase: string; submitter_name: string; content: string;
-    reply: string | null; status: string; created_at: string;
+    id: number; submitter_id: number | null; phase: string; submitter_name: string; content: string;
+    reply: string | null; status: string; created_at: string; updated_at?: string;
     attachments?: InquiryAttachmentData[]
   }[]>([])
   const [newInquiry, setNewInquiry] = useState("")
   const [newInquiryFiles, setNewInquiryFiles] = useState<File[]>([])
+  const [editInquiryTarget, setEditInquiryTarget] = useState<{
+    id: number; content: string; mgmt_no?: string
+  } | null>(null)
+  const [editInquiryContent, setEditInquiryContent] = useState("")
+  const [savingInquiryEdit, setSavingInquiryEdit] = useState(false)
+  const [deletingInquiryId, setDeletingInquiryId] = useState<number | null>(null)
   const [submittingInquiry, setSubmittingInquiry] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
   const [phaseEditOpen, setPhaseEditOpen] = useState(false)
@@ -261,6 +267,60 @@ export default function BuildingDetailPage() {
         (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
         ?? "삭제 실패"
       alert(msg)
+    }
+  }
+
+  const refreshInquiries = async () => {
+    if (!building) return
+    const { data: inqData } = await apiClient.get(
+      `/api/reviews/building-inquiries/${building.mgmt_no}`
+    )
+    setInquiries(inqData)
+  }
+
+  const openInquiryEditDialog = (inq: { id: number; content: string }) => {
+    setEditInquiryTarget({ id: inq.id, content: inq.content, mgmt_no: building?.mgmt_no })
+    setEditInquiryContent(inq.content)
+  }
+
+  const handleSaveInquiryContent = async () => {
+    if (!editInquiryTarget) return
+    const content = editInquiryContent.trim()
+    if (!content) {
+      alert("문의 내용을 입력해주세요")
+      return
+    }
+    setSavingInquiryEdit(true)
+    try {
+      await apiClient.patch(`/api/reviews/inquiry/${editInquiryTarget.id}/content`, {
+        content,
+      })
+      setEditInquiryTarget(null)
+      setEditInquiryContent("")
+      await refreshInquiries()
+    } catch (err) {
+      const msg =
+        (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
+        ?? "수정 실패"
+      alert(msg)
+    } finally {
+      setSavingInquiryEdit(false)
+    }
+  }
+
+  const handleDeleteInquiry = async (inquiryId: number) => {
+    if (!confirm("이 문의를 삭제하시겠습니까?")) return
+    setDeletingInquiryId(inquiryId)
+    try {
+      await apiClient.delete(`/api/reviews/inquiry/${inquiryId}`)
+      await refreshInquiries()
+    } catch (err) {
+      const msg =
+        (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
+        ?? "삭제 실패"
+      alert(msg)
+    } finally {
+      setDeletingInquiryId(null)
     }
   }
 
@@ -625,12 +685,34 @@ export default function BuildingDetailPage() {
                       } className="text-xs">
                         {inq.status === "open" ? "접수" :
                          inq.status === "asking_agency" ? "관리원문의중" :
-                         "완료"}
+                        "완료"}
                       </Badge>
                     </div>
-                    <span className="text-xs text-muted-foreground">
-                      {new Date(inq.created_at).toLocaleString("ko-KR")}
-                    </span>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-muted-foreground">
+                        {new Date(inq.created_at).toLocaleString("ko-KR")}
+                      </span>
+                      {((user?.id === inq.submitter_id && inq.status !== "completed") || canManage) && (
+                        <div className="flex gap-1">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => openInquiryEditDialog(inq)}
+                          >
+                            수정
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="destructive"
+                            loading={deletingInquiryId === inq.id}
+                            loadingText="삭제 중..."
+                            onClick={() => handleDeleteInquiry(inq.id)}
+                          >
+                            삭제
+                          </Button>
+                        </div>
+                      )}
+                    </div>
                   </div>
                   <p className="text-sm">{inq.content}</p>
                   {/* 질문 첨부 */}
@@ -675,6 +757,54 @@ export default function BuildingDetailPage() {
           )}
         </CardContent>
       </Card>
+
+      {/* 문의 내용 수정 다이얼로그 */}
+      <Dialog
+        open={!!editInquiryTarget}
+        onOpenChange={(open) => {
+          if (!open) {
+            setEditInquiryTarget(null)
+            setEditInquiryContent("")
+          }
+        }}
+      >
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>문의 내용 수정</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <p className="text-xs text-muted-foreground">
+              관리번호{" "}
+              <span className="font-mono font-medium">{editInquiryTarget?.mgmt_no ?? building.mgmt_no}</span>
+            </p>
+            <textarea
+              className="min-h-[140px] w-full rounded-md border px-3 py-2 text-sm"
+              value={editInquiryContent}
+              onChange={(e) => setEditInquiryContent(e.target.value)}
+              placeholder="문의 내용을 입력해주세요"
+            />
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setEditInquiryTarget(null)
+                setEditInquiryContent("")
+              }}
+              disabled={savingInquiryEdit}
+            >
+              취소
+            </Button>
+            <Button
+              onClick={handleSaveInquiryContent}
+              loading={savingInquiryEdit}
+              loadingText="저장 중..."
+            >
+              저장
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* 현재 단계 수정 다이얼로그 (간사 이상) */}
       <Dialog open={phaseEditOpen} onOpenChange={setPhaseEditOpen}>

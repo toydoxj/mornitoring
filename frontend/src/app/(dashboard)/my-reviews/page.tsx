@@ -1,11 +1,10 @@
 "use client"
 
-import { useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { useRouter } from "next/navigation"
-import { FileSpreadsheet, Upload, X } from "lucide-react"
+import { ArrowDown, ArrowUp, ArrowUpDown, FileSpreadsheet, Upload, X } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import {
   Dialog,
@@ -42,6 +41,11 @@ const SUBMITTED_PHASES = new Set([
   "supplement_5",
 ])
 
+const PAGE_SIZE = 50
+
+type SortField = "mgmt_no" | "address" | "gross_area" | "floors_above" | "current_phase" | "report_due_date"
+type SortOrder = "asc" | "desc"
+
 interface FieldChange {
   field: string
   label: string
@@ -62,6 +66,9 @@ export default function MyReviewsPage() {
   const router = useRouter()
   const [data, setData] = useState<Building[]>([])
   const [total, setTotal] = useState(0)
+  const [page, setPage] = useState(1)
+  const [sortBy, setSortBy] = useState<SortField>("mgmt_no")
+  const [sortOrder, setSortOrder] = useState<SortOrder>("asc")
   const [isLoading, setIsLoading] = useState(true)
 
   // 업로드 다이얼로그 상태
@@ -80,10 +87,14 @@ export default function MyReviewsPage() {
   const [reasonText, setReasonText] = useState("")
   const [reasonSubmitting, setReasonSubmitting] = useState(false)
 
-  const fetchData = async () => {
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
+
+  const fetchData = useCallback(async () => {
+    setIsLoading(true)
     try {
       const { data: res } = await apiClient.get<BuildingListResponse>(
-        "/api/buildings/my-reviews"
+        "/api/buildings/my-reviews",
+        { params: { page, size: PAGE_SIZE, sort_by: sortBy, sort_order: sortOrder } }
       )
       setData(res.items)
       setTotal(res.total)
@@ -92,11 +103,11 @@ export default function MyReviewsPage() {
     } finally {
       setIsLoading(false)
     }
-  }
+  }, [page, sortBy, sortOrder])
 
   useEffect(() => {
     fetchData()
-  }, [])
+  }, [fetchData])
 
   const handleReasonSubmit = async () => {
     if (!reasonTarget || !reasonText.trim()) return
@@ -247,6 +258,41 @@ export default function MyReviewsPage() {
     setInappropriateReviewNeeded(false)
   }
 
+  const handleSort = (field: SortField) => {
+    setPage(1)
+    if (sortBy === field) {
+      setSortOrder((prev) => (prev === "asc" ? "desc" : "asc"))
+      return
+    }
+    setSortBy(field)
+    setSortOrder("asc")
+  }
+
+  const SortableHead = ({
+    field,
+    children,
+    className = "",
+  }: {
+    field: SortField
+    children: React.ReactNode
+    className?: string
+  }) => {
+    const active = sortBy === field
+    const Icon = active ? (sortOrder === "asc" ? ArrowUp : ArrowDown) : ArrowUpDown
+    return (
+      <TableHead className={className}>
+        <button
+          type="button"
+          className="inline-flex w-full items-center justify-center gap-1 whitespace-nowrap font-medium hover:text-foreground"
+          onClick={() => handleSort(field)}
+        >
+          <span>{children}</span>
+          <Icon className={active ? "h-3.5 w-3.5 text-foreground" : "h-3.5 w-3.5 text-muted-foreground"} />
+        </button>
+      </TableHead>
+    )
+  }
+
   return (
     <div className="space-y-4">
       <div>
@@ -260,15 +306,15 @@ export default function MyReviewsPage() {
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead className="w-[120px] text-center">관리번호</TableHead>
-              <TableHead className="w-[220px]">주소</TableHead>
-              <TableHead className="w-[100px] text-center">연면적(㎡)</TableHead>
-              <TableHead className="w-[80px] text-center">지상층</TableHead>
+              <SortableHead field="mgmt_no" className="w-[120px] text-center">관리번호</SortableHead>
+              <SortableHead field="address" className="w-[220px]">주소</SortableHead>
+              <SortableHead field="gross_area" className="w-[100px] text-center">연면적(㎡)</SortableHead>
+              <SortableHead field="floors_above" className="w-[80px] text-center">지상층</SortableHead>
               <TableHead className="w-[120px] text-center">고위험군</TableHead>
               <TableHead className="w-[80px] text-center">부적합</TableHead>
-              <TableHead className="w-[120px] text-center">현재단계</TableHead>
+              <SortableHead field="current_phase" className="w-[120px] text-center">현재단계</SortableHead>
               <TableHead className="w-[90px] text-center">최근판정</TableHead>
-              <TableHead className="w-[110px] text-center">제출 예정일</TableHead>
+              <SortableHead field="report_due_date" className="w-[110px] text-center">제출 예정일</SortableHead>
               <TableHead className="w-[100px] text-center">검토서</TableHead>
               <TableHead className="w-[80px] text-center">문의</TableHead>
             </TableRow>
@@ -380,6 +426,30 @@ export default function MyReviewsPage() {
           </TableBody>
         </Table>
       </div>
+
+      {totalPages > 1 && (
+        <div className="flex items-center justify-end gap-2 text-sm">
+          <span className="text-muted-foreground">
+            {page} / {totalPages}
+          </span>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={page <= 1 || isLoading}
+            onClick={() => setPage((prev) => Math.max(1, prev - 1))}
+          >
+            이전
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={page >= totalPages || isLoading}
+            onClick={() => setPage((prev) => Math.min(totalPages, prev + 1))}
+          >
+            다음
+          </Button>
+        </div>
+      )}
 
       {/* 검토서 업로드 다이얼로그 */}
       <Dialog open={!!uploadTarget} onOpenChange={(open) => {

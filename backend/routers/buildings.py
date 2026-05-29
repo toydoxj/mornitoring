@@ -2,7 +2,8 @@
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy import func
+from sqlalchemy.orm import Session, load_only, selectinload
 
 from database import get_db
 from models.building import Building
@@ -152,6 +153,57 @@ def _build_full_address(b: Building) -> str | None:
     if b.special_lot_no:
         parts.append(str(b.special_lot_no))
     return " ".join(parts) if parts else None
+
+
+def _to_my_review_response(
+    building: Building,
+    *,
+    reviewer_name: str,
+    latest_stage: "ReviewStage | None",
+    pending_stage: "ReviewStage | None",
+) -> dict:
+    """내 검토 대상 목록에 필요한 필드만 응답 dict로 변환."""
+    return {
+        "id": building.id,
+        "mgmt_no": building.mgmt_no,
+        "building_name": building.building_name,
+        "sido": building.sido,
+        "sigungu": building.sigungu,
+        "beopjeongdong": building.beopjeongdong,
+        "main_lot_no": building.main_lot_no,
+        "sub_lot_no": building.sub_lot_no,
+        "special_lot_no": building.special_lot_no,
+        "gross_area": building.gross_area,
+        "floors_above": building.floors_above,
+        "floors_below": building.floors_below,
+        "high_risk_type": building.high_risk_type,
+        "is_special_structure": building.is_special_structure,
+        "is_high_rise": building.is_high_rise,
+        "is_multi_use": building.is_multi_use,
+        "current_phase": building.current_phase,
+        "final_result": building.final_result,
+        "reviewer_id": building.reviewer_id,
+        "reviewer_name": reviewer_name,
+        "assigned_reviewer_name": building.assigned_reviewer_name,
+        "reviewer_registered": True,
+        "full_address": _build_full_address(building),
+        "latest_result": (
+            latest_stage.result.value if latest_stage and latest_stage.result else None
+        ),
+        "latest_inappropriate": (
+            bool(latest_stage.inappropriate_review_needed) if latest_stage else False
+        ),
+        "report_due_date": (
+            pending_stage.report_due_date.isoformat()
+            if (
+                building.current_phase
+                and building.current_phase.endswith("_received")
+                and pending_stage
+                and pending_stage.report_due_date
+            )
+            else None
+        ),
+    }
 
 
 def _to_response(building: Building, registered_names: set[str]) -> dict:
@@ -851,6 +903,8 @@ def my_stats(
 def my_review_buildings(
     page: int = Query(1, ge=1),
     size: int = Query(50, ge=1, le=200),
+    sort_by: str = Query("mgmt_no"),
+    sort_order: str = Query("asc"),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_roles(UserRole.REVIEWER, UserRole.SECRETARY, UserRole.CHIEF_SECRETARY)),
 ):
@@ -866,16 +920,80 @@ def my_review_buildings(
         return BuildingListResponse(items=[], total=0)
 
     query = db.query(Building).filter(Building.reviewer_id == reviewer.id)
+    pending_due_subq = None
+    if sort_by == "report_due_date":
+        pending_due_subq = (
+            db.query(
+                ReviewStage.building_id.label("building_id"),
+                func.max(ReviewStage.report_due_date).label("report_due_date"),
+            )
+            .filter(
+                ReviewStage.report_submitted_at.is_(None),
+                ReviewStage.report_due_date.isnot(None),
+            )
+            .group_by(ReviewStage.building_id)
+            .subquery()
+        )
+        query = query.outerjoin(
+            pending_due_subq,
+            pending_due_subq.c.building_id == Building.id,
+        )
+
     total = query.count()
-    # N+1 제거: building.reviewer.user를 한 번에 eager load
+    sort_desc = sort_order == "desc"
+    address_cols = [
+        Building.sido,
+        Building.sigungu,
+        Building.beopjeongdong,
+        Building.main_lot_no,
+        Building.sub_lot_no,
+        Building.special_lot_no,
+    ]
+    sort_map = {
+        "mgmt_no": [Building.mgmt_no],
+        "address": address_cols,
+        "gross_area": [Building.gross_area],
+        "floors_above": [Building.floors_above],
+        "current_phase": [Building.current_phase],
+    }
+    if pending_due_subq is not None:
+        sort_map["report_due_date"] = [pending_due_subq.c.report_due_date]
+    order_cols = sort_map.get(sort_by, [Building.mgmt_no])
+    order_by = [
+        (col.desc() if sort_desc else col.asc()).nulls_last()
+        for col in order_cols
+    ]
+    order_by.append(Building.mgmt_no.asc())
     buildings = (
-        query.options(selectinload(Building.reviewer).selectinload(Reviewer.user))
-        .order_by(Building.mgmt_no)
+        query.options(
+            load_only(
+                Building.id,
+                Building.mgmt_no,
+                Building.building_name,
+                Building.sido,
+                Building.sigungu,
+                Building.beopjeongdong,
+                Building.main_lot_no,
+                Building.sub_lot_no,
+                Building.special_lot_no,
+                Building.gross_area,
+                Building.floors_above,
+                Building.floors_below,
+                Building.high_risk_type,
+                Building.is_special_structure,
+                Building.is_high_rise,
+                Building.is_multi_use,
+                Building.current_phase,
+                Building.final_result,
+                Building.reviewer_id,
+                Building.assigned_reviewer_name,
+            )
+        )
+        .order_by(*order_by)
         .offset((page - 1) * size)
         .limit(size)
         .all()
     )
-    registered_names = _get_registered_names(db)
 
     # 각 건물별 최근 제출 stage (phase_order 최대, 제출일 존재) 조회
     building_ids = [b.id for b in buildings]
@@ -912,17 +1030,14 @@ def my_review_buildings(
 
     items = []
     for b in buildings:
-        data = _to_response(b, registered_names)
-        latest = latest_by_building.get(b.id)
-        if latest:
-            data["latest_result"] = latest.result.value if latest.result else None
-            data["latest_inappropriate"] = bool(latest.inappropriate_review_needed)
-        # 접수 상태(current_phase가 _received로 끝남)일 때만 예정일 노출
-        if b.current_phase and b.current_phase.endswith("_received"):
-            pending = pending_by_building.get(b.id)
-            if pending and pending.report_due_date:
-                data["report_due_date"] = pending.report_due_date.isoformat()
-        items.append(data)
+        items.append(
+            _to_my_review_response(
+                b,
+                reviewer_name=current_user.name,
+                latest_stage=latest_by_building.get(b.id),
+                pending_stage=pending_by_building.get(b.id),
+            )
+        )
     return BuildingListResponse(items=items, total=total)
 
 
