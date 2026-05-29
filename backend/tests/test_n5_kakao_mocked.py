@@ -206,9 +206,13 @@ def test_send_invite_refreshes_sender_token_then_sends(
 
 # ===== 6. ensure_valid_token refresh 성공 =====
 
-def test_ensure_valid_token_auto_refresh(db_session, kakao_mock, make_user):
+def test_ensure_valid_token_auto_refresh(db_session, kakao_mock, make_user, monkeypatch):
     """expires_at이 5분 이내면 자동 refresh → user 토큰 갱신."""
+    from config import settings
     from services.kakao import ensure_valid_token
+
+    monkeypatch.setattr(settings, "kakao_rest_api_key", "test_rest_key")
+    monkeypatch.setattr(settings, "kakao_client_secret", "test_client_secret")
 
     user, _ = make_user(
         UserRole.SECRETARY,
@@ -217,7 +221,16 @@ def test_ensure_valid_token_auto_refresh(db_session, kakao_mock, make_user):
         kakao_token_expires_at=datetime.now(timezone.utc) + timedelta(minutes=2),  # 임박
     )
 
-    kakao_mock.token_ok(access_token="refreshed_access", refresh_token="refreshed_refresh")
+    kakao_mock.token_ok(
+        access_token="refreshed_access",
+        refresh_token="refreshed_refresh",
+        assert_form={
+            "grant_type": "refresh_token",
+            "client_id": "test_rest_key",
+            "client_secret": "test_client_secret",
+            "refresh_token": "old_refresh",
+        },
+    )
 
     new_access = asyncio.run(ensure_valid_token(user, db_session))
     assert new_access == "refreshed_access"

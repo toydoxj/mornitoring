@@ -173,9 +173,26 @@ def kakao_mock():
     with respx.mock(assert_all_called=False) as mock:
 
         class _Helper:
-            def token_ok(self, *, access_token="kakao_access_x", refresh_token="kakao_refresh_x", expires_in=21599):
-                return mock.post(f"{KAKAO_AUTH}/oauth/token").mock(
-                    return_value=httpx.Response(
+            def token_ok(
+                self,
+                *,
+                access_token="kakao_access_x",
+                refresh_token="kakao_refresh_x",
+                expires_in=21599,
+                assert_form=None,
+            ):
+                def _handler(request):
+                    if assert_form:
+                        from urllib.parse import parse_qs
+                        form = {
+                            key: values[-1]
+                            for key, values in parse_qs(
+                                request.content.decode("utf-8")
+                            ).items()
+                        }
+                        for key, expected in assert_form.items():
+                            assert form.get(key) == expected
+                    return httpx.Response(
                         200,
                         json={
                             "access_token": access_token,
@@ -184,6 +201,9 @@ def kakao_mock():
                             "token_type": "bearer",
                         },
                     )
+
+                return mock.post(f"{KAKAO_AUTH}/oauth/token").mock(
+                    side_effect=_handler
                 )
 
             def user_info_ok(self, *, kakao_id="98765", nickname="카카오테스트"):
