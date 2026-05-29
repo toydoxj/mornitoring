@@ -138,7 +138,7 @@ def test_create_inquiry_notifies_same_group_secretary(
     assert sent == [{
         "access_token": f"token-{same_secretary.id}",
         "title": "새 문의 - INQ-NOTIFY-001",
-        "description": f"검토위원: {user_a.name}\n문의: 검토 중 확인 요청",
+        "description": f"관리번호: {own.mgmt_no}\n검토위원: {user_a.name}\n문의: 검토 중 확인 요청",
         "link_url": "http://localhost:3000/inquiries",
     }]
 

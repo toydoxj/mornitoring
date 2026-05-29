@@ -42,7 +42,7 @@ def _compose_new_inquiry_message(inquiry: Inquiry) -> tuple[str, str]:
     content = (inquiry.content or "").strip() or "(문의 내용 없음)"
     if len(content) > 140:
         content = content[:137] + "..."
-    return title, f"검토위원: {inquiry.submitter_name}\n문의: {content}"
+    return title, f"관리번호: {inquiry.mgmt_no}\n검토위원: {inquiry.submitter_name}\n문의: {content}"
 
 
 async def notify_inquiry_reply(
