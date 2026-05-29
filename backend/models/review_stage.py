@@ -91,3 +91,9 @@ class ReviewStage(Base):
 
     # 관계
     building = relationship("Building", back_populates="stages")
+    severity_summaries = relationship(
+        "ReviewSeveritySummary",
+        back_populates="stage",
+        cascade="all, delete-orphan",
+        order_by="ReviewSeveritySummary.category, ReviewSeveritySummary.severity",
+    )

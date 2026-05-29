@@ -37,11 +37,12 @@ def _cell_str(ws, coord: str) -> str:
     return s
 
 
-def _find_defect_type_values(ws, start_row: int = 79, max_row: int = 95) -> list[str]:
+def _find_defect_type_values(ws, start_row: int = 1, max_row: int | None = None) -> list[str]:
     """판정결과 부적합 유형 값 추출 (F열에 "판정결과" 라벨이 있는 행부터 최대 6행)"""
+    end_row = max_row or ws.max_row + 1
     # "판정결과 부적합 유형" 라벨 행 찾기
     label_row = None
-    for row in range(start_row, max_row):
+    for row in range(start_row, end_row):
         val = ws.cell(row=row, column=6).value  # F열
         if val and "판정결과" in str(val) and "부적합" in str(val):
             label_row = row
@@ -52,7 +53,7 @@ def _find_defect_type_values(ws, start_row: int = 79, max_row: int = 95) -> list
 
     # G열에서 부적합 유형 찾기 (라벨 행부터 최대 6행까지만)
     defects = []
-    for row in range(label_row, min(label_row + 6, max_row)):
+    for row in range(label_row, min(label_row + 20, end_row)):
         val = ws.cell(row=row, column=7).value  # G열
         if val and str(val).strip():
             s = str(val).strip().replace("_x000D_", "").replace("_x000d_", "").replace("\r", "")
@@ -73,6 +74,7 @@ def extract_review_data(file_path: str | Path) -> dict:
         "review_opinion": None,
         "reviewer_name": None,
         "severity_counts": {"L0": 0, "L1": 0, "L2": 0, "L3": 0, "L4": 0},
+        "category_severity_counts": [],
     }
 
     try:
@@ -92,6 +94,14 @@ def extract_review_data(file_path: str | Path) -> dict:
         opinion_parse = parse_review_opinions(ws)
         data["review_opinion"] = opinion_parse.formatted_text
         data["severity_counts"] = opinion_parse.severity_counts
+        data["category_severity_counts"] = [
+            {
+                "category": item.category,
+                "severity": item.severity,
+                "count": item.count,
+            }
+            for item in opinion_parse.category_severity_counts
+        ]
 
         # 판정결과 부적합 유형
         defects = _find_defect_type_values(ws)

@@ -128,6 +128,12 @@ export type InappropriateDecisionType =
   | "confirmed_simple"
   | "excluded"
 
+export interface ReviewSeveritySummary {
+  category: string
+  severity: "L0" | "L1" | "L2" | "L3" | "L4"
+  count: number
+}
+
 export interface ReviewStage {
   id: number
   building_id: number
@@ -146,6 +152,7 @@ export interface ReviewStage {
   severity_l2_count: number
   severity_l3_count: number
   severity_l4_count: number
+  severity_summaries?: ReviewSeveritySummary[]
   inappropriate_review_needed?: boolean
   inappropriate_decision?: InappropriateDecisionType | null
 }

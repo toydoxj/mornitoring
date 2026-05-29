@@ -19,11 +19,19 @@ class OpinionEntry:
 
 
 @dataclass
+class SeverityCategoryCount:
+    category: str
+    severity: str
+    count: int
+
+
+@dataclass
 class OpinionParseResult:
     formatted_text: str | None = None
     severity_counts: dict[str, int] = field(
         default_factory=lambda: {label: 0 for label in SEVERITY_LABELS}
     )
+    category_severity_counts: list[SeverityCategoryCount] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     entries: list[OpinionEntry] = field(default_factory=list)
 
@@ -69,7 +77,7 @@ def _section_title(section: str, subsection: str | None) -> str:
 
 
 def _find_detail_header_row(ws) -> int:
-    for row in range(1, min(ws.max_row, 120) + 1):
+    for row in range(1, ws.max_row + 1):
         detail_label = clean_cell_text(ws.cell(row=row, column=4).value)
         severity_label = clean_cell_text(ws.cell(row=row, column=8).value)
         if "상세의견" in detail_label and "심각도" in severity_label:
@@ -78,11 +86,11 @@ def _find_detail_header_row(ws) -> int:
 
 
 def _find_detail_end_row(ws, start_row: int) -> int:
-    for row in range(start_row + 1, min(ws.max_row, 140) + 1):
+    for row in range(start_row + 1, ws.max_row + 1):
         label = clean_cell_text(ws.cell(row=row, column=2).value)
         if "적정성 검토 결과" in label or "보완서류" in label:
             return row
-    return min(ws.max_row, 140) + 1
+    return ws.max_row + 1
 
 
 def parse_review_opinions(ws) -> OpinionParseResult:
@@ -133,5 +141,26 @@ def parse_review_opinions(ws) -> OpinionParseResult:
             lines.extend(f"{{{entry.severity}}} {entry.content}" for entry in entries)
             blocks.append("\n".join(lines))
         result.formatted_text = "\n\n".join(blocks)
+        result.category_severity_counts = _build_category_severity_counts(grouped)
 
     return result
+
+
+def _build_category_severity_counts(
+    grouped: dict[str, list[OpinionEntry]]
+) -> list[SeverityCategoryCount]:
+    """분류별 심각도 집계를 통계 저장용 행 단위로 만든다."""
+    rows: list[SeverityCategoryCount] = []
+    for category, entries in grouped.items():
+        counts = {label: 0 for label in SEVERITY_LABELS}
+        for entry in entries:
+            counts[entry.severity] += 1
+        for severity in SEVERITY_LABELS:
+            count = counts[severity]
+            if count > 0:
+                rows.append(SeverityCategoryCount(
+                    category=category,
+                    severity=severity,
+                    count=count,
+                ))
+    return rows

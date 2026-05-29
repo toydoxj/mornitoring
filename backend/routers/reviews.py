@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from database import get_db
 from dependencies import stream_upload_to_tempfile
 from models.building import Building
+from models.review_severity_summary import ReviewSeveritySummary
 from models.review_stage import ReviewStage, PhaseType
 from models.reviewer import Reviewer
 from models.user import User, UserRole
@@ -63,6 +64,14 @@ from services.scope import (
 router = APIRouter()
 
 
+class SeveritySummaryResponse(BaseModel):
+    category: str
+    severity: str
+    count: int
+
+    model_config = {"from_attributes": True}
+
+
 class ReviewStageResponse(BaseModel):
     id: int
     building_id: int
@@ -80,6 +89,7 @@ class ReviewStageResponse(BaseModel):
     severity_l2_count: int = 0
     severity_l3_count: int = 0
     severity_l4_count: int = 0
+    severity_summaries: list[SeveritySummaryResponse] = []
     review_opinion: str | None = None
     s3_file_key: str | None = None
     inappropriate_review_needed: bool = False
@@ -431,6 +441,36 @@ def _apply_severity_counts(stage: ReviewStage, extracted: dict) -> None:
     stage.severity_l4_count = int(counts.get("L4", 0) or 0)
 
 
+def _apply_severity_summaries(db: Session, stage: ReviewStage, extracted: dict) -> None:
+    """검토서 상세의견의 분류별 심각도 집계를 저장한다.
+
+    재업로드 시 기존 집계를 그대로 두면 통계가 중복되므로, 같은 stage의 집계는
+    매 업로드마다 전체 교체한다.
+    """
+    if stage.id is None:
+        db.add(stage)
+        db.flush()
+
+    db.query(ReviewSeveritySummary).filter(
+        ReviewSeveritySummary.stage_id == stage.id
+    ).delete(synchronize_session="fetch")
+
+    rows = extracted.get("category_severity_counts") or []
+    valid_severities = {"L0", "L1", "L2", "L3", "L4"}
+    for row in rows:
+        category = str(row.get("category") or "").strip()
+        severity = str(row.get("severity") or "").strip().upper()
+        count = int(row.get("count") or 0)
+        if not category or severity not in valid_severities or count <= 0:
+            continue
+        db.add(ReviewSeveritySummary(
+            stage_id=stage.id,
+            category=category,
+            severity=severity,
+            count=count,
+        ))
+
+
 @router.post("/upload", response_model=UploadResponse)
 async def upload_review(
     file: UploadFile = File(...),
@@ -513,6 +553,7 @@ async def upload_review(
                 stage.defect_type_3 = extracted["defect_type_3"]
             stage.review_opinion = extracted["review_opinion"]
             _apply_severity_counts(stage, extracted)
+            _apply_severity_summaries(db, stage, extracted)
             stage.inappropriate_review_needed = inappropriate_review_needed
             new_s3_key = upload_review_file(tmp_path, mgmt_no, actual_phase, file.filename)
             stage.s3_file_key = new_s3_key
@@ -539,6 +580,7 @@ async def upload_review(
             )
             _apply_severity_counts(stage, extracted)
             db.add(stage)
+            _apply_severity_summaries(db, stage, extracted)
 
         # 5. 건축물 current_phase 전환 (매트릭스 UPLOAD).
         # 출발 phase가 _received일 때만 다음 단계로 전환한다. 그 외(이미 제출 완료

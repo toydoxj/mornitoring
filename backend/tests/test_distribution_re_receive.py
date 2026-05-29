@@ -9,6 +9,7 @@ from datetime import date, timedelta
 
 from models.audit_log import AuditLog
 from models.inappropriate_note import InappropriateNote
+from models.review_severity_summary import ReviewSeveritySummary
 from models.review_stage import PhaseType, ResultType, ReviewStage
 from models.user import UserRole
 
@@ -51,6 +52,12 @@ def test_re_receive_clears_submitted_review(
         content="부적합 의견",
     )
     db_session.add(note)
+    db_session.add(ReviewSeveritySummary(
+        stage_id=stage.id,
+        category="부재설계의 적정성 - 구조설계 요소",
+        severity="L3",
+        count=1,
+    ))
     # 운영 시나리오: 어떤 이유로 building이 다시 접수 상태로 환원되어 있다.
     building.current_phase = "doc_received"
     db_session.commit()
@@ -72,6 +79,11 @@ def test_re_receive_clears_submitted_review(
     assert refreshed.result is None
     assert refreshed.review_opinion is None
     assert refreshed.defect_type_1 is None
+    assert refreshed.severity_l0_count == 0
+    assert refreshed.severity_l1_count == 0
+    assert refreshed.severity_l2_count == 0
+    assert refreshed.severity_l3_count == 0
+    assert refreshed.severity_l4_count == 0
     assert refreshed.s3_file_key is None
     assert refreshed.inappropriate_review_needed is False
     # 도서 접수 정보는 갱신
@@ -85,6 +97,12 @@ def test_re_receive_clears_submitted_review(
         .count()
     )
     assert notes_left == 0
+    summaries_left = (
+        db_session.query(ReviewSeveritySummary)
+        .filter(ReviewSeveritySummary.stage_id == stage.id)
+        .count()
+    )
+    assert summaries_left == 0
 
     # 호출 단위 reset 감사 로그가 1건 남는다
     reset_logs = (
@@ -94,6 +112,7 @@ def test_re_receive_clears_submitted_review(
     )
     assert len(reset_logs) == 1
     assert reset_logs[0].after_data["reset_count"] == 1
+    assert reset_logs[0].after_data["items"][0]["severity_summaries_deleted"] == 1
 
 
 def test_re_receive_without_history_does_not_log_reset(
@@ -203,6 +222,57 @@ def test_re_receive_clears_objection_only_history(
     assert refreshed.objection_filed is False
     assert refreshed.objection_content is None
     assert refreshed.objection_reason is None
+
+
+def test_re_receive_clears_only_severity_summary_history(
+    client, db_session, make_user, make_building
+):
+    """분류별 심각도 집계만 남은 stage도 재접수 시 초기화된다."""
+    headers = _admin_headers(make_user)
+    building = make_building(mgmt_no="RE-0006")
+
+    stage = ReviewStage(
+        building_id=building.id,
+        phase=PhaseType.PRELIMINARY,
+        phase_order=0,
+        doc_received_at=date.today() - timedelta(days=5),
+        report_due_date=date.today() + timedelta(days=9),
+    )
+    db_session.add(stage)
+    db_session.commit()
+    db_session.refresh(stage)
+
+    db_session.add(ReviewSeveritySummary(
+        stage_id=stage.id,
+        category="기타의견",
+        severity="L0",
+        count=1,
+    ))
+    building.current_phase = "doc_received"
+    db_session.commit()
+
+    res = client.post(
+        "/api/distribution/receive",
+        headers=headers,
+        json={"mgmt_nos": ["RE-0006"]},
+    )
+    assert res.status_code == 200, res.text
+
+    db_session.expire_all()
+    summaries_left = (
+        db_session.query(ReviewSeveritySummary)
+        .filter(ReviewSeveritySummary.stage_id == stage.id)
+        .count()
+    )
+    assert summaries_left == 0
+
+    reset_logs = (
+        db_session.query(AuditLog)
+        .filter(AuditLog.action == "reset", AuditLog.target_type == "review_stage")
+        .all()
+    )
+    assert len(reset_logs) == 1
+    assert reset_logs[0].after_data["reset_count"] == 1
 
 
 def test_re_receive_survives_s3_delete_exception(

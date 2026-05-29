@@ -64,19 +64,21 @@ def _cell_str(ws, coord: str) -> str:
     return s
 
 
-def _find_result_row(ws, start_row: int = 79, max_row: int = 100) -> int:
+def _find_result_row(ws, start_row: int = 1, max_row: int | None = None) -> int:
     """적정성 검토 결과 행 찾기 (행이 추가되면 이동할 수 있음)"""
-    for row in range(start_row, max_row):
+    end_row = max_row or ws.max_row + 1
+    for row in range(start_row, end_row):
         val = ws.cell(row=row, column=2).value  # B열
         if val and "적정성 검토 결과" in str(val):
             return row
     return 79  # 기본값
 
 
-def _find_defect_type_rows(ws, start_row: int = 79, max_row: int = 95) -> list[int]:
+def _find_defect_type_rows(ws, start_row: int = 1, max_row: int | None = None) -> list[int]:
     """판정결과 부적합 유형 행 찾기 (F열에 "판정결과" 라벨이 있는 행부터 최대 6행)"""
+    end_row = max_row or ws.max_row + 1
     label_row = None
-    for row in range(start_row, max_row):
+    for row in range(start_row, end_row):
         val = ws.cell(row=row, column=6).value  # F열
         if val and "판정결과" in str(val) and "부적합" in str(val):
             label_row = row
@@ -86,7 +88,7 @@ def _find_defect_type_rows(ws, start_row: int = 79, max_row: int = 95) -> list[i
         return []
 
     rows = []
-    for row in range(label_row, min(label_row + 6, max_row)):
+    for row in range(label_row, min(label_row + 20, end_row)):
         val = ws.cell(row=row, column=7).value  # G열
         if val and str(val).strip():
             rows.append(row)
@@ -237,7 +239,7 @@ def validate_review_file(
     review_result_text = _cell_str(ws, f"D{result_row}")
 
     # 판정결과 부적합 유형 찾기
-    defect_rows = _find_defect_type_rows(ws)
+    defect_rows = _find_defect_type_rows(ws, start_row=result_row)
     defect_type_1 = _cell_str(ws, f"G{defect_rows[0]}") if len(defect_rows) > 0 else ""
     defect_type_2 = _cell_str(ws, f"G{defect_rows[1]}") if len(defect_rows) > 1 else ""
     defect_type_3 = _cell_str(ws, f"G{defect_rows[2]}") if len(defect_rows) > 2 else ""
@@ -291,6 +293,14 @@ def validate_review_file(
         "defect_type_3": defect_type_3,
         "review_opinion": opinion_parse.formatted_text,
         "severity_counts": opinion_parse.severity_counts,
+        "category_severity_counts": [
+            {
+                "category": item.category,
+                "severity": item.severity,
+                "count": item.count,
+            }
+            for item in opinion_parse.category_severity_counts
+        ],
         # 유형별 상세검토
         "type_construction_method": _cell_str(ws, "C8"),     # 공법
         "type_transfer_structure": transfer_structure,         # 전이구조
