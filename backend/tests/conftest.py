@@ -251,6 +251,11 @@ def kakao_mock():
                     )
                 )
 
+            def memo_send_ok(self, *, result_code=0):
+                return mock.post(f"{KAKAO_API}/v2/api/talk/memo/default/send").mock(
+                    return_value=httpx.Response(200, json={"result_code": result_code})
+                )
+
             def scopes_ok(self, *, agreed_ids=("profile_nickname", "friends", "talk_message")):
                 scopes = [
                     {"id": sid, "display_name": sid, "agreed": True}

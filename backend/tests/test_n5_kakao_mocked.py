@@ -240,3 +240,20 @@ def test_ensure_valid_token_auto_refresh(db_session, kakao_mock, make_user, monk
     refreshed = db_session.query(UserModel).filter(UserModel.id == user.id).first()
     assert refreshed.kakao_access_token == "refreshed_access"
     assert refreshed.kakao_refresh_token == "refreshed_refresh"
+
+
+def test_send_message_to_self_requires_result_code_zero(kakao_mock):
+    """나에게 보내기 HTTP 200이어도 result_code가 0이 아니면 실패로 취급한다."""
+    from services.kakao import send_message_to_self
+
+    kakao_mock.memo_send_ok(result_code=-1)
+
+    result = asyncio.run(send_message_to_self(
+        access_token="access",
+        title="테스트",
+        description="본문",
+        link_url="http://localhost:3000/inquiries",
+    ))
+
+    assert result["error"] == "unexpected_result"
+    assert result["detail"]["result_code"] == -1

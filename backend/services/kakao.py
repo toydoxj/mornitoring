@@ -317,9 +317,11 @@ async def send_message_to_self(
         )
 
         if response.status_code == 200:
-            return response.json()
-        else:
-            return {"error": response.status_code, "detail": response.text}
+            data = response.json()
+            if data.get("result_code") == 0:
+                return data
+            return {"error": "unexpected_result", "detail": data}
+        return {"error": response.status_code, "detail": response.text}
 
 
 async def send_message_to_friends(
