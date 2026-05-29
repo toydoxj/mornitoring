@@ -276,7 +276,9 @@ def get_stats(
       4) 위원별 doc_received 상태 중 예비검토서 제출/미제출 (LEFT JOIN + GROUP BY)
     """
     from sqlalchemy import and_, func as sa_func
+    from engines.review_keyword_analyzer import match_keywords
     from models.inquiry import Inquiry, InquiryStatus
+    from models.review_opinion_detail import ReviewOpinionDetail
     from models.review_severity_summary import ReviewSeveritySummary
     from models.review_stage import ReviewStage, PhaseType
 
@@ -554,6 +556,46 @@ def get_stats(
     ]
     severity_by_phase.sort(key=lambda row: phase_order.get(row["phase"], 999))
 
+    # 6) 키워드 분석 — 저장된 상세검토 원문을 예비/보완 구분으로 집계
+    keyword_detail_rows = (
+        _scoped_by_building_id(
+            db.query(
+                ReviewOpinionDetail.phase_group,
+                ReviewOpinionDetail.severity,
+                ReviewOpinionDetail.content,
+            )
+            .join(ReviewStage, ReviewOpinionDetail.stage_id == ReviewStage.id),
+            ReviewStage.building_id,
+        )
+        .all()
+    )
+    detail_counts = {"preliminary": 0, "supplement": 0}
+    keyword_map: dict[str, dict[str, int | str]] = {}
+    for phase_group, severity, content in keyword_detail_rows:
+        if phase_group in detail_counts:
+            detail_counts[phase_group] += 1
+        for keyword in match_keywords(content or ""):
+            item = keyword_map.setdefault(keyword, {
+                "keyword": keyword,
+                "total": 0,
+                "preliminary": 0,
+                "supplement": 0,
+                "L0": 0,
+                "L1": 0,
+                "L2": 0,
+                "L3": 0,
+                "L4": 0,
+            })
+            item["total"] = int(item["total"]) + 1
+            if phase_group in ("preliminary", "supplement"):
+                item[phase_group] = int(item[phase_group]) + 1
+            if severity in SEVERITY_LABELS:
+                item[severity] = int(item[severity]) + 1
+    keyword_rows = sorted(
+        keyword_map.values(),
+        key=lambda row: (-int(row["total"]), str(row["keyword"])),
+    )
+
     return {
         "total": total,
         # 전체 흐름 요약 (서로 겹치지 않고 합산하면 total)
@@ -585,6 +627,11 @@ def get_stats(
             "totals": severity_totals,
             "by_category": severity_by_category,
             "by_phase": severity_by_phase,
+        },
+        "keyword_stats": {
+            "total_details": len(keyword_detail_rows),
+            "detail_counts": detail_counts,
+            "by_keyword": keyword_rows,
         },
     }
 

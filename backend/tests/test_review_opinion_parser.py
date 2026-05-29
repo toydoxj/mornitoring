@@ -85,6 +85,26 @@ def test_validate_review_file_builds_opinion_from_detail_rows(tmp_path):
         },
         {"category": "기타의견", "severity": "L0", "count": 1},
     ]
+    assert result.extracted_data["opinion_entries"] == [
+        {
+            "row": 33,
+            "category": "부재설계의 적정성 - 구조설계 요소",
+            "severity": "L2",
+            "content": "전이보 스트럽 간격 보완할 것.",
+        },
+        {
+            "row": 34,
+            "category": "부재설계의 적정성 - 구조설계 요소",
+            "severity": "L3",
+            "content": "동결심도 깊이에 대한 단면 상세 자료 추가 보완할 것",
+        },
+        {
+            "row": 78,
+            "category": "기타의견",
+            "severity": "L0",
+            "content": "지반조사서 누락되었으니 보완 바람.",
+        },
+    ]
 
     extracted = extract_review_data(path)
     assert extracted["review_opinion"] == result.extracted_data["review_opinion"]
@@ -92,6 +112,7 @@ def test_validate_review_file_builds_opinion_from_detail_rows(tmp_path):
     assert extracted["category_severity_counts"] == result.extracted_data[
         "category_severity_counts"
     ]
+    assert extracted["opinion_entries"] == result.extracted_data["opinion_entries"]
 
 
 def test_validate_review_file_rejects_detail_without_severity(tmp_path):

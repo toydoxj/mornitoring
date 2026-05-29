@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from database import get_db
 from models.building import Building
 from models.inappropriate_note import InappropriateNote
+from models.review_opinion_detail import ReviewOpinionDetail
 from models.review_severity_summary import ReviewSeveritySummary
 from models.review_stage import ReviewStage, PhaseType
 from models.user import User, UserRole
@@ -65,7 +66,14 @@ def _has_review_history(db: Session, stage: ReviewStage) -> bool:
         .filter(ReviewSeveritySummary.stage_id == stage.id)
         .first()
     )
-    return has_severity_summary is not None
+    if has_severity_summary is not None:
+        return True
+    has_opinion_detail = (
+        db.query(ReviewOpinionDetail.id)
+        .filter(ReviewOpinionDetail.stage_id == stage.id)
+        .first()
+    )
+    return has_opinion_detail is not None
 
 
 def _reset_review_history(db: Session, stage: ReviewStage) -> dict:
@@ -102,6 +110,11 @@ def _reset_review_history(db: Session, stage: ReviewStage) -> dict:
         .filter(ReviewSeveritySummary.stage_id == stage.id)
         .delete(synchronize_session=False)
     )
+    opinion_details_deleted = (
+        db.query(ReviewOpinionDetail)
+        .filter(ReviewOpinionDetail.stage_id == stage.id)
+        .delete(synchronize_session=False)
+    )
 
     stage.report_submitted_at = None
     stage.reviewer_name = None
@@ -129,6 +142,7 @@ def _reset_review_history(db: Session, stage: ReviewStage) -> dict:
         "s3_deleted": s3_deleted,
         "notes_deleted": int(notes_deleted or 0),
         "severity_summaries_deleted": int(severity_summaries_deleted or 0),
+        "opinion_details_deleted": int(opinion_details_deleted or 0),
     }
 
 # 검토서 요청 예정일 기본 유예 기간(접수일 + DEFAULT_DUE_DAYS).

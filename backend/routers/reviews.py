@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from database import get_db
 from dependencies import stream_upload_to_tempfile
 from models.building import Building
+from models.review_opinion_detail import ReviewOpinionDetail
 from models.review_severity_summary import ReviewSeveritySummary
 from models.review_stage import ReviewStage, PhaseType
 from models.reviewer import Reviewer
@@ -471,6 +472,47 @@ def _apply_severity_summaries(db: Session, stage: ReviewStage, extracted: dict) 
         ))
 
 
+def _phase_group_for_review(phase: str) -> str:
+    return "preliminary" if phase == "preliminary" else "supplement"
+
+
+def _apply_opinion_details(
+    db: Session,
+    stage: ReviewStage,
+    phase: str,
+    extracted: dict,
+) -> None:
+    """상세검토 내용 원문을 예비검토/보완검토 구분과 함께 저장한다."""
+    if stage.id is None:
+        db.add(stage)
+        db.flush()
+
+    db.query(ReviewOpinionDetail).filter(
+        ReviewOpinionDetail.stage_id == stage.id
+    ).delete(synchronize_session="fetch")
+
+    rows = extracted.get("opinion_entries") or []
+    phase_group = _phase_group_for_review(phase)
+    valid_severities = {"L0", "L1", "L2", "L3", "L4"}
+    for row in rows:
+        category = str(row.get("category") or "").strip()
+        severity = str(row.get("severity") or "").strip().upper()
+        content = str(row.get("content") or "").strip()
+        if not category or severity not in valid_severities or not content:
+            continue
+        raw_row_number = row.get("row")
+        row_number = int(raw_row_number) if raw_row_number else None
+        db.add(ReviewOpinionDetail(
+            stage_id=stage.id,
+            phase=phase,
+            phase_group=phase_group,
+            row_number=row_number,
+            category=category,
+            severity=severity,
+            content=content,
+        ))
+
+
 def _resolve_inappropriate_review_needed(
     stage: ReviewStage | None,
     requested_value: bool,
@@ -562,6 +604,7 @@ async def upload_review(
             stage.review_opinion = extracted["review_opinion"]
             _apply_severity_counts(stage, extracted)
             _apply_severity_summaries(db, stage, extracted)
+            _apply_opinion_details(db, stage, actual_phase, extracted)
             stage.inappropriate_review_needed = _resolve_inappropriate_review_needed(
                 stage,
                 inappropriate_review_needed,
@@ -595,6 +638,7 @@ async def upload_review(
             _apply_severity_counts(stage, extracted)
             db.add(stage)
             _apply_severity_summaries(db, stage, extracted)
+            _apply_opinion_details(db, stage, actual_phase, extracted)
 
         # 5. 건축물 current_phase 전환 (매트릭스 UPLOAD).
         # 출발 phase가 _received일 때만 다음 단계로 전환한다. 그 외(이미 제출 완료

@@ -97,3 +97,9 @@ class ReviewStage(Base):
         cascade="all, delete-orphan",
         order_by="ReviewSeveritySummary.category, ReviewSeveritySummary.severity",
     )
+    opinion_details = relationship(
+        "ReviewOpinionDetail",
+        back_populates="stage",
+        cascade="all, delete-orphan",
+        order_by="ReviewOpinionDetail.row_number",
+    )

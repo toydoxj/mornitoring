@@ -3,6 +3,7 @@ from models.building import Building
 from models.reviewer import Reviewer
 from models.review_stage import ReviewStage
 from models.review_severity_summary import ReviewSeveritySummary
+from models.review_opinion_detail import ReviewOpinionDetail
 from models.notification_log import NotificationLog
 from models.audit_log import AuditLog
 from models.inquiry import Inquiry
@@ -19,6 +20,7 @@ __all__ = [
     "Reviewer",
     "ReviewStage",
     "ReviewSeveritySummary",
+    "ReviewOpinionDetail",
     "NotificationLog",
     "AuditLog",
     "Inquiry",

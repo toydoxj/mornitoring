@@ -75,6 +75,7 @@ def extract_review_data(file_path: str | Path) -> dict:
         "reviewer_name": None,
         "severity_counts": {"L0": 0, "L1": 0, "L2": 0, "L3": 0, "L4": 0},
         "category_severity_counts": [],
+        "opinion_entries": [],
     }
 
     try:
@@ -101,6 +102,15 @@ def extract_review_data(file_path: str | Path) -> dict:
                 "count": item.count,
             }
             for item in opinion_parse.category_severity_counts
+        ]
+        data["opinion_entries"] = [
+            {
+                "row": entry.row,
+                "category": entry.section,
+                "severity": entry.severity,
+                "content": entry.content,
+            }
+            for entry in opinion_parse.entries
         ]
 
         # 판정결과 부적합 유형

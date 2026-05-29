@@ -333,6 +333,15 @@ def validate_review_file(
             }
             for item in opinion_parse.category_severity_counts
         ],
+        "opinion_entries": [
+            {
+                "row": entry.row,
+                "category": entry.section,
+                "severity": entry.severity,
+                "content": entry.content,
+            }
+            for entry in opinion_parse.entries
+        ],
         # 유형별 상세검토
         "type_construction_method": _cell_str(ws, "C8"),     # 공법
         "type_transfer_structure": transfer_structure,         # 전이구조

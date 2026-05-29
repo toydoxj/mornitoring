@@ -8,6 +8,7 @@
 """
 
 from models.inquiry import Inquiry, InquiryStatus
+from models.review_opinion_detail import ReviewOpinionDetail
 from models.review_severity_summary import ReviewSeveritySummary
 from models.review_stage import InappropriateDecision, PhaseType, ReviewStage
 from models.user import UserRole
@@ -183,6 +184,63 @@ def test_stats_returns_severity_summary_by_category_and_phase(
     }]
 
 
+def test_stats_returns_keyword_summary_from_opinion_details(
+    client, db_session, make_user, make_reviewer, make_building
+):
+    _, headers = make_user(UserRole.CHIEF_SECRETARY)
+    _, reviewer, _ = make_reviewer()
+    building = make_building(reviewer_id=reviewer.id, mgmt_no="KEY-STATS-001")
+
+    preliminary = ReviewStage(
+        building_id=building.id,
+        phase=PhaseType.PRELIMINARY,
+        phase_order=0,
+    )
+    supplement = ReviewStage(
+        building_id=building.id,
+        phase=PhaseType.SUPPLEMENT_1,
+        phase_order=1,
+    )
+    db_session.add_all([preliminary, supplement])
+    db_session.commit()
+    db_session.refresh(preliminary)
+    db_session.refresh(supplement)
+    db_session.add_all([
+        ReviewOpinionDetail(
+            stage_id=preliminary.id,
+            phase="preliminary",
+            phase_group="preliminary",
+            row_number=33,
+            category="부재설계의 적정성 - 구조설계 요소",
+            severity="L3",
+            content="전이보 스트럽 간격 보완할 것.",
+        ),
+        ReviewOpinionDetail(
+            stage_id=supplement.id,
+            phase="supplement_1",
+            phase_group="supplement",
+            row_number=34,
+            category="기타의견",
+            severity="L0",
+            content="지반조사서 누락",
+        ),
+    ])
+    db_session.commit()
+
+    res = client.get("/api/buildings/stats", headers=headers)
+    assert res.status_code == 200
+    keyword_stats = res.json()["keyword_stats"]
+    by_keyword = {row["keyword"]: row for row in keyword_stats["by_keyword"]}
+
+    assert keyword_stats["total_details"] == 2
+    assert keyword_stats["detail_counts"] == {"preliminary": 1, "supplement": 1}
+    assert by_keyword["전이보"]["preliminary"] == 1
+    assert by_keyword["스트럽"]["preliminary"] == 1
+    assert by_keyword["보완"]["preliminary"] == 1
+    assert by_keyword["지반조사서"]["supplement"] == 1
+    assert by_keyword["누락"]["supplement"] == 1
+
+
 def test_secretary_stats_severity_excludes_other_group(
     client, db_session, make_user, make_reviewer, make_building
 ):
@@ -229,6 +287,61 @@ def test_secretary_stats_severity_excludes_other_group(
     assert severity_stats["total"] == 1
     assert severity_stats["totals"]["L0"] == 1
     assert severity_stats["totals"]["L4"] == 0
+
+
+def test_secretary_stats_keyword_excludes_other_group(
+    client, db_session, make_user, make_reviewer, make_building
+):
+    sec, sec_h = make_user(UserRole.SECRETARY)
+    sec.group_no = 1
+    db_session.commit()
+    _, _, b1, _, _, b2 = _make_two_groups(
+        make_user, make_reviewer, make_building, db_session
+    )
+
+    stage1 = ReviewStage(
+        building_id=b1.id,
+        phase=PhaseType.PRELIMINARY,
+        phase_order=0,
+    )
+    stage2 = ReviewStage(
+        building_id=b2.id,
+        phase=PhaseType.PRELIMINARY,
+        phase_order=0,
+    )
+    db_session.add_all([stage1, stage2])
+    db_session.commit()
+    db_session.refresh(stage1)
+    db_session.refresh(stage2)
+    db_session.add_all([
+        ReviewOpinionDetail(
+            stage_id=stage1.id,
+            phase="preliminary",
+            phase_group="preliminary",
+            row_number=33,
+            category="기타의견",
+            severity="L0",
+            content="지반조사서 누락",
+        ),
+        ReviewOpinionDetail(
+            stage_id=stage2.id,
+            phase="preliminary",
+            phase_group="preliminary",
+            row_number=33,
+            category="기타의견",
+            severity="L4",
+            content="전이보 스트럽 보완",
+        ),
+    ])
+    db_session.commit()
+
+    res = client.get("/api/buildings/stats", headers=sec_h)
+    assert res.status_code == 200
+    keyword_stats = res.json()["keyword_stats"]
+    keywords = {row["keyword"] for row in keyword_stats["by_keyword"]}
+    assert keyword_stats["total_details"] == 1
+    assert "지반조사서" in keywords
+    assert "전이보" not in keywords
 
 
 # ===== 부적합 검토 (/api/reviews/inappropriate) =====

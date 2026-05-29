@@ -16,7 +16,7 @@ import apiClient from "@/lib/api/client"
 import { useAuthStore } from "@/stores/authStore"
 import { PHASE_LABELS, type PhaseType } from "@/types"
 
-type ActiveTab = "reviewer" | "severity"
+type ActiveTab = "reviewer" | "severity" | "keyword"
 type SeverityLabel = "L0" | "L1" | "L2" | "L3" | "L4"
 
 interface ReviewerStat {
@@ -51,9 +51,31 @@ interface SeverityStats {
   by_phase: SeverityPhaseStat[]
 }
 
+interface KeywordStat {
+  keyword: string
+  total: number
+  preliminary: number
+  supplement: number
+  L0: number
+  L1: number
+  L2: number
+  L3: number
+  L4: number
+}
+
+interface KeywordStats {
+  total_details: number
+  detail_counts: {
+    preliminary: number
+    supplement: number
+  }
+  by_keyword: KeywordStat[]
+}
+
 interface StatsResponse {
   reviewer_stats: ReviewerStat[]
   severity_stats: SeverityStats
+  keyword_stats: KeywordStats
 }
 
 const SEVERITY_LABELS: SeverityLabel[] = ["L0", "L1", "L2", "L3", "L4"]
@@ -110,12 +132,13 @@ export default function StatisticsPage() {
 
   const reviewerRows = stats?.reviewer_stats || []
   const severityStats = stats?.severity_stats || null
+  const keywordStats = stats?.keyword_stats || null
 
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold">통계자료</h1>
-        <p className="text-sm text-muted-foreground">검토위원별 현황과 심각도 통계</p>
+        <p className="text-sm text-muted-foreground">검토위원별 현황, 심각도, 키워드 분석</p>
       </div>
 
       <div
@@ -149,19 +172,40 @@ export default function StatisticsPage() {
         >
           심각도 통계
         </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === "keyword"}
+          className={`rounded px-4 py-2 text-sm font-medium transition-colors ${
+            activeTab === "keyword"
+              ? "bg-background text-foreground shadow-sm"
+              : "text-muted-foreground hover:text-foreground"
+          }`}
+          onClick={() => setActiveTab("keyword")}
+        >
+          키워드 분석
+        </button>
       </div>
 
       <Card>
         <CardHeader>
           <CardTitle>
-            {activeTab === "reviewer" ? "검토위원별 현황" : "심각도 통계"}
+            {activeTab === "reviewer"
+              ? "검토위원별 현황"
+              : activeTab === "severity"
+                ? "심각도 통계"
+                : "키워드 분석"}
           </CardTitle>
         </CardHeader>
         <CardContent>
-          {activeTab === "reviewer" ? (
+          {activeTab === "reviewer" && (
             <ReviewerStatsTable isLoading={isLoading} rows={reviewerRows} />
-          ) : (
+          )}
+          {activeTab === "severity" && (
             <SeverityStatsView isLoading={isLoading} stats={severityStats} />
+          )}
+          {activeTab === "keyword" && (
+            <KeywordStatsView isLoading={isLoading} stats={keywordStats} />
           )}
         </CardContent>
       </Card>
@@ -391,6 +435,141 @@ function SeverityTable<T extends SeverityPivotRow>({
           ))}
         </TableBody>
       </Table>
+    </div>
+  )
+}
+
+function KeywordStatsView({
+  isLoading,
+  stats,
+}: {
+  isLoading: boolean
+  stats: KeywordStats | null
+}) {
+  if (isLoading) {
+    return (
+      <div className="flex justify-center py-10 text-muted-foreground">
+        불러오는 중...
+      </div>
+    )
+  }
+  if (!stats || stats.total_details === 0) {
+    return (
+      <div className="flex justify-center py-10 text-muted-foreground">
+        상세검토 내용 저장 자료가 없습니다.
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-5">
+      <div className="grid gap-3 md:grid-cols-3">
+        <KeywordSummaryCard
+          label="상세내용 총합"
+          value={stats.total_details}
+          tone="slate"
+        />
+        <KeywordSummaryCard
+          label="예비검토"
+          value={stats.detail_counts.preliminary}
+          tone="blue"
+        />
+        <KeywordSummaryCard
+          label="보완검토"
+          value={stats.detail_counts.supplement}
+          tone="amber"
+        />
+      </div>
+
+      <section className="space-y-2">
+        <div>
+          <h2 className="text-sm font-semibold">키워드별 발생 현황</h2>
+          <p className="text-xs text-muted-foreground">
+            저장된 상세검토 내용 원문에서 사전 기반 키워드를 집계합니다.
+          </p>
+        </div>
+        {stats.by_keyword.length === 0 ? (
+          <div className="rounded-md border py-10 text-center text-sm text-muted-foreground">
+            매칭된 키워드가 없습니다.
+          </div>
+        ) : (
+          <div className="rounded-md border overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>키워드</TableHead>
+                  <TableHead className="w-[90px] text-center">합계</TableHead>
+                  <TableHead className="w-[90px] text-center">예비</TableHead>
+                  <TableHead className="w-[90px] text-center">보완</TableHead>
+                  {SEVERITY_LABELS.map((label) => (
+                    <TableHead key={label} className="w-[70px] text-center">
+                      {label}
+                    </TableHead>
+                  ))}
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {stats.by_keyword.map((row) => (
+                  <TableRow key={row.keyword}>
+                    <TableCell className="font-medium">{row.keyword}</TableCell>
+                    <TableCell className="text-center font-semibold">
+                      {row.total}
+                    </TableCell>
+                    <TableCell className="text-center">{row.preliminary}</TableCell>
+                    <TableCell className="text-center">{row.supplement}</TableCell>
+                    {SEVERITY_LABELS.map((label) => {
+                      const count = row[label] ?? 0
+                      return (
+                        <TableCell key={label} className="text-center">
+                          {count > 0 ? (
+                            <Badge
+                              variant={
+                                label === "L3" || label === "L4"
+                                  ? "destructive"
+                                  : "secondary"
+                              }
+                            >
+                              {count}
+                            </Badge>
+                          ) : (
+                            "0"
+                          )}
+                        </TableCell>
+                      )
+                    })}
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        )}
+      </section>
+    </div>
+  )
+}
+
+function KeywordSummaryCard({
+  label,
+  value,
+  tone,
+}: {
+  label: string
+  value: number
+  tone: "slate" | "blue" | "amber"
+}) {
+  const toneClass = {
+    slate: "border-slate-200 bg-slate-50 text-slate-800",
+    blue: "border-blue-200 bg-blue-50 text-blue-800",
+    amber: "border-amber-200 bg-amber-50 text-amber-800",
+  }[tone]
+
+  return (
+    <div className={`rounded-md border px-4 py-3 ${toneClass}`}>
+      <p className="text-sm font-medium">{label}</p>
+      <p className="mt-1 text-2xl font-bold">
+        {value.toLocaleString()}
+        <span className="ml-1 text-sm font-normal">건</span>
+      </p>
     </div>
   )
 }

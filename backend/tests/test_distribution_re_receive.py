@@ -9,6 +9,7 @@ from datetime import date, timedelta
 
 from models.audit_log import AuditLog
 from models.inappropriate_note import InappropriateNote
+from models.review_opinion_detail import ReviewOpinionDetail
 from models.review_severity_summary import ReviewSeveritySummary
 from models.review_stage import PhaseType, ResultType, ReviewStage
 from models.user import UserRole
@@ -58,6 +59,15 @@ def test_re_receive_clears_submitted_review(
         severity="L3",
         count=1,
     ))
+    db_session.add(ReviewOpinionDetail(
+        stage_id=stage.id,
+        phase="preliminary",
+        phase_group="preliminary",
+        row_number=33,
+        category="부재설계의 적정성 - 구조설계 요소",
+        severity="L3",
+        content="전이보 스트럽 간격 보완할 것.",
+    ))
     # 운영 시나리오: 어떤 이유로 building이 다시 접수 상태로 환원되어 있다.
     building.current_phase = "doc_received"
     db_session.commit()
@@ -103,6 +113,12 @@ def test_re_receive_clears_submitted_review(
         .count()
     )
     assert summaries_left == 0
+    details_left = (
+        db_session.query(ReviewOpinionDetail)
+        .filter(ReviewOpinionDetail.stage_id == stage.id)
+        .count()
+    )
+    assert details_left == 0
 
     # 호출 단위 reset 감사 로그가 1건 남는다
     reset_logs = (
@@ -113,6 +129,7 @@ def test_re_receive_clears_submitted_review(
     assert len(reset_logs) == 1
     assert reset_logs[0].after_data["reset_count"] == 1
     assert reset_logs[0].after_data["items"][0]["severity_summaries_deleted"] == 1
+    assert reset_logs[0].after_data["items"][0]["opinion_details_deleted"] == 1
 
 
 def test_re_receive_without_history_does_not_log_reset(
@@ -265,6 +282,60 @@ def test_re_receive_clears_only_severity_summary_history(
         .count()
     )
     assert summaries_left == 0
+
+    reset_logs = (
+        db_session.query(AuditLog)
+        .filter(AuditLog.action == "reset", AuditLog.target_type == "review_stage")
+        .all()
+    )
+    assert len(reset_logs) == 1
+    assert reset_logs[0].after_data["reset_count"] == 1
+
+
+def test_re_receive_clears_only_opinion_detail_history(
+    client, db_session, make_user, make_building
+):
+    """상세검토 원문만 남은 stage도 재접수 시 초기화된다."""
+    headers = _admin_headers(make_user)
+    building = make_building(mgmt_no="RE-0007")
+
+    stage = ReviewStage(
+        building_id=building.id,
+        phase=PhaseType.PRELIMINARY,
+        phase_order=0,
+        doc_received_at=date.today() - timedelta(days=5),
+        report_due_date=date.today() + timedelta(days=9),
+    )
+    db_session.add(stage)
+    db_session.commit()
+    db_session.refresh(stage)
+
+    db_session.add(ReviewOpinionDetail(
+        stage_id=stage.id,
+        phase="preliminary",
+        phase_group="preliminary",
+        row_number=33,
+        category="기타의견",
+        severity="L0",
+        content="지반조사서 누락",
+    ))
+    building.current_phase = "doc_received"
+    db_session.commit()
+
+    res = client.post(
+        "/api/distribution/receive",
+        headers=headers,
+        json={"mgmt_nos": ["RE-0007"]},
+    )
+    assert res.status_code == 200, res.text
+
+    db_session.expire_all()
+    details_left = (
+        db_session.query(ReviewOpinionDetail)
+        .filter(ReviewOpinionDetail.stage_id == stage.id)
+        .count()
+    )
+    assert details_left == 0
 
     reset_logs = (
         db_session.query(AuditLog)
