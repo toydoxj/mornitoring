@@ -36,6 +36,15 @@ from engines.review_opinion_parser import parse_review_opinions
 
 MGMT_NO_PATTERN = re.compile(r"^\d{4}-\d{4}$")
 
+REVIEW_RESULT_ALIASES = {
+    "적합": "적합",
+    "단순오류": "단순오류",
+    "경미": "단순오류",
+    "재계산": "재계산",
+    "보완": "재계산",
+    "부적합": "재계산",
+}
+
 
 @dataclass
 class ValidationResult:
@@ -95,6 +104,20 @@ def _find_defect_type_rows(ws, start_row: int = 1, max_row: int | None = None) -
         if len(rows) >= 3:
             break
     return rows
+
+
+def _expected_review_result(opinion_parse) -> tuple[str, str]:
+    """상세의견/심각도 기준으로 기대 검토결과를 계산."""
+    if not opinion_parse.entries:
+        return "적합", "상세내용이 없습니다"
+    counts = opinion_parse.severity_counts
+    if counts.get("L3", 0) > 0 or counts.get("L4", 0) > 0:
+        return "재계산", "심각도 L3/L4가 1건 이상 있습니다"
+    return "단순오류", "상세내용은 있으나 심각도 L3/L4가 없습니다"
+
+
+def _normalized_review_result(value: str) -> str:
+    return REVIEW_RESULT_ALIASES.get(value.strip(), value.strip())
 
 
 def extract_mgmt_no_from_filename(filename: str) -> str | None:
@@ -246,6 +269,15 @@ def validate_review_file(
 
     # 4. 적정성 검토 결과가 "적합"이면 부적합유형 검증
     review_result_value = _cell_str(ws, "H4")  # 검토결과
+    expected_review_result, expected_reason = _expected_review_result(opinion_parse)
+    normalized_review_result = _normalized_review_result(review_result_value)
+    if normalized_review_result != expected_review_result:
+        current_label = review_result_value or "빈값"
+        result.add_error(
+            f"검토결과(H4)는 상세의견/심각도 기준 '{expected_review_result}'이어야 합니다. "
+            f"현재 값: '{current_label}' ({expected_reason})"
+        )
+
     if review_result_value == "적합":
         if defect_type_1 and defect_type_1 != "적합":
             result.add_error(

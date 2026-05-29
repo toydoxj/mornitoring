@@ -88,6 +88,7 @@ export default function MyReviewsPage() {
   const [reasonSubmitting, setReasonSubmitting] = useState(false)
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
+  const isInappropriateReviewLocked = Boolean(uploadTarget?.latest_inappropriate)
 
   const fetchData = useCallback(async () => {
     setIsLoading(true)
@@ -190,7 +191,7 @@ export default function MyReviewsPage() {
     setUploadFile(null)
     setUploadResult(null)
     setPreviewDone(false)
-    setInappropriateReviewNeeded(false)
+    setInappropriateReviewNeeded(isInappropriateReviewLocked)
     if (fileInputRef.current) fileInputRef.current.value = ""
   }
 
@@ -224,15 +225,18 @@ export default function MyReviewsPage() {
       formData.append("file", uploadFile)
 
       const phase = uploadTarget.current_phase || "preliminary"
+      const effectiveInappropriateReviewNeeded = Boolean(
+        uploadTarget.latest_inappropriate || inappropriateReviewNeeded
+      )
       const { data: result } = await apiClient.post<UploadResult>(
-        `/api/reviews/upload?mgmt_no=${uploadTarget.mgmt_no}&phase=${phase}&inappropriate_review_needed=${inappropriateReviewNeeded}`,
+        `/api/reviews/upload?mgmt_no=${uploadTarget.mgmt_no}&phase=${phase}&inappropriate_review_needed=${effectiveInappropriateReviewNeeded}`,
         formData,
         { headers: { "Content-Type": "multipart/form-data" } }
       )
       setUploadResult(result)
       setPreviewDone(false)
       setUploadFile(null)
-      setInappropriateReviewNeeded(false)
+      setInappropriateReviewNeeded(effectiveInappropriateReviewNeeded)
       if (result.success) {
         fetchData()
         // 성공 알림을 1초간 보여준 뒤 다이얼로그 닫기
@@ -258,7 +262,7 @@ export default function MyReviewsPage() {
     setUploadFile(null)
     setUploadResult(null)
     setPreviewDone(false)
-    setInappropriateReviewNeeded(false)
+    setInappropriateReviewNeeded(isInappropriateReviewLocked)
   }
 
   const handleSort = (field: SortField) => {
@@ -405,6 +409,7 @@ export default function MyReviewsPage() {
                       variant="outline"
                       onClick={() => {
                         setUploadTarget(b)
+                        setInappropriateReviewNeeded(Boolean(b.latest_inappropriate))
                         setUploadResult(null)
                       }}
                     >
@@ -610,17 +615,24 @@ export default function MyReviewsPage() {
 
                   {/* 부적정 사례 검토 필요 체크박스 (미리보기 성공 시) */}
                   {previewDone && (
-                    <label className="flex items-start gap-2 rounded-md border border-orange-200 bg-orange-50 p-3 text-sm cursor-pointer hover:bg-orange-100 transition-colors">
+                    <label className={`flex items-start gap-2 rounded-md border border-orange-200 bg-orange-50 p-3 text-sm transition-colors ${
+                      isInappropriateReviewLocked ? "cursor-not-allowed opacity-90" : "cursor-pointer hover:bg-orange-100"
+                    }`}>
                       <input
                         type="checkbox"
-                        className="mt-0.5 h-4 w-4 cursor-pointer"
-                        checked={inappropriateReviewNeeded}
+                        className={`mt-0.5 h-4 w-4 ${
+                          isInappropriateReviewLocked ? "cursor-not-allowed" : "cursor-pointer"
+                        }`}
+                        checked={isInappropriateReviewLocked || inappropriateReviewNeeded}
+                        disabled={isInappropriateReviewLocked}
                         onChange={(e) => setInappropriateReviewNeeded(e.target.checked)}
                       />
                       <span className="flex-1">
                         <span className="font-medium text-orange-900">부적정 사례 검토 필요</span>
                         <span className="block text-xs text-orange-800 mt-0.5">
-                          본 검토 건이 부적정 사례로 별도 검토가 필요한 경우 체크해주세요.
+                          {isInappropriateReviewLocked
+                            ? "이미 부적정 사례 검토 대상으로 등록되어 해제할 수 없습니다."
+                            : "본 검토 건이 부적정 사례로 별도 검토가 필요한 경우 체크해주세요."}
                         </span>
                       </span>
                     </label>

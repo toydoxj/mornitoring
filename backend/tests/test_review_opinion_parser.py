@@ -36,6 +36,15 @@ def _make_workbook(path, *, missing_severity: bool = False) -> None:
     wb.save(path)
 
 
+def _clear_detail_opinions(path) -> None:
+    wb = load_workbook(path)
+    ws = wb[wb.sheetnames[0]]
+    for coord in ("B33", "C33", "D33", "H33", "D34", "H34", "B78", "D78", "H78"):
+        ws[coord] = None
+    wb.save(path)
+    wb.close()
+
+
 def test_validate_review_file_builds_opinion_from_detail_rows(tmp_path):
     path = tmp_path / "2026-0001.xlsm"
     _make_workbook(path)
@@ -99,6 +108,108 @@ def test_validate_review_file_rejects_detail_without_severity(tmp_path):
 
     assert result.is_valid is False
     assert any("34행의 심각도" in error for error in result.errors)
+
+
+def test_validate_review_file_accepts_pass_when_detail_is_empty(tmp_path):
+    path = tmp_path / "2026-0001.xlsm"
+    _make_workbook(path)
+    _clear_detail_opinions(path)
+
+    wb = load_workbook(path)
+    ws = wb[wb.sheetnames[0]]
+    ws["H4"] = "적합"
+    ws["D81"] = "적합"
+    ws["G83"] = "적합"
+    wb.save(path)
+    wb.close()
+
+    result = validate_review_file(
+        path,
+        filename="2026-0001.xlsm",
+        expected_mgmt_no="2026-0001",
+        submitter_name="이공우",
+        expected_phase="preliminary",
+    )
+
+    assert result.is_valid is True
+    assert result.extracted_data["review_opinion"] is None
+    assert result.extracted_data["severity_counts"] == {
+        "L0": 0,
+        "L1": 0,
+        "L2": 0,
+        "L3": 0,
+        "L4": 0,
+    }
+
+
+def test_validate_review_file_rejects_non_pass_when_detail_is_empty(tmp_path):
+    path = tmp_path / "2026-0001.xlsm"
+    _make_workbook(path)
+    _clear_detail_opinions(path)
+
+    wb = load_workbook(path)
+    ws = wb[wb.sheetnames[0]]
+    ws["H4"] = "단순오류"
+    ws["D81"] = None
+    ws["G83"] = None
+    wb.save(path)
+    wb.close()
+
+    result = validate_review_file(
+        path,
+        filename="2026-0001.xlsm",
+        expected_mgmt_no="2026-0001",
+        submitter_name="이공우",
+        expected_phase="preliminary",
+    )
+
+    assert result.is_valid is False
+    assert any("상세의견/심각도 기준 '적합'" in error for error in result.errors)
+
+
+def test_validate_review_file_rejects_non_recalculate_with_l3_or_l4(tmp_path):
+    path = tmp_path / "2026-0001.xlsm"
+    _make_workbook(path)
+
+    wb = load_workbook(path)
+    ws = wb[wb.sheetnames[0]]
+    ws["H4"] = "단순오류"
+    wb.save(path)
+    wb.close()
+
+    result = validate_review_file(
+        path,
+        filename="2026-0001.xlsm",
+        expected_mgmt_no="2026-0001",
+        submitter_name="이공우",
+        expected_phase="preliminary",
+    )
+
+    assert result.is_valid is False
+    assert any("상세의견/심각도 기준 '재계산'" in error for error in result.errors)
+
+
+def test_validate_review_file_rejects_non_simple_error_without_l3_l4(tmp_path):
+    path = tmp_path / "2026-0001.xlsm"
+    _make_workbook(path)
+
+    wb = load_workbook(path)
+    ws = wb[wb.sheetnames[0]]
+    ws["H4"] = "재계산"
+    ws["H34"] = "L1"
+    wb.save(path)
+    wb.close()
+
+    result = validate_review_file(
+        path,
+        filename="2026-0001.xlsm",
+        expected_mgmt_no="2026-0001",
+        submitter_name="이공우",
+        expected_phase="preliminary",
+    )
+
+    assert result.is_valid is False
+    assert any("상세의견/심각도 기준 '단순오류'" in error for error in result.errors)
 
 
 def test_validate_review_file_handles_inserted_detail_rows(tmp_path):

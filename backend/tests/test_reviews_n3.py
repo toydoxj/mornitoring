@@ -11,6 +11,7 @@ from models.inquiry import Inquiry, InquiryStatus
 from models.notification_log import NotificationLog
 from models.review_stage import PhaseType, ReviewStage
 from models.user import UserRole
+from routers.reviews import _resolve_inappropriate_review_needed
 from services import inquiry_notify
 
 
@@ -117,6 +118,23 @@ def test_upload_allows_reupload_for_current_submitted_phase(
     assert payload["success"] is False
     assert payload["message"] == "유효성 검증 실패"
     assert "업로드 불가" not in payload["message"]
+
+
+def test_reupload_cannot_uncheck_inappropriate_review_needed(make_building):
+    """한 번 부적정 사례 검토 필요로 체크된 stage는 재업로드로 해제되지 않는다."""
+    building = make_building(mgmt_no="UPLOAD-INAPPROPRIATE-LOCK")
+    stage = ReviewStage(
+        building_id=building.id,
+        phase=PhaseType.PRELIMINARY,
+        phase_order=0,
+        inappropriate_review_needed=True,
+    )
+
+    assert _resolve_inappropriate_review_needed(stage, False) is True
+    assert _resolve_inappropriate_review_needed(stage, True) is True
+    stage.inappropriate_review_needed = False
+    assert _resolve_inappropriate_review_needed(stage, False) is False
+    assert _resolve_inappropriate_review_needed(None, True) is True
 
 
 def test_reviewer_cannot_create_inquiry_on_other_building(

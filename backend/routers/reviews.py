@@ -471,6 +471,14 @@ def _apply_severity_summaries(db: Session, stage: ReviewStage, extracted: dict) 
         ))
 
 
+def _resolve_inappropriate_review_needed(
+    stage: ReviewStage | None,
+    requested_value: bool,
+) -> bool:
+    """부적정 사례 검토 필요 체크는 검토서 재업로드로 해제할 수 없게 보존."""
+    return bool(requested_value or (stage and stage.inappropriate_review_needed))
+
+
 @router.post("/upload", response_model=UploadResponse)
 async def upload_review(
     file: UploadFile = File(...),
@@ -554,7 +562,10 @@ async def upload_review(
             stage.review_opinion = extracted["review_opinion"]
             _apply_severity_counts(stage, extracted)
             _apply_severity_summaries(db, stage, extracted)
-            stage.inappropriate_review_needed = inappropriate_review_needed
+            stage.inappropriate_review_needed = _resolve_inappropriate_review_needed(
+                stage,
+                inappropriate_review_needed,
+            )
             new_s3_key = upload_review_file(tmp_path, mgmt_no, actual_phase, file.filename)
             stage.s3_file_key = new_s3_key
             if old_s3_key and old_s3_key != new_s3_key:
@@ -575,7 +586,10 @@ async def upload_review(
                 defect_type_2=extracted["defect_type_2"],
                 defect_type_3=extracted["defect_type_3"],
                 review_opinion=extracted["review_opinion"],
-                inappropriate_review_needed=inappropriate_review_needed,
+                inappropriate_review_needed=_resolve_inappropriate_review_needed(
+                    None,
+                    inappropriate_review_needed,
+                ),
                 s3_file_key=upload_review_file(tmp_path, mgmt_no, actual_phase, file.filename),
             )
             _apply_severity_counts(stage, extracted)
