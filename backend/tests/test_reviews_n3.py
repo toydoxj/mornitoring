@@ -328,6 +328,38 @@ def test_same_group_secretary_can_update_and_delete_inquiry(
     assert db_session.query(Inquiry).filter(Inquiry.id == inquiry.id).first() is None
 
 
+def test_inquiry_phase_change_returns_friendly_message_for_invalid_transition(
+    client, db_session, make_user, make_reviewer, make_building
+):
+    """문의 단계 변경에서 역행/점프 시 내부 매트릭스 메시지를 그대로 노출하지 않는다."""
+    _, admin_headers = make_user(UserRole.CHIEF_SECRETARY)
+    reviewer_user, reviewer, _ = make_reviewer(group_no=1)
+    building = make_building(reviewer_id=reviewer.id, mgmt_no="INQ-PHASE-INVALID-001")
+    building.current_phase = "doc_received"
+    inquiry = Inquiry(
+        building_id=building.id,
+        mgmt_no=building.mgmt_no,
+        phase="doc_received",
+        submitter_id=reviewer_user.id,
+        submitter_name=reviewer_user.name,
+        content="단계 변경 문의",
+    )
+    db_session.add(inquiry)
+    db_session.commit()
+    db_session.refresh(inquiry)
+
+    res = client.patch(
+        f"/api/reviews/inquiry/{inquiry.id}",
+        headers=admin_headers,
+        json={"reply": "확인", "new_phase": "assigned"},
+    )
+    assert res.status_code == 400
+    detail = res.json()["detail"]
+    assert "현재 단계(예비도서 접수)" in detail
+    assert "배정완료" in detail
+    assert "MANUAL 전환" not in detail
+
+
 def test_other_group_secretary_cannot_delete_inquiry(
     client, db_session, make_reviewer, make_building, make_user
 ):

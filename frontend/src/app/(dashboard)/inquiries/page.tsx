@@ -65,6 +65,26 @@ const STATUS_VARIANT: Record<string, "default" | "secondary" | "destructive" | "
   completed: "default",
 }
 
+const MANUAL_NEXT_PHASES: Record<string, string[]> = {
+  assigned: ["doc_received"],
+  doc_received: ["preliminary"],
+  preliminary: ["supplement_1_received"],
+  supplement_1_received: ["supplement_1"],
+  supplement_1: ["supplement_2_received"],
+  supplement_2_received: ["supplement_2"],
+  supplement_2: ["supplement_3_received"],
+  supplement_3_received: ["supplement_3"],
+  supplement_3: ["supplement_4_received"],
+  supplement_4_received: ["supplement_4"],
+  supplement_4: ["supplement_5_received"],
+  supplement_5_received: ["supplement_5"],
+}
+
+function getAllowedManualPhases(currentPhase: string | null | undefined) {
+  if (!currentPhase) return []
+  return MANUAL_NEXT_PHASES[currentPhase] ?? []
+}
+
 export default function InquiriesPage() {
   const user = useAuthStore((s) => s.user)
   const canAdminDelete =
@@ -89,9 +109,23 @@ export default function InquiriesPage() {
   const [replyActionTarget, setReplyActionTarget] = useState<InquiryItem | null>(null)
   const [savingReplyAction, setSavingReplyAction] = useState(false)
 
-  const openPhaseDialog = (item: InquiryItem) => {
+  const openPhaseDialog = async (item: InquiryItem) => {
     setPhaseEditTarget(item)
-    setPhaseDraft(item.current_phase ?? "")
+    setPhaseDraft("")
+
+    try {
+      const { data } = await apiClient.get<{ current_phase: string | null }>(
+        `/api/buildings/${item.building_id}`
+      )
+      const latest = { ...item, current_phase: data.current_phase }
+      const allowed = getAllowedManualPhases(data.current_phase)
+      setPhaseEditTarget(latest)
+      setPhaseDraft(allowed[0] ?? "")
+    } catch (err) {
+      console.error("최신 단계 조회 실패:", err)
+      const allowed = getAllowedManualPhases(item.current_phase)
+      setPhaseDraft(allowed[0] ?? "")
+    }
   }
 
   const closePhaseDialog = () => {
@@ -104,6 +138,11 @@ export default function InquiriesPage() {
     const next = phaseDraft.trim()
     if (!next) {
       alert("변경할 단계를 선택해주세요")
+      return
+    }
+    const allowed = getAllowedManualPhases(phaseEditTarget.current_phase)
+    if (!allowed.includes(next)) {
+      alert("현재 단계에서 선택할 수 없는 단계입니다. 새로고침 후 다시 선택해주세요.")
       return
     }
     setSavingPhase(true)
@@ -553,22 +592,39 @@ export default function InquiriesPage() {
           </DialogHeader>
           <div className="space-y-3">
             {phaseEditTarget && (
-              <p className="text-xs text-muted-foreground">
-                관리번호 <span className="font-mono font-medium">{phaseEditTarget.mgmt_no}</span>
-                의 현재 단계를 변경합니다. 저장하면 본 문의는 자동으로 완료 처리됩니다.
-              </p>
+              <div className="space-y-1 text-xs text-muted-foreground">
+                <p>
+                  관리번호 <span className="font-mono font-medium">{phaseEditTarget.mgmt_no}</span>
+                  의 현재 단계를 변경합니다. 저장하면 본 문의는 자동으로 완료 처리됩니다.
+                </p>
+                <p>
+                  현재 단계:{" "}
+                  <span className="font-medium text-foreground">
+                    {PHASE_LABELS[phaseEditTarget.current_phase ?? ""] || phaseEditTarget.current_phase || "-"}
+                  </span>
+                </p>
+                <p>단계 변경은 업무 순서상 가능한 다음 단계만 선택할 수 있습니다.</p>
+              </div>
             )}
             <div className="space-y-2">
-              <Label>단계 선택</Label>
+              <Label>다음 단계 선택</Label>
               <select
                 className="w-full rounded-md border px-3 py-2 text-sm"
                 value={phaseDraft}
                 onChange={(e) => setPhaseDraft(e.target.value)}
+                disabled={!phaseEditTarget || getAllowedManualPhases(phaseEditTarget.current_phase).length === 0}
               >
-                <option value="">선택 안 함</option>
-                {Object.entries(PHASE_LABELS).map(([value, label]) => (
+                <option value="">
+                  {phaseEditTarget && getAllowedManualPhases(phaseEditTarget.current_phase).length === 0
+                    ? "변경 가능한 다음 단계 없음"
+                    : "선택해주세요"}
+                </option>
+                {getAllowedManualPhases(phaseEditTarget?.current_phase).map((value) => {
+                  const label = PHASE_LABELS[value] || value
+                  return (
                   <option key={value} value={value}>{label}</option>
-                ))}
+                  )
+                })}
               </select>
             </div>
           </div>
@@ -576,7 +632,16 @@ export default function InquiriesPage() {
             <Button variant="outline" onClick={closePhaseDialog} disabled={savingPhase}>
               취소
             </Button>
-            <Button onClick={handleSavePhase} loading={savingPhase} loadingText="저장 중...">
+            <Button
+              onClick={handleSavePhase}
+              loading={savingPhase}
+              loadingText="저장 중..."
+              disabled={
+                savingPhase
+                || !phaseEditTarget
+                || getAllowedManualPhases(phaseEditTarget.current_phase).length === 0
+              }
+            >
               저장
             </Button>
           </DialogFooter>

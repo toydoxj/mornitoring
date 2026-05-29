@@ -636,6 +636,24 @@ class InquiryContentUpdateRequest(BaseModel):
     content: str
 
 
+_PHASE_LABELS: dict[str, str] = {
+    "assigned": "배정완료",
+    "doc_received": "예비도서 접수",
+    "preliminary": "예비검토서 제출",
+    "supplement_1_received": "보완도서(1차) 접수",
+    "supplement_1": "보완검토서(1차) 제출",
+    "supplement_2_received": "보완도서(2차) 접수",
+    "supplement_2": "보완검토서(2차) 제출",
+    "supplement_3_received": "보완도서(3차) 접수",
+    "supplement_3": "보완검토서(3차) 제출",
+    "supplement_4_received": "보완도서(4차) 접수",
+    "supplement_4": "보완검토서(4차) 제출",
+    "supplement_5_received": "보완도서(5차) 접수",
+    "supplement_5": "보완검토서(5차) 제출",
+    "completed": "완료",
+}
+
+
 def _can_manage_inquiry(inquiry, current_user: User, db: Session) -> bool:
     """간사 이상 사용자가 해당 문의를 관리할 수 있는지 확인."""
     if current_user.role in (UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY):
@@ -833,7 +851,18 @@ async def update_inquiry(
                     reason=f"inquiry_reply:#{inquiry.id}",
                 )
             except InvalidPhaseTransition as exc:
-                raise HTTPException(status_code=400, detail=str(exc))
+                current_label = _PHASE_LABELS.get(
+                    building.current_phase or "",
+                    building.current_phase or "-",
+                )
+                target_label = _PHASE_LABELS.get(new_phase, new_phase)
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"현재 단계({current_label})에서 {target_label}(으)로 "
+                        "변경할 수 없습니다. 가능한 다음 단계만 선택해주세요."
+                    ),
+                ) from exc
             phase_changed = True
         inquiry.status = InquiryStatus.COMPLETED
     elif body.status:
