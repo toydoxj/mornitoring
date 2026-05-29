@@ -40,14 +40,16 @@ export default function BuildingDetailPage() {
   const from = searchParams.get("from")
   const editPhaseParam = searchParams.get("editPhase") === "1"
   const user = useAuthStore((s) => s.user)
+  const defaultBackPath = user?.role === "reviewer" ? "/my-reviews" : "/buildings"
+  const defaultBackLabel = user?.role === "reviewer" ? "← 내 검토 대상" : "← 목록으로"
   const backPath =
     from === "my-reviews" ? "/my-reviews" :
     from === "inquiries" ? "/inquiries" :
-    "/buildings"
+    defaultBackPath
   const backLabel =
     from === "my-reviews" ? "← 내 검토 대상" :
     from === "inquiries" ? "← 문의사항" :
-    "← 목록으로"
+    defaultBackLabel
   const [building, setBuilding] = useState<Building | null>(null)
   const [stages, setStages] = useState<ReviewStage[]>([])
   const [inquiries, setInquiries] = useState<{
