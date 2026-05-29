@@ -117,6 +117,66 @@ PHASE_ORDER_MAP = {
     "supplement_5": 5,
 }
 
+RECEIVED_TO_SUBMIT_PHASE = {
+    "doc_received": "preliminary",
+    "supplement_1_received": "supplement_1",
+    "supplement_2_received": "supplement_2",
+    "supplement_3_received": "supplement_3",
+    "supplement_4_received": "supplement_4",
+    "supplement_5_received": "supplement_5",
+}
+
+SUBMITTED_UPLOAD_PHASES = set(PHASE_ORDER_MAP)
+
+UPLOAD_PHASE_LABELS = {
+    "assigned": "배정완료",
+    "doc_received": "예비도서 접수",
+    "preliminary": "예비검토서 제출",
+    "supplement_1_received": "보완도서(1차) 접수",
+    "supplement_1": "보완검토서(1차) 제출",
+    "supplement_2_received": "보완도서(2차) 접수",
+    "supplement_2": "보완검토서(2차) 제출",
+    "supplement_3_received": "보완도서(3차) 접수",
+    "supplement_3": "보완검토서(3차) 제출",
+    "supplement_4_received": "보완도서(4차) 접수",
+    "supplement_4": "보완검토서(4차) 제출",
+    "supplement_5_received": "보완도서(5차) 접수",
+    "supplement_5": "보완검토서(5차) 제출",
+}
+
+
+def _phase_label(phase: str | None) -> str:
+    return UPLOAD_PHASE_LABELS.get(phase or "", phase or "-")
+
+
+def _resolve_upload_phase(building: Building, requested_phase: str) -> tuple[str | None, list[str]]:
+    """현재 단계 기준으로 검토서 업로드 대상 단계를 결정한다.
+
+    - 도서 접수 상태(_received): 최초 업로드 허용, 제출 단계로 매핑
+    - 이미 제출된 현재 단계(preliminary/supplement_N): 같은 단계 재업로드 허용
+    - 그 외 단계 또는 요청 단계 불일치: 업로드 차단
+    """
+    requested = (requested_phase or "").strip()
+    current = (building.current_phase or "").strip()
+
+    if not requested:
+        return None, ["검토 단계 정보가 없습니다. 새로고침 후 다시 시도해주세요."]
+    if not current:
+        return None, ["현재 단계가 없어 검토서를 업로드할 수 없습니다. 도서 접수 후 업로드해주세요."]
+    if requested != current:
+        return None, [
+            f"요청 단계({_phase_label(requested)})가 현재 단계({_phase_label(current)})와 일치하지 않습니다. "
+            "새로고침 후 다시 업로드해주세요."
+        ]
+    if current in RECEIVED_TO_SUBMIT_PHASE:
+        return RECEIVED_TO_SUBMIT_PHASE[current], []
+    if current in SUBMITTED_UPLOAD_PHASES:
+        return current, []
+    return None, [
+        f"현재 단계({_phase_label(current)})에서는 검토서를 업로드할 수 없습니다. "
+        "도서 접수 상태에서 업로드하거나, 이미 제출된 현재 단계에서만 재업로드할 수 있습니다."
+    ]
+
 
 @router.post("/upload/preview", response_model=UploadResponse)
 async def preview_upload(
@@ -137,22 +197,15 @@ async def preview_upload(
     # 비용 큰 파일 파싱 전에 fail-fast로 권한 검증
     _ensure_reviewer_can_access_building(building, current_user, db)
 
+    target_phase, phase_errors = _resolve_upload_phase(building, phase)
+    if phase_errors:
+        return UploadResponse(success=False, message="업로드 불가", errors=phase_errors)
+
     tmp_path = await stream_upload_to_tempfile(
         file, max_mb=10, suffix=Path(file.filename).suffix
     )
 
     try:
-        # 업로드 단계 매핑 (receive → submit)
-        RECEIVED_TO_SUBMIT = {
-            "doc_received": "preliminary",
-            "supplement_1_received": "supplement_1",
-            "supplement_2_received": "supplement_2",
-            "supplement_3_received": "supplement_3",
-            "supplement_4_received": "supplement_4",
-            "supplement_5_received": "supplement_5",
-        }
-        target_phase = RECEIVED_TO_SUBMIT.get(phase, phase)
-
         validation = validate_review_file(
             file_path=tmp_path, filename=file.filename,
             expected_mgmt_no=mgmt_no, submitter_name=current_user.name,
@@ -399,23 +452,16 @@ async def upload_review(
     # 비용 큰 파일 파싱·DB 쓰기 전에 fail-fast로 권한 검증
     _ensure_reviewer_can_access_building(building, current_user, db)
 
+    actual_phase, phase_errors = _resolve_upload_phase(building, phase)
+    if phase_errors:
+        return UploadResponse(success=False, message="업로드 불가", errors=phase_errors)
+
     # 임시 파일 저장
     tmp_path = await stream_upload_to_tempfile(
         file, max_mb=10, suffix=Path(file.filename).suffix
     )
 
     try:
-        # 1. PhaseType 변환 (접수 단계 → 검토서 제출 단계)
-        RECEIVED_TO_SUBMIT = {
-            "doc_received": "preliminary",
-            "supplement_1_received": "supplement_1",
-            "supplement_2_received": "supplement_2",
-            "supplement_3_received": "supplement_3",
-            "supplement_4_received": "supplement_4",
-            "supplement_5_received": "supplement_5",
-        }
-        actual_phase = RECEIVED_TO_SUBMIT.get(phase, phase)
-
         # 2. 유효성 검증 (expected_phase 기준으로 차수 라벨 체크)
         validation = validate_review_file(
             file_path=tmp_path,

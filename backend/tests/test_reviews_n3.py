@@ -9,6 +9,7 @@ import io
 
 from models.inquiry import Inquiry, InquiryStatus
 from models.notification_log import NotificationLog
+from models.review_stage import PhaseType, ReviewStage
 from models.user import UserRole
 from services import inquiry_notify
 
@@ -54,6 +55,68 @@ def test_reviewer_cannot_upload_other_building(
         client, "/api/reviews/upload", headers_a, other.mgmt_no, "doc_received"
     )
     assert res.status_code == 404
+
+
+def test_upload_rejects_when_building_is_not_in_uploadable_phase(
+    client, db_session, make_reviewer, make_building
+):
+    """배정완료 등 도서 접수/제출 상태가 아니면 파일 파싱 전에 업로드를 막는다."""
+    _, reviewer, headers = make_reviewer()
+    building = make_building(reviewer_id=reviewer.id, mgmt_no="UPLOAD-PHASE-BLOCK")
+    building.current_phase = "assigned"
+    db_session.commit()
+
+    for url in ("/api/reviews/upload/preview", "/api/reviews/upload"):
+        res = _fake_xlsx_upload(client, url, headers, building.mgmt_no, "assigned")
+        assert res.status_code == 200, res.text
+        payload = res.json()
+        assert payload["success"] is False
+        assert payload["message"] == "업로드 불가"
+        assert "현재 단계(배정완료)" in payload["errors"][0]
+
+
+def test_upload_rejects_when_requested_phase_differs_from_current_phase(
+    client, db_session, make_reviewer, make_building
+):
+    """조작된 phase 파라미터가 현재 단계와 다르면 업로드를 막는다."""
+    _, reviewer, headers = make_reviewer()
+    building = make_building(reviewer_id=reviewer.id, mgmt_no="UPLOAD-PHASE-MISMATCH")
+    building.current_phase = "doc_received"
+    db_session.commit()
+
+    res = _fake_xlsx_upload(
+        client, "/api/reviews/upload/preview", headers, building.mgmt_no, "preliminary"
+    )
+    assert res.status_code == 200, res.text
+    payload = res.json()
+    assert payload["success"] is False
+    assert payload["message"] == "업로드 불가"
+    assert "요청 단계(예비검토서 제출)" in payload["errors"][0]
+    assert "현재 단계(예비도서 접수)" in payload["errors"][0]
+
+
+def test_upload_allows_reupload_for_current_submitted_phase(
+    client, db_session, make_reviewer, make_building
+):
+    """이미 제출된 현재 단계는 재업로드 경로로 허용한다."""
+    _, reviewer, headers = make_reviewer()
+    building = make_building(reviewer_id=reviewer.id, mgmt_no="UPLOAD-REUPLOAD-OK")
+    building.current_phase = "preliminary"
+    db_session.add(ReviewStage(
+        building_id=building.id,
+        phase=PhaseType.PRELIMINARY,
+        phase_order=0,
+    ))
+    db_session.commit()
+
+    res = _fake_xlsx_upload(
+        client, "/api/reviews/upload/preview", headers, building.mgmt_no, "preliminary"
+    )
+    assert res.status_code == 200, res.text
+    payload = res.json()
+    assert payload["success"] is False
+    assert payload["message"] == "유효성 검증 실패"
+    assert "업로드 불가" not in payload["message"]
 
 
 def test_reviewer_cannot_create_inquiry_on_other_building(
