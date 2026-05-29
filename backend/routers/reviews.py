@@ -860,7 +860,7 @@ async def update_inquiry(
                     status_code=400,
                     detail=(
                         f"현재 단계({current_label})에서 {target_label}(으)로 "
-                        "변경할 수 없습니다. 가능한 다음 단계만 선택해주세요."
+                        "변경할 수 없습니다. 가능한 인접 단계만 선택해주세요."
                     ),
                 ) from exc
             phase_changed = True

@@ -71,6 +71,25 @@ def test_transition_phase_no_op_when_same(db_session, make_building):
     )
 
 
+def test_transition_phase_manual_allows_adjacent_previous(db_session, make_building):
+    b = make_building(mgmt_no="PT-PREV")
+    b.current_phase = "preliminary"
+    db_session.commit()
+
+    log = transition_phase(
+        db_session,
+        b,
+        to_phase="doc_received",
+        trigger="manual",
+    )
+    db_session.commit()
+
+    assert b.current_phase == "doc_received"
+    assert log is not None
+    assert log.from_phase == "preliminary"
+    assert log.to_phase == "doc_received"
+
+
 def test_transition_phase_rejects_off_matrix(db_session, make_building):
     b = make_building(mgmt_no="PT-BAD")
     b.current_phase = "preliminary"
@@ -198,6 +217,33 @@ def test_phase_change_endpoint_accepts_matrix(
     )
     assert log.trigger == "manual"
     assert log.reason == "데이터 복구"
+
+
+def test_phase_change_endpoint_allows_doc_received_to_assigned_correction(
+    client, db_session, make_user, make_building
+):
+    _, headers = make_user(UserRole.CHIEF_SECRETARY)
+    b = make_building(mgmt_no="PT-MAN-CORRECT")
+    b.current_phase = "doc_received"
+    db_session.commit()
+
+    res = client.post(
+        f"/api/buildings/{b.id}/phase", headers=headers,
+        json={"to_phase": "assigned", "reason": "잘못 접수된 도서 보정"},
+    )
+    assert res.status_code == 200, res.text
+    db_session.refresh(b)
+    assert b.current_phase == "assigned"
+
+    log = (
+        db_session.query(PhaseTransitionLog)
+        .filter(PhaseTransitionLog.mgmt_no == "PT-MAN-CORRECT")
+        .one()
+    )
+    assert log.trigger == "manual"
+    assert log.from_phase == "doc_received"
+    assert log.to_phase == "assigned"
+    assert log.reason == "잘못 접수된 도서 보정"
 
 
 def test_phase_change_endpoint_rejects_off_matrix(

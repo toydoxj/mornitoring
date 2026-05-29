@@ -26,6 +26,7 @@ import { PHASE_LABELS } from "@/types"
 import { AttachmentItem, type AttachmentDisplay } from "@/components/AttachmentItem"
 import { Paperclip } from "lucide-react"
 import { useAuthStore } from "@/stores/authStore"
+import { getAdjacentManualPhases } from "@/lib/phases"
 
 interface InquiryAttachmentData extends AttachmentDisplay {
   inquiry_id: number
@@ -65,26 +66,6 @@ const STATUS_VARIANT: Record<string, "default" | "secondary" | "destructive" | "
   completed: "default",
 }
 
-const MANUAL_NEXT_PHASES: Record<string, string[]> = {
-  assigned: ["doc_received"],
-  doc_received: ["preliminary"],
-  preliminary: ["supplement_1_received"],
-  supplement_1_received: ["supplement_1"],
-  supplement_1: ["supplement_2_received"],
-  supplement_2_received: ["supplement_2"],
-  supplement_2: ["supplement_3_received"],
-  supplement_3_received: ["supplement_3"],
-  supplement_3: ["supplement_4_received"],
-  supplement_4_received: ["supplement_4"],
-  supplement_4: ["supplement_5_received"],
-  supplement_5_received: ["supplement_5"],
-}
-
-function getAllowedManualPhases(currentPhase: string | null | undefined) {
-  if (!currentPhase) return []
-  return MANUAL_NEXT_PHASES[currentPhase] ?? []
-}
-
 export default function InquiriesPage() {
   const user = useAuthStore((s) => s.user)
   const canAdminDelete =
@@ -118,13 +99,9 @@ export default function InquiriesPage() {
         `/api/buildings/${item.building_id}`
       )
       const latest = { ...item, current_phase: data.current_phase }
-      const allowed = getAllowedManualPhases(data.current_phase)
       setPhaseEditTarget(latest)
-      setPhaseDraft(allowed[0] ?? "")
     } catch (err) {
       console.error("최신 단계 조회 실패:", err)
-      const allowed = getAllowedManualPhases(item.current_phase)
-      setPhaseDraft(allowed[0] ?? "")
     }
   }
 
@@ -140,7 +117,7 @@ export default function InquiriesPage() {
       alert("변경할 단계를 선택해주세요")
       return
     }
-    const allowed = getAllowedManualPhases(phaseEditTarget.current_phase)
+    const allowed = getAdjacentManualPhases(phaseEditTarget.current_phase)
     if (!allowed.includes(next)) {
       alert("현재 단계에서 선택할 수 없는 단계입니다. 새로고침 후 다시 선택해주세요.")
       return
@@ -603,23 +580,23 @@ export default function InquiriesPage() {
                     {PHASE_LABELS[phaseEditTarget.current_phase ?? ""] || phaseEditTarget.current_phase || "-"}
                   </span>
                 </p>
-                <p>단계 변경은 업무 순서상 가능한 다음 단계만 선택할 수 있습니다.</p>
+                <p>단계 변경은 현재 단계 기준 바로 이전/다음 1단계만 선택할 수 있습니다.</p>
               </div>
             )}
             <div className="space-y-2">
-              <Label>다음 단계 선택</Label>
+              <Label>변경 단계 선택</Label>
               <select
                 className="w-full rounded-md border px-3 py-2 text-sm"
                 value={phaseDraft}
                 onChange={(e) => setPhaseDraft(e.target.value)}
-                disabled={!phaseEditTarget || getAllowedManualPhases(phaseEditTarget.current_phase).length === 0}
+                disabled={!phaseEditTarget || getAdjacentManualPhases(phaseEditTarget.current_phase).length === 0}
               >
                 <option value="">
-                  {phaseEditTarget && getAllowedManualPhases(phaseEditTarget.current_phase).length === 0
-                    ? "변경 가능한 다음 단계 없음"
+                  {phaseEditTarget && getAdjacentManualPhases(phaseEditTarget.current_phase).length === 0
+                    ? "변경 가능한 단계 없음"
                     : "선택해주세요"}
                 </option>
-                {getAllowedManualPhases(phaseEditTarget?.current_phase).map((value) => {
+                {getAdjacentManualPhases(phaseEditTarget?.current_phase).map((value) => {
                   const label = PHASE_LABELS[value] || value
                   return (
                   <option key={value} value={value}>{label}</option>
@@ -639,7 +616,8 @@ export default function InquiriesPage() {
               disabled={
                 savingPhase
                 || !phaseEditTarget
-                || getAllowedManualPhases(phaseEditTarget.current_phase).length === 0
+                || !phaseDraft
+                || getAdjacentManualPhases(phaseEditTarget.current_phase).length === 0
               }
             >
               저장

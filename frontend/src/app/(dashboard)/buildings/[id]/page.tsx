@@ -21,6 +21,7 @@ import type { Building, ReviewStage, PhaseType, ResultType, InappropriateDecisio
 import { PHASE_LABELS, RESULT_LABELS } from "@/types"
 import { AttachmentItem, type AttachmentDisplay } from "@/components/AttachmentItem"
 import { Paperclip, X } from "lucide-react"
+import { getAdjacentManualPhases } from "@/lib/phases"
 
 interface InquiryAttachmentData extends AttachmentDisplay {
   inquiry_id: number
@@ -72,6 +73,7 @@ export default function BuildingDetailPage() {
   const [savingPhase, setSavingPhase] = useState(false)
 
   const canManage = user && ["team_leader", "chief_secretary", "secretary"].includes(user.role)
+  const canChangePhase = user && ["team_leader", "chief_secretary"].includes(user.role)
   const isAssigned =
     !!user &&
     !!building &&
@@ -116,12 +118,12 @@ export default function BuildingDetailPage() {
   const autoOpenedRef = useRef(false)
   useEffect(() => {
     if (autoOpenedRef.current) return
-    if (!isLoading && building && editPhaseParam && canManage) {
+    if (!isLoading && building && editPhaseParam && canChangePhase) {
       autoOpenedRef.current = true
-      setPhaseDraft(building.current_phase ?? "")
+      setPhaseDraft("")
       setPhaseEditOpen(true)
     }
-  }, [isLoading, building, editPhaseParam, canManage])
+  }, [isLoading, building, editPhaseParam, canChangePhase])
 
   interface NoteItem {
     id: number
@@ -179,18 +181,20 @@ export default function BuildingDetailPage() {
 
   const handleSavePhase = async () => {
     if (!building || !phaseDraft) return
-    if (phaseDraft === building.current_phase) {
-      setPhaseEditOpen(false)
+    const allowed = getAdjacentManualPhases(building.current_phase)
+    if (!allowed.includes(phaseDraft)) {
+      alert("현재 단계에서 선택할 수 없는 단계입니다. 새로고침 후 다시 선택해주세요.")
       return
     }
     setSavingPhase(true)
     try {
-      const { data } = await apiClient.patch<Building>(
-        `/api/buildings/${building.id}`,
-        { current_phase: phaseDraft }
+      const { data } = await apiClient.post<Building>(
+        `/api/buildings/${building.id}/phase`,
+        { to_phase: phaseDraft, reason: "manual_change" }
       )
       setBuilding(data)
       setPhaseEditOpen(false)
+      setPhaseDraft("")
     } catch (err) {
       const msg =
         (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
@@ -335,6 +339,8 @@ export default function BuildingDetailPage() {
 
   if (!building) return null
 
+  const phaseOptions = getAdjacentManualPhases(building.current_phase)
+
   return (
     <div className="space-y-6">
       {/* 헤더 */}
@@ -356,12 +362,12 @@ export default function BuildingDetailPage() {
               {PHASE_LABELS[building.current_phase as PhaseType] || building.current_phase}
             </Badge>
           )}
-          {canManage && (
+          {canChangePhase && (
             <Button
               size="sm"
               variant="outline"
               onClick={() => {
-                setPhaseDraft(building.current_phase ?? "")
+                setPhaseDraft("")
                 setPhaseEditOpen(true)
               }}
             >
@@ -818,20 +824,29 @@ export default function BuildingDetailPage() {
             <DialogTitle>현재 단계 수정</DialogTitle>
           </DialogHeader>
           <div className="space-y-3">
-            <p className="text-xs text-muted-foreground">
-              자동 전환과 무관하게 이 건축물의 현재 진행 단계를 수동으로 지정할 수 있습니다.
-            </p>
+            <div className="space-y-1 text-xs text-muted-foreground">
+              <p>
+                현재 단계:{" "}
+                <span className="font-medium text-foreground">
+                  {PHASE_LABELS[building.current_phase ?? ""] || building.current_phase || "-"}
+                </span>
+              </p>
+              <p>단계 변경은 현재 단계 기준 바로 이전/다음 1단계만 선택할 수 있습니다.</p>
+            </div>
             <div className="space-y-2">
               <Label>단계 선택</Label>
               <select
                 className="w-full rounded-md border px-3 py-2 text-sm"
                 value={phaseDraft}
                 onChange={(e) => setPhaseDraft(e.target.value)}
+                disabled={phaseOptions.length === 0}
               >
-                <option value="">선택 안 함</option>
-                {Object.entries(PHASE_LABELS).map(([value, label]) => (
+                <option value="">
+                  {phaseOptions.length === 0 ? "변경 가능한 단계 없음" : "선택해주세요"}
+                </option>
+                {phaseOptions.map((value) => (
                   <option key={value} value={value}>
-                    {label}
+                    {PHASE_LABELS[value] || value}
                   </option>
                 ))}
               </select>
@@ -841,7 +856,12 @@ export default function BuildingDetailPage() {
             <Button variant="outline" onClick={() => setPhaseEditOpen(false)} disabled={savingPhase}>
               취소
             </Button>
-            <Button onClick={handleSavePhase} loading={savingPhase} loadingText="저장 중...">
+            <Button
+              onClick={handleSavePhase}
+              loading={savingPhase}
+              loadingText="저장 중..."
+              disabled={savingPhase || !phaseDraft || phaseOptions.length === 0}
+            >
               저장
             </Button>
           </DialogFooter>

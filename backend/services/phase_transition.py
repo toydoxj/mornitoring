@@ -1,6 +1,6 @@
 """Building.current_phase 전환 가드 + 영구 로그.
 
-도메인 정책상 phase 전환은 8개 매트릭스 외에 발생해선 안 된다.
+도메인 정책상 phase 전환은 허용 매트릭스 외에 발생해선 안 된다.
 모든 변경(자동 트리거 + 간사 수동)은 phase_transition_logs 테이블에
 관리번호별 영구 기록한다.
 
@@ -11,7 +11,8 @@
              "supplement_N"        -> "supplement_(N+1)_received"  (N=1~4)
     UPLOAD:  "doc_received"        -> "preliminary"
              "supplement_N_received" -> "supplement_N"             (N=1~5)
-    MANUAL:  RECEIVE/UPLOAD 매트릭스 합집합 (임의 점프/역행 금지)
+    MANUAL:  현재 phase 기준 전후 1단계만 허용
+             그 외 임의 점프 금지
 
 사용 패턴:
     log = transition_phase(db, building, to_phase=..., trigger="receive",
@@ -55,11 +56,36 @@ _UPLOAD_MATRIX: dict[str, str] = {
 # INITIAL: 신규 건물 등록 직후. 출발은 None 또는 빈 문자열.
 _INITIAL_TARGET = "assigned"
 
-# MANUAL이 허용하는 (from, to) 쌍 — RECEIVE/UPLOAD 매트릭스의 합집합.
-_MANUAL_ALLOWED_PAIRS: set[tuple[str, str]] = (
-    {(f, t) for f, t in _RECEIVE_MATRIX.items()}
-    | {(f, t) for f, t in _UPLOAD_MATRIX.items()}
+# 업무 단계 순서. MANUAL 전환은 이 순서에서 바로 앞/뒤 1단계만 허용한다.
+_PHASE_SEQUENCE: tuple[str, ...] = (
+    "assigned",
+    "doc_received",
+    "preliminary",
+    "supplement_1_received",
+    "supplement_1",
+    "supplement_2_received",
+    "supplement_2",
+    "supplement_3_received",
+    "supplement_3",
+    "supplement_4_received",
+    "supplement_4",
+    "supplement_5_received",
+    "supplement_5",
 )
+
+
+def _build_manual_allowed_pairs() -> set[tuple[str, str]]:
+    pairs: set[tuple[str, str]] = set()
+    for idx, phase in enumerate(_PHASE_SEQUENCE):
+        if idx > 0:
+            pairs.add((phase, _PHASE_SEQUENCE[idx - 1]))
+        if idx < len(_PHASE_SEQUENCE) - 1:
+            pairs.add((phase, _PHASE_SEQUENCE[idx + 1]))
+    return pairs
+
+
+# MANUAL이 허용하는 (from, to) 쌍 — 현재 phase 기준 전후 1단계.
+_MANUAL_ALLOWED_PAIRS = _build_manual_allowed_pairs()
 
 
 class InvalidPhaseTransition(ValueError):
@@ -125,8 +151,8 @@ def _validate_transition(trigger: TriggerType, from_phase: str | None, to_phase:
             )
         if (from_phase, to_phase) not in _MANUAL_ALLOWED_PAIRS:
             raise InvalidPhaseTransition(
-                f"MANUAL 전환 불허: ({from_phase} → {to_phase}) 는 매트릭스에 없음. "
-                "임의 점프/역행은 금지. 데이터 복구는 운영 절차로 처리하세요."
+                f"MANUAL 전환 불허: ({from_phase} → {to_phase}) 는 전후 1단계 범위 밖. "
+                "임의 점프는 금지. 데이터 복구는 운영 절차로 처리하세요."
             )
         return
 

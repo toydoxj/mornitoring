@@ -328,10 +328,44 @@ def test_same_group_secretary_can_update_and_delete_inquiry(
     assert db_session.query(Inquiry).filter(Inquiry.id == inquiry.id).first() is None
 
 
+def test_inquiry_phase_change_allows_previous_adjacent_phase(
+    client, db_session, make_user, make_reviewer, make_building
+):
+    """문의 단계 변경에서 현재 단계의 바로 이전 단계는 운영 보정으로 허용한다."""
+    _, admin_headers = make_user(UserRole.CHIEF_SECRETARY)
+    reviewer_user, reviewer, _ = make_reviewer(group_no=1)
+    building = make_building(reviewer_id=reviewer.id, mgmt_no="INQ-PHASE-PREV-001")
+    building.current_phase = "doc_received"
+    inquiry = Inquiry(
+        building_id=building.id,
+        mgmt_no=building.mgmt_no,
+        phase="doc_received",
+        submitter_id=reviewer_user.id,
+        submitter_name=reviewer_user.name,
+        content="단계 변경 문의",
+    )
+    db_session.add(inquiry)
+    db_session.commit()
+    db_session.refresh(inquiry)
+
+    res = client.patch(
+        f"/api/reviews/inquiry/{inquiry.id}",
+        headers=admin_headers,
+        json={"reply": "확인", "new_phase": "assigned"},
+    )
+    assert res.status_code == 200, res.text
+
+    db_session.refresh(building)
+    db_session.refresh(inquiry)
+    assert building.current_phase == "assigned"
+    assert inquiry.status == InquiryStatus.COMPLETED
+    assert inquiry.reply == "확인"
+
+
 def test_inquiry_phase_change_returns_friendly_message_for_invalid_transition(
     client, db_session, make_user, make_reviewer, make_building
 ):
-    """문의 단계 변경에서 역행/점프 시 내부 매트릭스 메시지를 그대로 노출하지 않는다."""
+    """문의 단계 변경에서 한 칸 초과 점프 시 내부 매트릭스 메시지를 그대로 노출하지 않는다."""
     _, admin_headers = make_user(UserRole.CHIEF_SECRETARY)
     reviewer_user, reviewer, _ = make_reviewer(group_no=1)
     building = make_building(reviewer_id=reviewer.id, mgmt_no="INQ-PHASE-INVALID-001")
@@ -351,12 +385,12 @@ def test_inquiry_phase_change_returns_friendly_message_for_invalid_transition(
     res = client.patch(
         f"/api/reviews/inquiry/{inquiry.id}",
         headers=admin_headers,
-        json={"reply": "확인", "new_phase": "assigned"},
+        json={"reply": "확인", "new_phase": "supplement_1_received"},
     )
     assert res.status_code == 400
     detail = res.json()["detail"]
     assert "현재 단계(예비도서 접수)" in detail
-    assert "배정완료" in detail
+    assert "보완도서(1차) 접수" in detail
     assert "MANUAL 전환" not in detail
 
 

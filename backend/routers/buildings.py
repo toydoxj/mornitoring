@@ -1105,7 +1105,7 @@ def change_building_phase(
 ):
     """간사 수동 단계 변경 (MANUAL 트리거).
 
-    매트릭스 안의 (from, to) 쌍만 허용. 임의 점프/역행 시 400.
+    현재 단계 기준 전후 1단계만 허용. 임의 점프 시 400.
     모든 변경은 phase_transition_logs 에 영구 기록.
     """
     from services.phase_transition import (
