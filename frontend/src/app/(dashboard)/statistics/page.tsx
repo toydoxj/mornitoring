@@ -18,6 +18,7 @@ import { PHASE_LABELS, type PhaseType } from "@/types"
 
 type ActiveTab = "reviewer" | "severity" | "keyword"
 type SeverityLabel = "L0" | "L1" | "L2" | "L3" | "L4"
+type ReportMaxLabel = "pass" | SeverityLabel
 
 interface ReviewerStat {
   name: string
@@ -44,11 +45,24 @@ interface SeverityPhaseStat extends SeverityPivotRow {
   phase: PhaseType
 }
 
+interface SeverityReportMaxStats {
+  total: number
+  totals: Record<ReportMaxLabel, number>
+  by_phase: SeverityReportMaxPhaseStat[]
+}
+
 interface SeverityStats {
   total: number
   totals: Record<SeverityLabel, number>
   by_category: SeverityCategoryStat[]
   by_phase: SeverityPhaseStat[]
+  by_report_max: SeverityReportMaxStats
+}
+
+interface SeverityReportMaxPhaseStat {
+  phase: PhaseType
+  counts: Record<ReportMaxLabel, number>
+  total: number
 }
 
 interface KeywordStat {
@@ -79,6 +93,16 @@ interface StatsResponse {
 }
 
 const SEVERITY_LABELS: SeverityLabel[] = ["L0", "L1", "L2", "L3", "L4"]
+const REPORT_MAX_LABELS: ReportMaxLabel[] = ["pass", ...SEVERITY_LABELS]
+
+const REPORT_MAX_LABEL_TEXT: Record<ReportMaxLabel, string> = {
+  pass: "적합",
+  L0: "L0",
+  L1: "L1",
+  L2: "L2",
+  L3: "L3",
+  L4: "L4",
+}
 
 const SEVERITY_STYLE: Record<SeverityLabel, string> = {
   L0: "border-slate-200 bg-slate-50 text-slate-700",
@@ -86,6 +110,15 @@ const SEVERITY_STYLE: Record<SeverityLabel, string> = {
   L2: "border-amber-200 bg-amber-50 text-amber-700",
   L3: "border-orange-200 bg-orange-50 text-orange-700",
   L4: "border-red-200 bg-red-50 text-red-700",
+}
+
+const REPORT_MAX_STYLE: Record<ReportMaxLabel, string> = {
+  pass: "border-emerald-200 bg-emerald-50 text-emerald-700",
+  L0: SEVERITY_STYLE.L0,
+  L1: SEVERITY_STYLE.L1,
+  L2: SEVERITY_STYLE.L2,
+  L3: SEVERITY_STYLE.L3,
+  L4: SEVERITY_STYLE.L4,
 }
 
 export default function StatisticsPage() {
@@ -316,23 +349,43 @@ function SeverityStatsView({
 
   return (
     <div className="space-y-5">
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
-        {SEVERITY_LABELS.map((label) => {
-          const count = stats.totals[label] ?? 0
-          return (
-            <div
-              key={label}
-              className={`rounded-md border px-4 py-3 ${SEVERITY_STYLE[label]}`}
-            >
-              <p className="text-sm font-medium">{label}</p>
-              <p className="mt-1 text-2xl font-bold">
-                {count.toLocaleString()}
-                <span className="ml-1 text-sm font-normal">건</span>
-              </p>
-            </div>
-          )
-        })}
-      </div>
+      <section className="space-y-2">
+        <div>
+          <h2 className="text-sm font-semibold">상세의견 건수 기준</h2>
+          <p className="text-xs text-muted-foreground">
+            상세검토 내용 1줄을 1건으로 집계합니다.
+          </p>
+        </div>
+        <SeveritySummaryCards
+          labels={SEVERITY_LABELS}
+          counts={stats.totals}
+          getLabel={(label) => label}
+          getStyle={(label) => SEVERITY_STYLE[label]}
+        />
+      </section>
+
+      <section className="space-y-2">
+        <div>
+          <h2 className="text-sm font-semibold">검토서 최고Lv 기준</h2>
+          <p className="text-xs text-muted-foreground">
+            적합 검토서는 적합 1건, 의견이 있는 검토서는 가장 높은 심각도 1건으로 집계합니다.
+          </p>
+        </div>
+        <SeveritySummaryCards
+          labels={REPORT_MAX_LABELS}
+          counts={stats.by_report_max.totals}
+          getLabel={(label) => REPORT_MAX_LABEL_TEXT[label]}
+          getStyle={(label) => REPORT_MAX_STYLE[label]}
+        />
+        <SeverityTable
+          labels={REPORT_MAX_LABELS}
+          labelHeader="단계"
+          rows={stats.by_report_max.by_phase}
+          getColumnLabel={(label) => REPORT_MAX_LABEL_TEXT[label]}
+          getLabel={(row) => PHASE_LABELS[row.phase] || row.phase}
+          emptyText="검토서 최고Lv 집계가 없습니다."
+        />
+      </section>
 
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_420px]">
         <section className="space-y-2">
@@ -343,8 +396,10 @@ function SeverityStatsView({
             </p>
           </div>
           <SeverityTable
+            labels={SEVERITY_LABELS}
             labelHeader="분류"
             rows={stats.by_category}
+            getColumnLabel={(label) => label}
             getLabel={(row) => row.category}
             emptyText="분류별 심각도 집계가 없습니다."
           />
@@ -358,8 +413,10 @@ function SeverityStatsView({
             </p>
           </div>
           <SeverityTable
+            labels={SEVERITY_LABELS}
             labelHeader="단계"
             rows={stats.by_phase}
+            getColumnLabel={(label) => label}
             getLabel={(row) => PHASE_LABELS[row.phase] || row.phase}
             emptyText="단계별 심각도 집계가 없습니다."
           />
@@ -369,14 +426,55 @@ function SeverityStatsView({
   )
 }
 
-function SeverityTable<T extends SeverityPivotRow>({
+function SeveritySummaryCards<TLabel extends string>({
+  labels,
+  counts,
+  getLabel,
+  getStyle,
+}: {
+  labels: TLabel[]
+  counts: Record<TLabel, number>
+  getLabel: (label: TLabel) => string
+  getStyle: (label: TLabel) => string
+}) {
+  const gridClass =
+    labels.length >= 6
+      ? "grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6"
+      : "grid gap-3 sm:grid-cols-2 lg:grid-cols-5"
+
+  return (
+    <div className={gridClass}>
+      {labels.map((label) => {
+        const count = counts[label] ?? 0
+        return (
+          <div
+            key={label}
+            className={`rounded-md border px-4 py-3 ${getStyle(label)}`}
+          >
+            <p className="text-sm font-medium">{getLabel(label)}</p>
+            <p className="mt-1 text-2xl font-bold">
+              {count.toLocaleString()}
+              <span className="ml-1 text-sm font-normal">건</span>
+            </p>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+function SeverityTable<TLabel extends string, T extends { counts: Record<TLabel, number>; total: number }>({
+  labels,
   labelHeader,
   rows,
+  getColumnLabel,
   getLabel,
   emptyText,
 }: {
+  labels: TLabel[]
   labelHeader: string
   rows: T[]
+  getColumnLabel: (label: TLabel) => string
   getLabel: (row: T) => string
   emptyText: string
 }) {
@@ -394,9 +492,9 @@ function SeverityTable<T extends SeverityPivotRow>({
         <TableHeader>
           <TableRow>
             <TableHead>{labelHeader}</TableHead>
-            {SEVERITY_LABELS.map((label) => (
+            {labels.map((label) => (
               <TableHead key={label} className="w-[70px] text-center">
-                {label}
+                {getColumnLabel(label)}
               </TableHead>
             ))}
             <TableHead className="w-[80px] text-center">합계</TableHead>
@@ -408,7 +506,7 @@ function SeverityTable<T extends SeverityPivotRow>({
               <TableCell className="min-w-[220px] font-medium">
                 {getLabel(row)}
               </TableCell>
-              {SEVERITY_LABELS.map((label) => {
+              {labels.map((label) => {
                 const count = row.counts[label] ?? 0
                 return (
                   <TableCell key={label} className="text-center">

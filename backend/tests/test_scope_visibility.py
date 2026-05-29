@@ -10,7 +10,7 @@
 from models.inquiry import Inquiry, InquiryStatus
 from models.review_opinion_detail import ReviewOpinionDetail
 from models.review_severity_summary import ReviewSeveritySummary
-from models.review_stage import InappropriateDecision, PhaseType, ReviewStage
+from models.review_stage import InappropriateDecision, PhaseType, ResultType, ReviewStage
 from models.user import UserRole
 
 
@@ -144,7 +144,13 @@ def test_stats_returns_severity_summary_by_category_and_phase(
         phase=PhaseType.PRELIMINARY,
         phase_order=0,
     )
-    db_session.add(stage)
+    pass_stage = ReviewStage(
+        building_id=building.id,
+        phase=PhaseType.SUPPLEMENT_1,
+        phase_order=1,
+        result=ResultType.PASS,
+    )
+    db_session.add_all([stage, pass_stage])
     db_session.commit()
     db_session.refresh(stage)
     db_session.add_all([
@@ -182,6 +188,22 @@ def test_stats_returns_severity_summary_by_category_and_phase(
         "counts": {"L0": 1, "L1": 0, "L2": 0, "L3": 2, "L4": 0},
         "total": 3,
     }]
+    assert severity_stats["by_report_max"] == {
+        "total": 2,
+        "totals": {"pass": 1, "L0": 0, "L1": 0, "L2": 0, "L3": 1, "L4": 0},
+        "by_phase": [
+            {
+                "phase": "preliminary",
+                "counts": {"pass": 0, "L0": 0, "L1": 0, "L2": 0, "L3": 1, "L4": 0},
+                "total": 1,
+            },
+            {
+                "phase": "supplement_1",
+                "counts": {"pass": 1, "L0": 0, "L1": 0, "L2": 0, "L3": 0, "L4": 0},
+                "total": 1,
+            },
+        ],
+    }
 
 
 def test_stats_returns_keyword_summary_from_opinion_details(
@@ -287,6 +309,9 @@ def test_secretary_stats_severity_excludes_other_group(
     assert severity_stats["total"] == 1
     assert severity_stats["totals"]["L0"] == 1
     assert severity_stats["totals"]["L4"] == 0
+    assert severity_stats["by_report_max"]["total"] == 1
+    assert severity_stats["by_report_max"]["totals"]["L0"] == 1
+    assert severity_stats["by_report_max"]["totals"]["L4"] == 0
 
 
 def test_secretary_stats_keyword_excludes_other_group(

@@ -247,10 +247,15 @@ def _to_response(building: Building, registered_names: set[str]) -> dict:
 
 
 SEVERITY_LABELS = ("L0", "L1", "L2", "L3", "L4")
+REPORT_MAX_LABELS = ("pass", *SEVERITY_LABELS)
 
 
 def _empty_severity_counts() -> dict[str, int]:
     return {label: 0 for label in SEVERITY_LABELS}
+
+
+def _empty_report_max_counts() -> dict[str, int]:
+    return {label: 0 for label in REPORT_MAX_LABELS}
 
 
 class BuildingListResponse(BaseModel):
@@ -275,12 +280,12 @@ def get_stats(
       3) 위원별 집계 (총/단계/완료/면적/고위험)
       4) 위원별 doc_received 상태 중 예비검토서 제출/미제출 (LEFT JOIN + GROUP BY)
     """
-    from sqlalchemy import and_, func as sa_func
+    from sqlalchemy import and_, case, func as sa_func, or_
     from engines.review_keyword_analyzer import match_keywords
     from models.inquiry import Inquiry, InquiryStatus
     from models.review_opinion_detail import ReviewOpinionDetail
     from models.review_severity_summary import ReviewSeveritySummary
-    from models.review_stage import ReviewStage, PhaseType
+    from models.review_stage import ReviewStage, PhaseType, ResultType
 
     # 가시성 필터: 간사가 자기 조 데이터만 보도록.
     # visibility=None 이면 무필터(팀장/총괄/조 미배정 간사).
@@ -556,6 +561,61 @@ def get_stats(
     ]
     severity_by_phase.sort(key=lambda row: phase_order.get(row["phase"], 999))
 
+    # 5-1) 검토서 1건당 최고 심각도 기준 집계
+    # 한 검토서 안에 여러 상세의견이 있어도 가장 높은 L값 하나만 1건으로 센다.
+    severity_rank = case(
+        (ReviewSeveritySummary.severity == "L0", 0),
+        (ReviewSeveritySummary.severity == "L1", 1),
+        (ReviewSeveritySummary.severity == "L2", 2),
+        (ReviewSeveritySummary.severity == "L3", 3),
+        (ReviewSeveritySummary.severity == "L4", 4),
+        else_=-1,
+    )
+    severity_report_max_rows = (
+        _scoped_by_building_id(
+            db.query(
+                ReviewStage.id,
+                ReviewStage.phase,
+                ReviewStage.result,
+                sa_func.max(severity_rank),
+            )
+            .outerjoin(
+                ReviewSeveritySummary,
+                ReviewSeveritySummary.stage_id == ReviewStage.id,
+            )
+            .filter(
+                or_(
+                    ReviewSeveritySummary.id.isnot(None),
+                    ReviewStage.result == ResultType.PASS,
+                )
+            ),
+            ReviewStage.building_id,
+        )
+        .group_by(ReviewStage.id, ReviewStage.phase, ReviewStage.result)
+        .all()
+    )
+    severity_report_max_totals = _empty_report_max_counts()
+    severity_report_max_phase_map: dict[str, dict[str, int]] = {}
+    for _, phase, result, max_rank in severity_report_max_rows:
+        if max_rank is None or int(max_rank) < 0:
+            result_key = result.value if hasattr(result, "value") else str(result)
+            if result_key != ResultType.PASS.value:
+                continue
+            max_label = "pass"
+        elif int(max_rank) >= len(SEVERITY_LABELS):
+            continue
+        else:
+            max_label = SEVERITY_LABELS[int(max_rank)]
+        severity_report_max_totals[max_label] += 1
+        phase_key = phase.value if hasattr(phase, "value") else str(phase)
+        counts = severity_report_max_phase_map.setdefault(phase_key, _empty_report_max_counts())
+        counts[max_label] += 1
+    severity_report_max_by_phase = [
+        {"phase": phase, "counts": counts, "total": sum(counts.values())}
+        for phase, counts in severity_report_max_phase_map.items()
+    ]
+    severity_report_max_by_phase.sort(key=lambda row: phase_order.get(row["phase"], 999))
+
     # 6) 키워드 분석 — 저장된 상세검토 원문을 예비/보완 구분으로 집계
     keyword_detail_rows = (
         _scoped_by_building_id(
@@ -627,6 +687,11 @@ def get_stats(
             "totals": severity_totals,
             "by_category": severity_by_category,
             "by_phase": severity_by_phase,
+            "by_report_max": {
+                "total": sum(severity_report_max_totals.values()),
+                "totals": severity_report_max_totals,
+                "by_phase": severity_report_max_by_phase,
+            },
         },
         "keyword_stats": {
             "total_details": len(keyword_detail_rows),
