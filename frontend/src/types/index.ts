@@ -141,6 +141,11 @@ export interface ReviewStage {
   defect_type_1: string | null
   defect_type_2: string | null
   defect_type_3: string | null
+  severity_l0_count: number
+  severity_l1_count: number
+  severity_l2_count: number
+  severity_l3_count: number
+  severity_l4_count: number
   inappropriate_review_needed?: boolean
   inappropriate_decision?: InappropriateDecisionType | null
 }

@@ -32,6 +32,8 @@ from pathlib import Path
 
 from openpyxl import load_workbook
 
+from engines.review_opinion_parser import parse_review_opinions
+
 MGMT_NO_PATTERN = re.compile(r"^\d{4}-\d{4}$")
 
 
@@ -225,6 +227,11 @@ def validate_review_file(
             if "2차" not in sheet_name:
                 result.add_error(f"보완검토인데 시트명이 '{sheet_name}'입니다.")
 
+    # 상세의견 + 심각도 파싱. 저장용 검토의견은 D81 수식값이 아니라 상세의견에서 구성한다.
+    opinion_parse = parse_review_opinions(ws)
+    for error in opinion_parse.errors:
+        result.add_error(error)
+
     # 적정성 검토 결과 행 찾기
     result_row = _find_result_row(ws)
     review_result_text = _cell_str(ws, f"D{result_row}")
@@ -282,7 +289,8 @@ def validate_review_file(
         "defect_type_1": defect_type_1,
         "defect_type_2": defect_type_2,
         "defect_type_3": defect_type_3,
-        "review_opinion": review_result_text,
+        "review_opinion": opinion_parse.formatted_text,
+        "severity_counts": opinion_parse.severity_counts,
         # 유형별 상세검토
         "type_construction_method": _cell_str(ws, "C8"),     # 공법
         "type_transfer_structure": transfer_structure,         # 전이구조
@@ -320,7 +328,7 @@ def validate_review_file(
         result.add_warning("주요 구조형식이 입력되지 않았습니다.")
     if not result.extracted_data["high_risk_type"]:
         result.add_warning("고위험 유형이 입력되지 않았습니다.")
-    if not review_result_text:
+    if not review_result_text and not opinion_parse.formatted_text:
         result.add_warning("적정성 검토 결과가 비어있습니다.")
 
     wb.close()

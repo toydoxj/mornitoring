@@ -56,6 +56,11 @@ class ReviewStage(Base):
     defect_type_1: Mapped[str | None] = mapped_column(String(100))   # 부적합유형-1
     defect_type_2: Mapped[str | None] = mapped_column(String(100))   # 부적합유형-2
     defect_type_3: Mapped[str | None] = mapped_column(String(100))   # 부적합유형-3
+    severity_l0_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    severity_l1_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    severity_l2_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    severity_l3_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    severity_l4_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
 
     # 이의신청 (보완 라운드)
     objection_filed: Mapped[bool | None] = mapped_column(Boolean, default=False)

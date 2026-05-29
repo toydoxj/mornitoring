@@ -5,7 +5,7 @@ review_stages 테이블에 반영한다.
 
 셀 위치 (2025-0005.xlsm 기준):
   H4: 검토결과
-  D79: 적정성 검토 결과 (행이 이동할 수 있음)
+  D열/H열: 상세의견/심각도
   G81~: 판정결과 부적합 유형 1~3
 """
 
@@ -14,6 +14,7 @@ from pathlib import Path
 
 from openpyxl import load_workbook
 
+from engines.review_opinion_parser import parse_review_opinions
 from models.review_stage import ResultType
 
 RESULT_MAP = {
@@ -71,6 +72,7 @@ def extract_review_data(file_path: str | Path) -> dict:
         "defect_type_3": None,
         "review_opinion": None,
         "reviewer_name": None,
+        "severity_counts": {"L0": 0, "L1": 0, "L2": 0, "L3": 0, "L4": 0},
     }
 
     try:
@@ -87,15 +89,9 @@ def extract_review_data(file_path: str | Path) -> dict:
         if reviewer:
             data["reviewer_name"] = reviewer
 
-        # 적정성 검토 결과 (D79 근처)
-        for row in range(79, 95):
-            val = ws.cell(row=row, column=2).value
-            if val and "적정성 검토 결과" in str(val):
-                opinion = ws.cell(row=row, column=4).value  # D열
-                if opinion:
-                    s = str(opinion).strip().replace("_x000D_", "").replace("_x000d_", "").replace("\r", "")
-                    data["review_opinion"] = s
-                break
+        opinion_parse = parse_review_opinions(ws)
+        data["review_opinion"] = opinion_parse.formatted_text
+        data["severity_counts"] = opinion_parse.severity_counts
 
         # 판정결과 부적합 유형
         defects = _find_defect_type_values(ws)

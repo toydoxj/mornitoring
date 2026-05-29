@@ -39,6 +39,11 @@ def _has_review_history(db: Session, stage: ReviewStage) -> bool:
         or stage.defect_type_1
         or stage.defect_type_2
         or stage.defect_type_3
+        or stage.severity_l0_count
+        or stage.severity_l1_count
+        or stage.severity_l2_count
+        or stage.severity_l3_count
+        or stage.severity_l4_count
         or stage.s3_file_key
         or stage.inappropriate_review_needed
         or stage.inappropriate_decision
@@ -92,6 +97,11 @@ def _reset_review_history(db: Session, stage: ReviewStage) -> dict:
     stage.defect_type_1 = None
     stage.defect_type_2 = None
     stage.defect_type_3 = None
+    stage.severity_l0_count = 0
+    stage.severity_l1_count = 0
+    stage.severity_l2_count = 0
+    stage.severity_l3_count = 0
+    stage.severity_l4_count = 0
     stage.s3_file_key = None
     stage.inappropriate_review_needed = False
     stage.inappropriate_decision = None

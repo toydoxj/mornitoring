@@ -490,6 +490,31 @@ export default function BuildingDetailPage() {
                         </div>
                       )}
 
+                      {([
+                        ["L0", stage.severity_l0_count],
+                        ["L1", stage.severity_l1_count],
+                        ["L2", stage.severity_l2_count],
+                        ["L3", stage.severity_l3_count],
+                        ["L4", stage.severity_l4_count],
+                      ] as const).some(([, count]) => count > 0) && (
+                        <div>
+                          <dt className="text-muted-foreground mb-1">심각도 집계</dt>
+                          <div className="flex flex-wrap gap-1">
+                            {([
+                              ["L0", stage.severity_l0_count],
+                              ["L1", stage.severity_l1_count],
+                              ["L2", stage.severity_l2_count],
+                              ["L3", stage.severity_l3_count],
+                              ["L4", stage.severity_l4_count],
+                            ] as const).map(([label, count]) => (
+                              <Badge key={label} variant={count > 0 ? "secondary" : "outline"} className="text-xs">
+                                {label}: {count}
+                              </Badge>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
                       {/* 검토의견 */}
                       {stage.review_opinion && (
                         <div>

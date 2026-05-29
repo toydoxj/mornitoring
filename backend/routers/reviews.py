@@ -75,6 +75,11 @@ class ReviewStageResponse(BaseModel):
     defect_type_1: str | None = None
     defect_type_2: str | None = None
     defect_type_3: str | None = None
+    severity_l0_count: int = 0
+    severity_l1_count: int = 0
+    severity_l2_count: int = 0
+    severity_l3_count: int = 0
+    severity_l4_count: int = 0
     review_opinion: str | None = None
     s3_file_key: str | None = None
     inappropriate_review_needed: bool = False
@@ -364,6 +369,15 @@ def _apply_changes(building: Building, extracted_data: dict):
         building.detail_category9 = "필로티"
 
 
+def _apply_severity_counts(stage: ReviewStage, extracted: dict) -> None:
+    counts = extracted.get("severity_counts") or {}
+    stage.severity_l0_count = int(counts.get("L0", 0) or 0)
+    stage.severity_l1_count = int(counts.get("L1", 0) or 0)
+    stage.severity_l2_count = int(counts.get("L2", 0) or 0)
+    stage.severity_l3_count = int(counts.get("L3", 0) or 0)
+    stage.severity_l4_count = int(counts.get("L4", 0) or 0)
+
+
 @router.post("/upload", response_model=UploadResponse)
 async def upload_review(
     file: UploadFile = File(...),
@@ -451,8 +465,8 @@ async def upload_review(
                 stage.defect_type_2 = extracted["defect_type_2"]
             if extracted["defect_type_3"]:
                 stage.defect_type_3 = extracted["defect_type_3"]
-            if extracted["review_opinion"]:
-                stage.review_opinion = extracted["review_opinion"]
+            stage.review_opinion = extracted["review_opinion"]
+            _apply_severity_counts(stage, extracted)
             stage.inappropriate_review_needed = inappropriate_review_needed
             new_s3_key = upload_review_file(tmp_path, mgmt_no, actual_phase, file.filename)
             stage.s3_file_key = new_s3_key
@@ -477,6 +491,7 @@ async def upload_review(
                 inappropriate_review_needed=inappropriate_review_needed,
                 s3_file_key=upload_review_file(tmp_path, mgmt_no, actual_phase, file.filename),
             )
+            _apply_severity_counts(stage, extracted)
             db.add(stage)
 
         # 5. 건축물 current_phase 전환 (매트릭스 UPLOAD).
