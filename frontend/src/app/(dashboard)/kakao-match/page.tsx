@@ -10,6 +10,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import { KakaoTokenBulkRefreshButton } from "@/components/KakaoTokenBulkRefreshButton"
 import {
   Table,
   TableBody,
@@ -229,6 +230,9 @@ export default function KakaoMatchPage() {
 
   const matchedCount = users.filter((r) => r.kakao_linked).length
   const oauthLinkedCount = users.filter((r) => r.kakao_oauth_linked).length
+  const kakaoRefreshNeededCount = users.filter(
+    (r) => r.kakao_token_status === "refresh_needed"
+  ).length
 
   const filteredFriends = friends.filter((f) => {
     const nick = (f.profile_nickname ?? "").toLowerCase()
@@ -260,16 +264,22 @@ export default function KakaoMatchPage() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold">카카오 친구 매칭</h1>
           <p className="text-sm text-muted-foreground">
             전체 {users.length}명 · 카카오 로그인 {oauthLinkedCount}명 · 매칭 {matchedCount}명
           </p>
         </div>
-        <Button onClick={fetchFriends} loading={isFetchingFriends} loadingText="로딩 중...">
-          친구 목록 새로고침
-        </Button>
+        <div className="flex flex-wrap items-start justify-end gap-2">
+          <KakaoTokenBulkRefreshButton
+            refreshNeededCount={kakaoRefreshNeededCount}
+            onRefreshed={fetchUsers}
+          />
+          <Button onClick={fetchFriends} loading={isFetchingFriends} loadingText="로딩 중...">
+            친구 목록 새로고침
+          </Button>
+        </div>
       </div>
 
       {error && (

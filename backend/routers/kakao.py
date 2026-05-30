@@ -215,6 +215,28 @@ class UserMatchStatus(BaseModel):
     kakao_scopes_status: str | None = None
 
 
+class BulkTokenRefreshSummary(BaseModel):
+    total: int
+    refreshed: int
+    skipped: int
+    failed: int
+
+
+class BulkTokenRefreshResult(BaseModel):
+    user_id: int
+    name: str
+    status_before: str
+    status_after: str
+    kakao_token_expires_at: str | None = None
+    refreshed: bool
+    error: str | None = None
+
+
+class BulkTokenRefreshResponse(BaseModel):
+    summary: BulkTokenRefreshSummary
+    results: list[BulkTokenRefreshResult]
+
+
 @router.get("/reviewers", response_model=list[UserMatchStatus])
 async def list_users_match_status(
     db: Session = Depends(get_db),
@@ -253,6 +275,109 @@ async def list_users_match_status(
             kakao_scopes_status=_scopes_status(u),
         ))
     return items
+
+
+def _token_refresh_error_message(exc: Exception) -> str:
+    """외부 응답의 민감 정보를 줄이고 운영자가 볼 수 있는 오류만 정리한다."""
+    response = getattr(exc, "response", None)
+    if response is not None:
+        status_code = getattr(response, "status_code", None)
+        try:
+            data = response.json()
+        except Exception:
+            data = {}
+        message = (
+            data.get("error_description")
+            or data.get("error")
+            or data.get("msg")
+            or data.get("code")
+            or str(exc)
+        )
+        return f"HTTP {status_code}: {message}"[:200]
+    return (str(exc) or exc.__class__.__name__)[:200]
+
+
+@router.post("/tokens/refresh", response_model=BulkTokenRefreshResponse)
+async def refresh_kakao_tokens(
+    db: Session = Depends(get_db),
+    _: User = Depends(
+        require_roles(UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY)
+    ),
+):
+    """활성 사용자 중 갱신 필요한 카카오 access token을 일괄 갱신한다.
+
+    사용자 목록 API는 외부 카카오 API를 호출하지 않고 상태만 표시한다.
+    이 엔드포인트는 운영자가 명시적으로 요청한 경우에만 refresh token으로
+    access token을 갱신해 카카오 토큰 발급 요청 수를 통제한다.
+    """
+    users = (
+        db.query(User)
+        .filter(User.is_active.is_(True), User.kakao_id.is_not(None))
+        .order_by(User.role, User.name)
+        .all()
+    )
+
+    results: list[BulkTokenRefreshResult] = []
+    refreshed_count = 0
+    skipped_count = 0
+    failed_count = 0
+
+    for user in users:
+        before_status, before_expires_at = get_kakao_token_status(user)
+        if before_status != "refresh_needed":
+            skipped_count += 1
+            results.append(BulkTokenRefreshResult(
+                user_id=user.id,
+                name=user.name,
+                status_before=before_status,
+                status_after=before_status,
+                kakao_token_expires_at=before_expires_at,
+                refreshed=False,
+            ))
+            continue
+
+        try:
+            await ensure_valid_token(user, db)
+        except Exception as exc:
+            db.rollback()
+            failed_count += 1
+            results.append(BulkTokenRefreshResult(
+                user_id=user.id,
+                name=user.name,
+                status_before=before_status,
+                status_after="invalid",
+                kakao_token_expires_at=before_expires_at,
+                refreshed=False,
+                error=_token_refresh_error_message(exc),
+            ))
+            continue
+
+        after_status, after_expires_at = get_kakao_token_status(user)
+        refreshed = after_status == "valid"
+        if refreshed:
+            refreshed_count += 1
+        else:
+            failed_count += 1
+
+        results.append(BulkTokenRefreshResult(
+            user_id=user.id,
+            name=user.name,
+            status_before=before_status,
+            status_after=after_status,
+            kakao_token_expires_at=after_expires_at,
+            refreshed=refreshed,
+            error=None if refreshed else "갱신 후에도 토큰이 유효 상태가 아닙니다",
+        ))
+
+    return BulkTokenRefreshResponse(
+        summary=BulkTokenRefreshSummary(
+            total=len(users),
+            refreshed=refreshed_count,
+            skipped=skipped_count,
+            failed=failed_count,
+        ),
+        results=results,
+    )
 
 
 class UserScopeDiagnosis(BaseModel):

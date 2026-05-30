@@ -11,6 +11,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import { KakaoTokenBulkRefreshButton } from "@/components/KakaoTokenBulkRefreshButton"
 import {
   Table,
   TableBody,
@@ -195,6 +196,9 @@ export default function AdminPage() {
     : users
   const unsetupCount = users.filter(
     (u) => u.setup_status && u.setup_status !== "setup_completed"
+  ).length
+  const kakaoRefreshNeededCount = users.filter(
+    (u) => u.kakao_token_status === "refresh_needed"
   ).length
 
   const fetchScopeStatus = async () => {
@@ -627,6 +631,10 @@ export default function AdminPage() {
           </label>
         </div>
         <div className="flex gap-2 items-center">
+          <KakaoTokenBulkRefreshButton
+            refreshNeededCount={kakaoRefreshNeededCount}
+            onRefreshed={fetchUsers}
+          />
           <Button
             variant="outline"
             onClick={fetchFriends}

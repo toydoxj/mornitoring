@@ -242,6 +242,94 @@ def test_ensure_valid_token_auto_refresh(db_session, kakao_mock, make_user, monk
     assert refreshed.kakao_refresh_token == "refreshed_refresh"
 
 
+def test_bulk_refresh_kakao_tokens_refreshes_needed_only(
+    client, db_session, kakao_mock, make_user
+):
+    """일괄 갱신은 refresh_needed 대상만 갱신하고 나머지는 건너뛴다."""
+    _, headers = make_user(UserRole.TEAM_LEADER)
+    target, _ = make_user(
+        UserRole.SECRETARY,
+        email="bulk-refresh-needed@example.com",
+        kakao_id="bulk-refresh-needed",
+        kakao_access_token="old_bulk_access",
+        kakao_refresh_token="old_bulk_refresh",
+        kakao_token_expires_at=datetime.now(timezone.utc) - timedelta(hours=1),
+    )
+    valid, _ = make_user(
+        UserRole.SECRETARY,
+        email="bulk-refresh-valid@example.com",
+        kakao_id="bulk-refresh-valid",
+        kakao_access_token="valid_bulk_access",
+        kakao_refresh_token="valid_bulk_refresh",
+        kakao_token_expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+    )
+    unavailable, _ = make_user(
+        UserRole.REVIEWER,
+        email="bulk-refresh-unavailable@example.com",
+        kakao_id="bulk-refresh-unavailable",
+        kakao_access_token="expired_no_refresh_access",
+        kakao_refresh_token=None,
+        kakao_token_expires_at=datetime.now(timezone.utc) - timedelta(hours=1),
+    )
+
+    kakao_mock.token_ok(
+        access_token="bulk_refreshed_access",
+        refresh_token="bulk_refreshed_refresh",
+    )
+
+    res = client.post("/api/kakao/tokens/refresh", headers=headers)
+    assert res.status_code == 200
+    body = res.json()
+    assert body["summary"] == {
+        "total": 3,
+        "refreshed": 1,
+        "skipped": 2,
+        "failed": 0,
+    }
+    results = {item["user_id"]: item for item in body["results"]}
+    assert results[target.id]["refreshed"] is True
+    assert results[valid.id]["status_before"] == "valid"
+    assert results[unavailable.id]["status_before"] == "refresh_unavailable"
+
+    db_session.expire_all()
+    from models.user import User as UserModel
+    refreshed = db_session.query(UserModel).filter(UserModel.id == target.id).first()
+    unchanged = db_session.query(UserModel).filter(UserModel.id == valid.id).first()
+    assert refreshed.kakao_access_token == "bulk_refreshed_access"
+    assert refreshed.kakao_refresh_token == "bulk_refreshed_refresh"
+    assert unchanged.kakao_access_token == "valid_bulk_access"
+
+
+def test_bulk_refresh_kakao_tokens_reports_failure(
+    client, kakao_mock, make_user
+):
+    """일괄 갱신 실패는 전체 요청을 깨지 않고 사용자별 실패로 반환한다."""
+    _, headers = make_user(UserRole.CHIEF_SECRETARY)
+    target, _ = make_user(
+        UserRole.SECRETARY,
+        email="bulk-refresh-fail@example.com",
+        kakao_id="bulk-refresh-fail",
+        kakao_access_token="expired_access",
+        kakao_refresh_token="invalid_refresh",
+        kakao_token_expires_at=datetime.now(timezone.utc) - timedelta(hours=1),
+    )
+
+    kakao_mock.token_fail(status_code=401, msg="invalid refresh token")
+
+    res = client.post("/api/kakao/tokens/refresh", headers=headers)
+    assert res.status_code == 200
+    body = res.json()
+    assert body["summary"] == {
+        "total": 1,
+        "refreshed": 0,
+        "skipped": 0,
+        "failed": 1,
+    }
+    assert body["results"][0]["user_id"] == target.id
+    assert body["results"][0]["status_after"] == "invalid"
+    assert "HTTP 401" in body["results"][0]["error"]
+
+
 def test_send_message_to_self_requires_result_code_zero(kakao_mock):
     """나에게 보내기 HTTP 200이어도 result_code가 0이 아니면 실패로 취급한다."""
     from services.kakao import send_message_to_self
