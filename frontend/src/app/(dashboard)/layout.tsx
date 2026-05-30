@@ -23,7 +23,6 @@ const NAV_ITEMS = [
   { href: "/dashboard", label: "대시보드", roles: ["team_leader", "chief_secretary", "secretary", "reviewer"] },
   { href: "/announcements", label: "공지사항", roles: ["team_leader", "chief_secretary", "secretary", "reviewer"] },
   { href: "/discussions", label: "토론방", roles: ["team_leader", "chief_secretary", "secretary", "reviewer"] },
-  { href: "/reviewer-manual", label: "매뉴얼", roles: ["reviewer"] },
   { href: "/buildings", label: "통합관리대장", roles: ["team_leader", "chief_secretary", "secretary"] },
   { href: "/distribution", label: "도서접수/배포", roles: ["team_leader", "chief_secretary"] },
   { href: "/my-reviews", label: "내 검토 대상", roles: ["chief_secretary", "secretary", "reviewer"] },
@@ -35,6 +34,7 @@ const NAV_ITEMS = [
   { href: "/notifications", label: "알림 현황", roles: ["team_leader", "chief_secretary", "secretary"] },
   { href: "/admin", label: "사용자 관리", roles: ["team_leader", "chief_secretary"] },
   { href: "/audit/logins", label: "로그인 이력", roles: ["team_leader", "chief_secretary"] },
+  { href: "/reviewer-manual", label: "매뉴얼", roles: ["reviewer"] },
 ] as const
 
 export default function DashboardLayout({

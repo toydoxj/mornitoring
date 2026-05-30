@@ -3,14 +3,15 @@
 from datetime import date, datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from config import settings
 from database import get_db
 from models.notification_log import NotificationLog
 from models.user import User, UserRole
-from routers.auth import require_roles
+from routers.auth import get_current_user, require_roles
 from logging_config import log_event
 from services.kakao import ensure_valid_token, send_message_to_friends, send_message_to_self
 from services.scope import (
@@ -24,6 +25,8 @@ router = APIRouter()
 PAIR_DAILY_LIMIT = 20
 # 1회 호출당 최대 수신자 수 (카카오 권장)
 BATCH_SIZE = 5
+PROGRAM_IMPROVEMENT_RECIPIENT_NAME = "정지훈"
+PROGRAM_IMPROVEMENT_TEMPLATE = "program_improvement"
 
 
 class NotificationResponse(BaseModel):
@@ -74,6 +77,18 @@ class SendResponse(BaseModel):
     results: list[SendResultItem]
 
 
+class ProgramImprovementRequest(BaseModel):
+    content: str = Field(..., min_length=1, max_length=2000)
+
+
+class ProgramImprovementResponse(BaseModel):
+    message: str
+    is_sent: bool
+    recipient_id: int
+    recipient_name: str
+    error: str | None = None
+
+
 def _notification_to_response(
     log: NotificationLog,
     users_by_id: dict[int, User],
@@ -119,6 +134,126 @@ def _notifications_to_response(
     return NotificationListResponse(
         items=[_notification_to_response(log, users_by_id) for log in logs],
         total=total,
+    )
+
+
+def _find_program_improvement_recipient(db: Session) -> User | None:
+    """프로그램 개선 요청 알림을 받을 운영 담당자를 찾는다."""
+    return (
+        db.query(User)
+        .filter(
+            User.name == PROGRAM_IMPROVEMENT_RECIPIENT_NAME,
+            User.is_active.is_(True),
+            User.role.in_([
+                UserRole.CHIEF_SECRETARY,
+                UserRole.TEAM_LEADER,
+                UserRole.SECRETARY,
+            ]),
+        )
+        .order_by(User.id.asc())
+        .first()
+    )
+
+
+@router.post("/program-improvement", response_model=ProgramImprovementResponse)
+async def send_program_improvement_request(
+    body: ProgramImprovementRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """매뉴얼 화면의 프로그램 개선 요청을 정지훈 담당자에게 카카오톡으로 알린다.
+
+    현재 로그인한 사용자의 카카오 토큰으로 정지훈 담당자에게 친구 메시지를 보낸다.
+    즉, 요청자 계정에서 직접 보내는 방식이며 요청 본문은 NotificationLog에 함께 기록한다.
+    """
+    content = body.content.strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="개선 요청 내용을 입력해주세요")
+
+    recipient = _find_program_improvement_recipient(db)
+    if recipient is None:
+        log_event(
+            "error",
+            "program_improvement_recipient_missing",
+            requester_id=current_user.id,
+            recipient_name=PROGRAM_IMPROVEMENT_RECIPIENT_NAME,
+        )
+        raise HTTPException(
+            status_code=404,
+            detail=f"{PROGRAM_IMPROVEMENT_RECIPIENT_NAME} 수신자 계정을 찾을 수 없습니다",
+        )
+
+    title = "프로그램 개선 요청"
+    message = (
+        f"작성자: {current_user.name} ({current_user.email})\n"
+        f"역할: {current_user.role.value}\n\n"
+        f"요청 내용:\n{content}"
+    )
+    link_url = f"{settings.frontend_base_url.rstrip('/')}/reviewer-manual"
+
+    is_sent = False
+    error_message: str | None = None
+    if not recipient.kakao_uuid:
+        error_message = "수신자 카카오 친구 매칭이 안 되어 있습니다"
+    else:
+        try:
+            access_token = await ensure_valid_token(current_user, db)
+            result = await send_message_to_friends(
+                access_token=access_token,
+                receiver_uuids=[recipient.kakao_uuid],
+                title=title,
+                description=message,
+                link_url=link_url,
+            )
+            successful = set(result.get("successful_receiver_uuids", []))
+            is_sent = recipient.kakao_uuid in successful
+            if not is_sent:
+                failure_info = result.get("failure_info", []) or []
+                failure_messages: list[str] = []
+                for failure in failure_info:
+                    receiver_uuids = failure.get("receiver_uuids", []) or []
+                    if recipient.kakao_uuid in receiver_uuids:
+                        failure_messages.append(failure.get("msg", "발송 실패"))
+                error_message = (
+                    "; ".join(failure_messages)
+                    or str(result.get("detail") or result.get("error") or "발송 실패")
+                )
+        except ValueError as exc:
+            error_message = f"발신자 카카오 토큰 사용 불가: {exc}"
+        except Exception as exc:  # 외부 알림 실패가 요청 기록 자체를 막지 않게 한다.
+            error_message = f"카카오 알림 예외: {exc}"
+            log_event(
+                "error",
+                "program_improvement_notify_exception",
+                requester_id=current_user.id,
+                recipient_id=recipient.id,
+                reason=str(exc),
+            )
+
+    db.add(NotificationLog(
+        sender_id=current_user.id,
+        recipient_id=recipient.id,
+        channel="kakao",
+        template_type=PROGRAM_IMPROVEMENT_TEMPLATE,
+        title=title,
+        message=message,
+        related_building_id=None,
+        is_sent=is_sent,
+        sent_at=datetime.now(timezone.utc) if is_sent else None,
+        error_message=error_message,
+    ))
+    db.commit()
+
+    return ProgramImprovementResponse(
+        message=(
+            "프로그램 개선 요청이 카카오 알림으로 전송되었습니다"
+            if is_sent
+            else "프로그램 개선 요청은 기록되었지만 카카오 알림 발송에 실패했습니다"
+        ),
+        is_sent=is_sent,
+        recipient_id=recipient.id,
+        recipient_name=recipient.name,
+        error=error_message,
     )
 
 
@@ -434,9 +569,6 @@ def list_notifications(
         .all()
     )
     return _notifications_to_response(db, items, total)
-
-
-from routers.auth import get_current_user  # noqa: E402
 
 
 @router.get("/my", response_model=NotificationListResponse)
