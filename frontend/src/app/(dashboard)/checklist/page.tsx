@@ -118,6 +118,22 @@ export default function ChecklistPage() {
     )
   }, [filteredItems, selectedKey])
 
+  const groupedItems = useMemo(() => {
+    return CHECKLIST_CATEGORIES.map((categoryName) => {
+      const items = filteredItems.filter((item) => item.category === categoryName)
+      const opinionCount = items.reduce((sum, item) => {
+        return sum + (summaryByItem.get(item.key)?.count ?? 0)
+      }, 0)
+      const checkCount = items.reduce((sum, item) => sum + item.checks.length, 0)
+      return {
+        category: categoryName,
+        checkCount,
+        items,
+        opinionCount,
+      }
+    }).filter((group) => group.items.length > 0)
+  }, [filteredItems, summaryByItem])
+
   const fetchSummaries = useCallback(async () => {
     setIsSummaryLoading(true)
     try {
@@ -257,6 +273,7 @@ export default function ChecklistPage() {
             <div className="flex items-center justify-between border-b px-3 py-2">
               <p className="text-sm font-medium">항목 목록</p>
               <span className="text-xs text-muted-foreground">
+                대분류 {groupedItems.length.toLocaleString("ko-KR")}개 ·{" "}
                 {filteredItems.length.toLocaleString("ko-KR")}개 표시
               </span>
             </div>
@@ -266,45 +283,63 @@ export default function ChecklistPage() {
                   검색 조건에 맞는 항목이 없습니다
                 </div>
               ) : (
-                filteredItems.map((item) => {
-                  const summary = summaryByItem.get(item.key)
-                  const isSelected = selectedItem?.key === item.key
-                  return (
-                    <button
-                      key={item.key}
-                      type="button"
-                      aria-pressed={isSelected}
-                      onClick={() => setSelectedKey(item.key)}
-                      className={cn(
-                        "block w-full border-b px-3 py-3 text-left transition-colors last:border-b-0 hover:bg-muted/50",
-                        isSelected && "bg-primary/5"
-                      )}
-                    >
-                      <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
-                        <div className="min-w-0 space-y-1">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <Badge variant={isSelected ? "default" : "secondary"}>
-                              {item.code}
-                            </Badge>
-                            <span className="text-xs text-muted-foreground">
-                              {item.category} · {item.section}
-                            </span>
-                          </div>
-                          <p className="break-words text-sm font-medium">{item.title}</p>
-                          <p className="whitespace-pre-wrap break-words text-xs text-muted-foreground">
-                            {item.standard}
-                          </p>
-                        </div>
-                        <div className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
-                          <span>확인 {item.checks.length}개</span>
-                          <Badge variant={summary ? "outline" : "secondary"}>
-                            의견 {summary?.count ?? 0}
+                groupedItems.map((group) => (
+                  <div key={group.category}>
+                    <div className="sticky top-0 z-10 border-b border-t bg-slate-100/95 px-3 py-2 backdrop-blur first:border-t-0">
+                      <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                        <p className="text-sm font-semibold text-slate-950">
+                          {group.category}
+                        </p>
+                        <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                          <span>항목 {group.items.length}개</span>
+                          <span>확인 {group.checkCount}개</span>
+                          <Badge variant={group.opinionCount > 0 ? "outline" : "secondary"}>
+                            의견 {group.opinionCount}
                           </Badge>
                         </div>
                       </div>
-                    </button>
-                  )
-                })
+                    </div>
+                    {group.items.map((item) => {
+                      const summary = summaryByItem.get(item.key)
+                      const isSelected = selectedItem?.key === item.key
+                      return (
+                        <button
+                          key={item.key}
+                          type="button"
+                          aria-pressed={isSelected}
+                          onClick={() => setSelectedKey(item.key)}
+                          className={cn(
+                            "block w-full border-b px-3 py-3 text-left transition-colors hover:bg-muted/50",
+                            isSelected && "bg-primary/5"
+                          )}
+                        >
+                          <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+                            <div className="min-w-0 space-y-1">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <Badge variant={isSelected ? "default" : "secondary"}>
+                                  {item.code}
+                                </Badge>
+                                <span className="text-xs text-muted-foreground">
+                                  {item.section}
+                                </span>
+                              </div>
+                              <p className="break-words text-sm font-medium">{item.title}</p>
+                              <p className="whitespace-pre-wrap break-words text-xs text-muted-foreground">
+                                {item.standard}
+                              </p>
+                            </div>
+                            <div className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
+                              <span>확인 {item.checks.length}개</span>
+                              <Badge variant={summary ? "outline" : "secondary"}>
+                                의견 {summary?.count ?? 0}
+                              </Badge>
+                            </div>
+                          </div>
+                        </button>
+                      )
+                    })}
+                  </div>
+                ))
               )}
             </div>
           </div>
@@ -317,10 +352,10 @@ export default function ChecklistPage() {
                 <div className="space-y-2">
                   <div className="flex flex-wrap items-center gap-2">
                     <Badge>{selectedItem.code}</Badge>
+                    <Badge variant="secondary">{selectedItem.category}</Badge>
                     <Badge variant="outline">{selectedItem.section}</Badge>
                   </div>
                   <h2 className="break-words text-lg font-bold">{selectedItem.title}</h2>
-                  <p className="text-xs text-muted-foreground">{selectedItem.category}</p>
                   <p className="whitespace-pre-wrap rounded-md bg-muted px-3 py-2 text-xs">
                     {selectedItem.standard}
                   </p>
