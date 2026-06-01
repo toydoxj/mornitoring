@@ -228,6 +228,23 @@ export default function KakaoMatchPage() {
     }
   }
 
+  const handleUnlinkKakaoOAuth = async (userId: number, userName: string) => {
+    const ok = confirm(
+      `${userName}님의 카카오 로그인 연동을 해제하시겠습니까?\n` +
+      "친구 매칭은 유지되며, 잘못 매칭된 경우 매칭 해제를 별도로 눌러주세요."
+    )
+    if (!ok) return
+    try {
+      await apiClient.delete(`/api/kakao/oauth/${userId}`)
+      await fetchUsers()
+    } catch (err) {
+      const msg =
+        (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
+        ?? "카카오 로그인 연동 해제 실패"
+      alert(msg)
+    }
+  }
+
   const matchedCount = users.filter((r) => r.kakao_linked).length
   const oauthLinkedCount = users.filter((r) => r.kakao_oauth_linked).length
   const kakaoRefreshNeededCount = users.filter(
@@ -432,6 +449,15 @@ export default function KakaoMatchPage() {
                           onClick={() => handleDiagnose(r)}
                         >
                           진단
+                        </Button>
+                      )}
+                      {r.kakao_oauth_linked && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => handleUnlinkKakaoOAuth(r.user_id, r.name)}
+                        >
+                          로그인 해제
                         </Button>
                       )}
                     </div>

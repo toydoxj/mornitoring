@@ -194,6 +194,33 @@ async def unmatch_friend(
     return {"message": "매칭이 해제되었습니다"}
 
 
+@router.delete("/oauth/{user_id}")
+async def unlink_kakao_oauth(
+    user_id: int,
+    db: Session = Depends(get_db),
+    _: User = Depends(
+        require_roles(UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY)
+    ),
+):
+    """카카오 로그인 연동 해제.
+
+    친구 매칭(kakao_uuid)은 별도 관리 항목이라 유지한다. 잘못 매칭된 경우
+    `/match/{user_id}` 해제 버튼으로 함께 정리한다.
+    """
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다")
+
+    user.kakao_id = None
+    user.kakao_access_token = None
+    user.kakao_refresh_token = None
+    user.kakao_token_expires_at = None
+    user.kakao_scopes_ok = None
+    user.kakao_scopes_checked_at = None
+    db.commit()
+    return {"message": "카카오 로그인 연동이 해제되었습니다", "user_id": user.id}
+
+
 class UserMatchStatus(BaseModel):
     user_id: int
     name: str

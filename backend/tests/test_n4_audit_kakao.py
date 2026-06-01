@@ -63,6 +63,13 @@ def test_reviewer_cannot_unmatch_kakao(client, make_reviewer, make_user):
     assert res.status_code == 403
 
 
+def test_reviewer_cannot_unlink_kakao_oauth(client, make_reviewer, make_user):
+    _, _, headers = make_reviewer()
+    target, _ = make_user(UserRole.SECRETARY)
+    res = client.delete(f"/api/kakao/oauth/{target.id}", headers=headers)
+    assert res.status_code == 403
+
+
 def test_reviewer_cannot_list_users_match_status(client, make_reviewer):
     _, _, headers = make_reviewer()
     res = client.get("/api/kakao/reviewers", headers=headers)
@@ -92,3 +99,31 @@ def test_secretary_cannot_list_kakao_friends(client, make_user):
     _, headers = make_user(UserRole.SECRETARY)
     res = client.get("/api/kakao/friends", headers=headers)
     assert res.status_code == 403
+
+
+def test_team_leader_can_unlink_kakao_oauth_without_unmatching(
+    client, db_session, make_user
+):
+    """로그인 연동 해제는 토큰/kakao_id만 지우고 친구 매칭은 유지한다."""
+    _, headers = make_user(UserRole.TEAM_LEADER)
+    target, _ = make_user(
+        UserRole.REVIEWER,
+        kakao_id="wrong-kakao-id",
+        kakao_uuid="matched-friend-uuid",
+        kakao_access_token="access-token",
+        kakao_refresh_token="refresh-token",
+        kakao_scopes_ok=True,
+    )
+
+    res = client.delete(f"/api/kakao/oauth/{target.id}", headers=headers)
+    assert res.status_code == 200
+
+    db_session.expire_all()
+    from models.user import User as UserModel
+
+    refreshed = db_session.query(UserModel).filter(UserModel.id == target.id).first()
+    assert refreshed.kakao_id is None
+    assert refreshed.kakao_uuid == "matched-friend-uuid"
+    assert refreshed.kakao_access_token is None
+    assert refreshed.kakao_refresh_token is None
+    assert refreshed.kakao_scopes_ok is None

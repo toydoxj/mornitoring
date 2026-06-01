@@ -552,6 +552,23 @@ export default function AdminPage() {
     }
   }
 
+  const handleUnlinkKakaoOAuth = async (userId: number, userName: string) => {
+    const ok = confirm(
+      `${userName}님의 카카오 로그인 연동을 해제하시겠습니까?\n` +
+      "친구 매칭은 유지되며, 잘못 매칭된 경우 매칭 해제를 별도로 눌러주세요."
+    )
+    if (!ok) return
+    try {
+      await apiClient.delete(`/api/kakao/oauth/${userId}`)
+      await fetchUsers()
+    } catch (err) {
+      const msg =
+        (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
+        ?? "카카오 로그인 연동 해제 실패"
+      alert(msg)
+    }
+  }
+
   const handleDiagnose = async (user: User) => {
     setDiagnosisLoading(true)
     setDiagnosis({
@@ -972,6 +989,15 @@ export default function AdminPage() {
                       {user.kakao_linked && (
                         <Button size="sm" variant="ghost" onClick={() => handleDiagnose(user)}>
                           진단
+                        </Button>
+                      )}
+                      {user.kakao_linked && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => handleUnlinkKakaoOAuth(user.id, user.name)}
+                        >
+                          로그인 해제
                         </Button>
                       )}
                       <Button size="sm" variant="outline" onClick={() => openEdit(user)}>
