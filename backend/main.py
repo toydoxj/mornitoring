@@ -13,7 +13,21 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from config import settings
 from database import SessionLocal
 from logging_config import log_event, setup_logging
-from routers import auth, users, buildings, ledger, assignments, reviews, audit, distribution, notifications, kakao, announcements, discussions
+from routers import (
+    announcements,
+    assignments,
+    audit,
+    auth,
+    buildings,
+    checklist,
+    discussions,
+    distribution,
+    kakao,
+    ledger,
+    notifications,
+    reviews,
+    users,
+)
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -134,6 +148,7 @@ app.include_router(notifications.router, prefix="/api/notifications", tags=["알
 app.include_router(kakao.router, prefix="/api/kakao", tags=["카카오"])
 app.include_router(announcements.router, prefix="/api/announcements", tags=["공지사항"])
 app.include_router(discussions.router, prefix="/api/discussions", tags=["토론방"])
+app.include_router(checklist.router, prefix="/api/checklist", tags=["상세체크리스트"])
 
 
 @app.get("/api/health")
