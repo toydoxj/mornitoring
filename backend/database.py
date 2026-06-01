@@ -15,9 +15,10 @@ if not settings.database_url.startswith("sqlite"):
         "pool_size": settings.db_pool_size,
         "max_overflow": settings.db_max_overflow,
         "pool_timeout": settings.db_pool_timeout_seconds,
+        "pool_use_lifo": True,
     })
 
-engine = create_engine(settings.database_url, **engine_kwargs)
+engine = create_engine(settings.sqlalchemy_database_url, **engine_kwargs)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 

@@ -2,9 +2,24 @@
 
 import json
 from typing import Annotated
+from urllib.parse import urlsplit, urlunsplit
 
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+
+
+def get_sqlalchemy_database_url(database_url: str) -> str:
+    """SQLAlchemy/Alembic에서 사용할 DB URL을 반환한다."""
+    parsed = urlsplit(database_url)
+    host = parsed.hostname or ""
+    if host.endswith(".pooler.supabase.com") and parsed.port == 5432:
+        # Supabase pooler 5432는 session mode라 Render 인스턴스 풀이 한도를 쉽게 채운다.
+        # transaction mode(6543)를 사용하면 pre-deploy와 런타임 커넥션 고갈을 완화할 수 있다.
+        netloc = parsed.netloc
+        if netloc.endswith(":5432"):
+            netloc = f"{netloc[:-5]}:6543"
+            return urlunsplit(parsed._replace(netloc=netloc))
+    return database_url
 
 
 class Settings(BaseSettings):
@@ -47,11 +62,15 @@ class Settings(BaseSettings):
     # 여러 관리자가 같은 대시보드를 동시에 열 때 반복 집계 쿼리를 줄인다.
     stats_cache_ttl_seconds: int = 5
 
-    # SQLAlchemy DB 커넥션 풀. 트래픽이 몰릴 때 오래 대기해 전체 worker가
-    # 막히지 않도록 timeout은 짧게 둔다.
-    db_pool_size: int = 5
-    db_max_overflow: int = 5
-    db_pool_timeout_seconds: int = 5
+    # SQLAlchemy DB 커넥션 풀. Supabase pooler 한도가 낮으므로 프로세스당
+    # 커넥션 수를 작게 유지하고, 대기는 짧게 끝낸다.
+    db_pool_size: int = 2
+    db_max_overflow: int = 1
+    db_pool_timeout_seconds: int = 3
+
+    @property
+    def sqlalchemy_database_url(self) -> str:
+        return get_sqlalchemy_database_url(self.database_url)
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
