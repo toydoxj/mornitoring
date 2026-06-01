@@ -194,3 +194,45 @@ def test_password_setup_with_invalid_token_returns_401(client):
         json={"token": "totally_invalid_token_xyz", "new_password": "ValidPass123"},
     )
     assert res.status_code == 401
+
+
+def test_find_account_returns_masked_email_for_matching_name_and_phone(
+    client, make_user
+):
+    make_user(
+        UserRole.REVIEWER,
+        name="김기문",
+        email="studymania@hanmail.net",
+        phone="010-5652-5971",
+    )
+
+    res = client.post(
+        "/api/auth/find-account",
+        json={"name": "김기문", "phone": "01056525971"},
+    )
+
+    assert res.status_code == 200
+    body = res.json()
+    assert body["found"] is True
+    assert body["emails"] == ["st********@hanmail.net"]
+
+
+def test_find_account_does_not_return_email_when_phone_mismatches(
+    client, make_user
+):
+    make_user(
+        UserRole.REVIEWER,
+        name="김기문",
+        email="studymania@hanmail.net",
+        phone="010-5652-5971",
+    )
+
+    res = client.post(
+        "/api/auth/find-account",
+        json={"name": "김기문", "phone": "010-0000-0000"},
+    )
+
+    assert res.status_code == 200
+    body = res.json()
+    assert body["found"] is False
+    assert body["emails"] == []

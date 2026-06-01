@@ -109,6 +109,17 @@ class ChangePasswordRequest(BaseModel):
     new_password: str
 
 
+class FindAccountRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=50)
+    phone: str = Field(min_length=8, max_length=30)
+
+
+class FindAccountResponse(BaseModel):
+    found: bool
+    emails: list[str] = []
+    message: str
+
+
 # --- 유틸 함수 ---
 
 def create_access_token(data: dict) -> str:
@@ -126,6 +137,11 @@ def verify_password(plain: str, hashed: str) -> bool:
 
 def get_password_hash(password: str) -> str:
     return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+
+
+def _normalize_phone(phone: str | None) -> str:
+    """휴대폰번호 비교용 숫자만 추출."""
+    return "".join(ch for ch in (phone or "") if ch.isdigit())
 
 
 async def get_current_user(
@@ -584,6 +600,45 @@ def _mask_email(email: str) -> str:
     if len(local) <= 2:
         return f"{local[0]}*@{domain}"
     return f"{local[:2]}{'*' * (len(local) - 2)}@{domain}"
+
+
+@router.post("/find-account", response_model=FindAccountResponse)
+def find_account(body: FindAccountRequest, db: Session = Depends(get_db)):
+    """이름+휴대폰번호로 로그인 이메일을 일부 확인한다.
+
+    SMTP/SMS 인증 없이 전체 이메일이나 비밀번호 재설정 링크는 노출하지 않는다.
+    """
+    name = body.name.strip()
+    phone_digits = _normalize_phone(body.phone)
+    if not name or len(phone_digits) < 8:
+        return FindAccountResponse(
+            found=False,
+            message="입력한 정보와 일치하는 계정을 찾을 수 없습니다",
+        )
+
+    candidates = (
+        db.query(User)
+        .filter(User.is_active.is_(True), User.name == name)
+        .order_by(User.id)
+        .all()
+    )
+    matched = [
+        user for user in candidates
+        if _normalize_phone(user.phone) == phone_digits
+    ]
+    if not matched:
+        log_event("warning", "find_account_failed", name=name)
+        return FindAccountResponse(
+            found=False,
+            message="입력한 정보와 일치하는 계정을 찾을 수 없습니다",
+        )
+
+    log_event("info", "find_account_succeeded", count=len(matched))
+    return FindAccountResponse(
+        found=True,
+        emails=[_mask_email(user.email) for user in matched],
+        message="등록된 로그인 이메일을 확인했습니다",
+    )
 
 
 @router.get("/password-setup/validate", response_model=PasswordSetupValidateResponse)

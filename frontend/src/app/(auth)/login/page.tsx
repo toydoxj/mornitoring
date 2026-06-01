@@ -101,6 +101,17 @@ export default function LoginPage() {
               로그인
             </Button>
           </form>
+          <div className="mt-3 flex items-center justify-center gap-2 text-sm">
+            <button
+              type="button"
+              className="text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+              onClick={() => router.push("/find-account")}
+            >
+              아이디 찾기
+            </button>
+            <span className="text-muted-foreground">·</span>
+            <span className="text-muted-foreground">비밀번호 재설정은 관리자 문의</span>
+          </div>
           <div className="mt-4 space-y-2">
             <div className="relative">
               <div className="absolute inset-0 flex items-center">
