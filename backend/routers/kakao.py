@@ -10,10 +10,12 @@ from routers.auth import require_roles
 from services.kakao import (
     REQUIRED_KAKAO_SCOPES,
     ensure_valid_token,
+    extract_kakao_login_uuid,
     get_friends,
     get_kakao_identity_status,
     get_kakao_token_status,
     get_reauthorize_url,
+    get_user_info,
     get_user_scopes,
 )
 
@@ -266,6 +268,28 @@ class BulkTokenRefreshResponse(BaseModel):
     results: list[BulkTokenRefreshResult]
 
 
+class BulkLoginUuidSyncSummary(BaseModel):
+    total: int
+    synced: int
+    matched: int
+    mismatched: int
+    failed: int
+
+
+class BulkLoginUuidSyncResult(BaseModel):
+    user_id: int
+    name: str
+    status_before: str
+    status_after: str
+    synced: bool
+    error: str | None = None
+
+
+class BulkLoginUuidSyncResponse(BaseModel):
+    summary: BulkLoginUuidSyncSummary
+    results: list[BulkLoginUuidSyncResult]
+
+
 @router.get("/reviewers", response_model=list[UserMatchStatus])
 async def list_users_match_status(
     db: Session = Depends(get_db),
@@ -405,6 +429,82 @@ async def refresh_kakao_tokens(
             total=len(users),
             refreshed=refreshed_count,
             skipped=skipped_count,
+            failed=failed_count,
+        ),
+        results=results,
+    )
+
+
+@router.post("/login-uuids/sync", response_model=BulkLoginUuidSyncResponse)
+async def sync_kakao_login_uuids(
+    db: Session = Depends(get_db),
+    _: User = Depends(
+        require_roles(UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY)
+    ),
+):
+    """저장된 카카오 토큰으로 로그인 uuid를 일괄 조회해 저장한다."""
+    users = (
+        db.query(User)
+        .filter(User.is_active.is_(True), User.kakao_id.is_not(None))
+        .order_by(User.role, User.name)
+        .all()
+    )
+
+    results: list[BulkLoginUuidSyncResult] = []
+    synced_count = 0
+    matched_count = 0
+    mismatched_count = 0
+    failed_count = 0
+
+    for user in users:
+        before_status = get_kakao_identity_status(user)
+        try:
+            access_token = await ensure_valid_token(user, db)
+            kakao_user = await get_user_info(access_token)
+            kakao_id = str(kakao_user.get("id"))
+            if kakao_id != user.kakao_id:
+                raise ValueError("저장된 카카오 ID와 토큰 사용자가 다릅니다")
+            login_uuid = extract_kakao_login_uuid(kakao_user)
+            if not login_uuid:
+                raise ValueError("카카오 사용자 정보에 for_partner.uuid가 없습니다")
+
+            user.kakao_login_uuid = login_uuid
+            db.commit()
+            db.refresh(user)
+        except Exception as exc:
+            db.rollback()
+            failed_count += 1
+            results.append(BulkLoginUuidSyncResult(
+                user_id=user.id,
+                name=user.name,
+                status_before=before_status,
+                status_after=before_status,
+                synced=False,
+                error=_token_refresh_error_message(exc),
+            ))
+            continue
+
+        synced_count += 1
+        after_status = get_kakao_identity_status(user)
+        if after_status == "matched":
+            matched_count += 1
+        elif after_status == "mismatch":
+            mismatched_count += 1
+
+        results.append(BulkLoginUuidSyncResult(
+            user_id=user.id,
+            name=user.name,
+            status_before=before_status,
+            status_after=after_status,
+            synced=True,
+        ))
+
+    return BulkLoginUuidSyncResponse(
+        summary=BulkLoginUuidSyncSummary(
+            total=len(users),
+            synced=synced_count,
+            matched=matched_count,
+            mismatched=mismatched_count,
             failed=failed_count,
         ),
         results=results,

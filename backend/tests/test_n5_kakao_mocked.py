@@ -433,6 +433,37 @@ def test_bulk_refresh_kakao_tokens_reports_failure(
     assert "HTTP 401" in body["results"][0]["error"]
 
 
+def test_bulk_sync_kakao_login_uuid_updates_identity_status(
+    client, db_session, kakao_mock, make_user
+):
+    """기존 OAuth 사용자의 로그인 uuid를 다시 조회해 일치 확인 상태를 채운다."""
+    _, headers = make_user(UserRole.TEAM_LEADER)
+    target, _ = make_user(
+        UserRole.REVIEWER,
+        email="sync-login-uuid@example.com",
+        kakao_id="77777",
+        kakao_uuid="sync-uuid-77777",
+        kakao_access_token="valid_access_for_user_info",
+        kakao_refresh_token="valid_refresh_for_user_info",
+        kakao_token_expires_at=datetime.now(timezone.utc) + timedelta(hours=2),
+    )
+
+    kakao_mock.user_info_ok(kakao_id="77777", uuid="sync-uuid-77777")
+
+    res = client.post("/api/kakao/login-uuids/sync", headers=headers)
+
+    assert res.status_code == 200
+    body = res.json()
+    assert body["summary"]["synced"] == 1
+    assert body["summary"]["matched"] == 1
+
+    db_session.expire_all()
+    from models.user import User as UserModel
+
+    refreshed = db_session.query(UserModel).filter(UserModel.id == target.id).first()
+    assert refreshed.kakao_login_uuid == "sync-uuid-77777"
+
+
 def test_send_message_to_self_requires_result_code_zero(kakao_mock):
     """나에게 보내기 HTTP 200이어도 result_code가 0이 아니면 실패로 취급한다."""
     from services.kakao import send_message_to_self

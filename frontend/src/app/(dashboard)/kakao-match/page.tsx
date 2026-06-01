@@ -10,6 +10,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import { KakaoIdentitySyncButton } from "@/components/KakaoIdentitySyncButton"
 import { KakaoTokenBulkRefreshButton } from "@/components/KakaoTokenBulkRefreshButton"
 import {
   Table,
@@ -252,6 +253,9 @@ export default function KakaoMatchPage() {
   const kakaoRefreshNeededCount = users.filter(
     (r) => r.kakao_token_status === "refresh_needed"
   ).length
+  const kakaoIdentityUnknownCount = users.filter(
+    (r) => r.kakao_identity_status === "unknown"
+  ).length
 
   const filteredFriends = friends.filter((f) => {
     const nick = (f.profile_nickname ?? "").toLowerCase()
@@ -308,6 +312,10 @@ export default function KakaoMatchPage() {
           </p>
         </div>
         <div className="flex flex-wrap items-start justify-end gap-2">
+          <KakaoIdentitySyncButton
+            unknownCount={kakaoIdentityUnknownCount}
+            onSynced={fetchUsers}
+          />
           <KakaoTokenBulkRefreshButton
             refreshNeededCount={kakaoRefreshNeededCount}
             onRefreshed={fetchUsers}
