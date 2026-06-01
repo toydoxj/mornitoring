@@ -217,7 +217,7 @@ export default function ChecklistPage() {
         </div>
       </div>
 
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_430px]">
+      <div className="grid gap-4 xl:grid-cols-[minmax(360px,0.75fr)_minmax(620px,1.25fr)] 2xl:grid-cols-[minmax(420px,0.7fr)_minmax(760px,1.3fr)]">
         <section className="space-y-3">
           <div className="rounded-md border bg-white p-3">
             <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_260px]">
