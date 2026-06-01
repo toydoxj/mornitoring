@@ -110,26 +110,16 @@ async def send_invites(
 
         for i in range(0, len(kakao_targets), KAKAO_BATCH_SIZE):
             batch = kakao_targets[i : i + KAKAO_BATCH_SIZE]
-            uuid_to_user = {t.kakao_uuid: t for t in batch if t.kakao_uuid}
-            uuids = list(uuid_to_user.keys())
 
-            # 같은 메시지 본문 — 사용자명 개별화는 batch 한계로 일단 공통
-            title = "건축구조안전 모니터링 — 비밀번호 설정"
-            description = (
-                "시스템 접속을 위해 비밀번호를 설정해주세요. 링크는 72시간 후 만료됩니다."
-            )
-
-            # batch 단위 카카오 호출 — link_url은 공통이라 사용자별 setup_url을 따로 전달 못함.
-            # 따라서 link_url 대신 메시지 본문에 사용자별 setup_url을 못 넣는 한계가 있음.
-            # 대안: batch가 아닌 사용자별 호출로 setup_url 개별화. 효율 vs 개별화 트레이드오프.
-            # 여기서는 사용자별 1건씩 친구 메시지 호출로 결정 — 개별 setup_url 보장.
+            # 사용자별 1건씩 보내 setup token 링크를 본문과 버튼 URL 모두에 넣는다.
+            # 카카오 화면에서 버튼이 눈에 덜 띄어도 본문 링크로 바로 비밀번호 설정이 가능하다.
             for target in batch:
                 raw_token = raw_tokens[target.id]
                 setup_url = _setup_url_for(raw_token)
-                title_user = title
+                title_user = "건축구조안전 모니터링 초대"
                 description_user = (
-                    f"{target.name}님, 시스템 접속을 위해 비밀번호를 설정해주세요. "
-                    f"링크는 72시간 후 만료됩니다."
+                    f"{target.name}님, 아래 링크에서 비밀번호를 설정한 뒤 로그인해주세요.\n"
+                    f"{setup_url}"
                 )
                 try:
                     res = await send_message_to_friends(

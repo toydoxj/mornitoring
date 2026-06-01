@@ -226,19 +226,45 @@ def kakao_mock():
                     )
                 )
 
-            def friend_send_ok(self, *, success_uuids=None):
+            def friend_send_ok(
+                self,
+                *,
+                success_uuids=None,
+                assert_text_contains=None,
+                assert_link_url=None,
+                assert_link_url_contains=None,
+            ):
                 """친구 메시지 발송 200 + successful_receiver_uuids 응답."""
                 def _handler(request):
                     import json as _json
-                    body = dict(request.url.params)
                     # data form 파싱
                     raw = request.content.decode("utf-8")
-                    fields = dict(p.split("=", 1) for p in raw.split("&") if "=" in p)
+                    from urllib.parse import parse_qs, unquote
+                    fields = {
+                        key: values[-1]
+                        for key, values in parse_qs(raw).items()
+                    }
                     receiver_field = fields.get("receiver_uuids", "%5B%5D")
                     # urldecode
-                    from urllib.parse import unquote
                     decoded = unquote(receiver_field)
                     uuids = _json.loads(decoded) if decoded else []
+                    template_raw = fields.get("template_object")
+                    if template_raw and (
+                        assert_text_contains
+                        or assert_link_url
+                        or assert_link_url_contains
+                    ):
+                        template = _json.loads(unquote(template_raw))
+                        text = template.get("text", "")
+                        link = template.get("link", {})
+                        for expected in assert_text_contains or []:
+                            assert expected in text
+                        if assert_link_url:
+                            assert link.get("web_url") == assert_link_url
+                            assert link.get("mobile_web_url") == assert_link_url
+                        if assert_link_url_contains:
+                            assert assert_link_url_contains in link.get("web_url", "")
+                            assert assert_link_url_contains in link.get("mobile_web_url", "")
                     actual_success = success_uuids if success_uuids is not None else uuids
                     return httpx.Response(
                         200,

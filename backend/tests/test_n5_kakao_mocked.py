@@ -147,7 +147,15 @@ def test_send_invite_kakao_delivery_success(
         kakao_uuid="target-uuid-001",
     )
 
-    kakao_mock.friend_send_ok(success_uuids=["target-uuid-001"])
+    kakao_mock.friend_send_ok(
+        success_uuids=["target-uuid-001"],
+        assert_text_contains=[
+            "건축구조안전 모니터링 초대",
+            "비밀번호를 설정한 뒤 로그인해주세요",
+            "/setup-password?token=",
+        ],
+        assert_link_url_contains="/setup-password?token=",
+    )
 
     res = client.post(f"/api/users/{target.id}/send-invite", headers=headers)
     assert res.status_code == 200
@@ -206,7 +214,14 @@ def test_send_invite_refreshes_sender_token_then_sends(
     )
 
     kakao_mock.token_ok(access_token="refreshed_sender_access", refresh_token="refreshed_sender_refresh")
-    kakao_mock.friend_send_ok(success_uuids=["refresh-uuid-001"])
+    kakao_mock.friend_send_ok(
+        success_uuids=["refresh-uuid-001"],
+        assert_text_contains=[
+            "비밀번호를 설정한 뒤 로그인해주세요",
+            "/setup-password?token=",
+        ],
+        assert_link_url_contains="/setup-password?token=",
+    )
 
     res = client.post(f"/api/users/{target.id}/send-invite", headers=headers)
     assert res.status_code == 200
