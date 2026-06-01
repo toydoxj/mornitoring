@@ -23,7 +23,7 @@ def test_send_consent_reminder_unmatched_user_returns_manual(
     assert res.status_code == 200
     body = res.json()
     assert body["delivery"] == "manual"
-    assert "/login" in body["login_url"]
+    assert body["login_url"].endswith("/login?kakao=consent")
 
 
 def test_send_consent_reminder_kakao_success(
@@ -49,7 +49,7 @@ def test_send_consent_reminder_kakao_success(
     body = res.json()
     assert body["delivery"] == "kakao"
     assert body["error"] is None
-    assert "/login" in body["login_url"]
+    assert body["login_url"].endswith("/login?kakao=consent")
 
 
 def test_send_consent_reminder_kakao_failure_falls_back_to_manual(

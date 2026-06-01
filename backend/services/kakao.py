@@ -3,6 +3,8 @@
 import json
 import secrets
 from datetime import datetime, timedelta, timezone
+from typing import Sequence
+from urllib.parse import urlencode
 
 import httpx
 from jose import JWTError, jwt
@@ -15,6 +17,7 @@ from models.user import User
 KAKAO_AUTH_URL = "https://kauth.kakao.com"
 KAKAO_API_URL = "https://kapi.kakao.com"
 TOKEN_REFRESH_MARGIN = timedelta(minutes=5)
+REQUIRED_KAKAO_SCOPES = ("profile_nickname", "friends", "talk_message")
 
 
 def generate_oauth_state() -> str:
@@ -143,17 +146,33 @@ def purge_expired_link_sessions(db: Session) -> int:
     return deleted
 
 
-def get_authorize_url() -> str:
-    """카카오 로그인 인가 URL 생성 (CSRF state 포함)."""
+def get_authorize_url(
+    *,
+    scopes: Sequence[str] | None = REQUIRED_KAKAO_SCOPES,
+    prompt: str | None = None,
+) -> str:
+    """카카오 로그인/추가동의 인가 URL 생성 (CSRF state 포함)."""
     state = generate_oauth_state()
-    return (
-        f"{KAKAO_AUTH_URL}/oauth/authorize"
-        f"?client_id={settings.kakao_rest_api_key}"
-        f"&redirect_uri={settings.kakao_redirect_uri}"
-        f"&response_type=code"
-        f"&scope=profile_nickname,friends,talk_message"
-        f"&state={state}"
-    )
+    params = {
+        "client_id": settings.kakao_rest_api_key,
+        "redirect_uri": settings.kakao_redirect_uri,
+        "response_type": "code",
+        "state": state,
+    }
+    if scopes:
+        params["scope"] = ",".join(scopes)
+    if prompt:
+        params["prompt"] = prompt
+    return f"{KAKAO_AUTH_URL}/oauth/authorize?{urlencode(params)}"
+
+
+def get_reauthorize_url(scopes: Sequence[str] | None = None) -> str:
+    """카카오 부족 동의항목 재요청 URL 생성.
+
+    계정 세션이 남아 있어도 사용자가 계정을 확인할 수 있도록 계정 선택 화면을 요청한다.
+    """
+    requested_scopes = tuple(scopes or REQUIRED_KAKAO_SCOPES)
+    return get_authorize_url(scopes=requested_scopes, prompt="select_account")
 
 
 async def exchange_code(code: str) -> dict:
@@ -182,9 +201,6 @@ async def get_user_info(access_token: str) -> dict:
         )
         response.raise_for_status()
         return response.json()
-
-
-REQUIRED_KAKAO_SCOPES = ("profile_nickname", "friends", "talk_message")
 
 
 async def diagnose_and_cache_scopes(user: User, access_token: str, db: Session) -> bool | None:

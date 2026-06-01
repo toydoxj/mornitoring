@@ -8,16 +8,18 @@ from database import get_db
 from models.user import User, UserRole
 from routers.auth import require_roles
 from services.kakao import (
+    REQUIRED_KAKAO_SCOPES,
     ensure_valid_token,
     get_friends,
     get_kakao_token_status,
+    get_reauthorize_url,
     get_user_scopes,
 )
 
 router = APIRouter()
 
 
-REQUIRED_SCOPES = ["profile_nickname", "friends", "talk_message"]
+REQUIRED_SCOPES = list(REQUIRED_KAKAO_SCOPES)
 
 
 class ScopeItem(BaseModel):
@@ -49,8 +51,6 @@ async def my_kakao_scopes(
     - 필수 scope(profile_nickname, friends, talk_message) 중 미동의 항목 식별
     - 미동의 시 추가 동의받기 URL 제공
     """
-    from config import settings
-
     if not current_user.kakao_access_token:
         return ScopeStatusResponse(
             kakao_linked=False,
@@ -77,14 +77,7 @@ async def my_kakao_scopes(
 
     reauthorize_url: str | None = None
     if missing:
-        scope_param = ",".join(missing)
-        reauthorize_url = (
-            f"https://kauth.kakao.com/oauth/authorize"
-            f"?client_id={settings.kakao_rest_api_key}"
-            f"&redirect_uri={settings.kakao_redirect_uri}"
-            f"&response_type=code"
-            f"&scope={scope_param}"
-        )
+        reauthorize_url = get_reauthorize_url(missing)
 
     return ScopeStatusResponse(
         kakao_linked=True,

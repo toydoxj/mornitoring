@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -12,19 +12,36 @@ import apiClient from "@/lib/api/client"
 export default function LoginPage() {
   const router = useRouter()
   const login = useAuthStore((s) => s.login)
+  const kakaoAutoStarted = useRef(false)
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
   const [error, setError] = useState("")
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [isKakaoRedirecting, setIsKakaoRedirecting] = useState(false)
 
-  const handleKakaoLogin = async () => {
+  const handleKakaoLogin = useCallback(async (consent = false) => {
+    setError("")
+    setIsKakaoRedirecting(true)
     try {
-      const { data } = await apiClient.get("/api/auth/kakao/login")
+      const endpoint = consent
+        ? "/api/auth/kakao/login?consent=true"
+        : "/api/auth/kakao/login"
+      const { data } = await apiClient.get<{ url: string }>(endpoint)
       window.location.href = data.url
     } catch {
       setError("카카오 로그인 연결에 실패했습니다")
+      setIsKakaoRedirecting(false)
     }
-  }
+  }, [])
+
+  useEffect(() => {
+    if (kakaoAutoStarted.current) return
+    const params = new URLSearchParams(window.location.search)
+    if (params.get("kakao") !== "consent") return
+
+    kakaoAutoStarted.current = true
+    void handleKakaoLogin(true)
+  }, [handleKakaoLogin])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -96,7 +113,9 @@ export default function LoginPage() {
             <Button
               variant="outline"
               className="w-full bg-[#FEE500] text-[#191919] hover:bg-[#FDD835] border-[#FEE500]"
-              onClick={handleKakaoLogin}
+              loading={isKakaoRedirecting}
+              loadingText="카카오로 이동 중..."
+              onClick={() => handleKakaoLogin()}
             >
               카카오 로그인
             </Button>

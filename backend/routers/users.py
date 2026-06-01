@@ -3,13 +3,14 @@
 import re
 import secrets
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 from email_validator import EmailNotValidError, validate_email
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
 from openpyxl import load_workbook
 from pydantic import BaseModel, EmailStr, Field
-from sqlalchemy import case
+from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
 from config import settings
@@ -17,7 +18,7 @@ from database import get_db
 from dependencies import stream_upload_to_tempfile
 from logging_config import log_event
 from models.building import Building
-from models.password_setup_token import TokenPurpose
+from models.password_setup_token import PasswordSetupToken, TokenPurpose
 from models.reviewer import Reviewer
 from models.user import User, UserRole
 from routers.auth import get_current_user, get_password_hash, require_roles
@@ -244,7 +245,7 @@ def _set_group_no(db: Session, user: User, group_no: int | None) -> None:
 
 def _apply_import_profile(db: Session, user: User, row: BulkUserImportRow) -> None:
     """일괄등록 행의 부가 정보를 역할에 맞는 테이블에 저장."""
-    if row.group_no is not None:
+    if user.role == UserRole.REVIEWER or row.group_no is not None:
         _set_group_no(db, user, row.group_no)
     if user.role != UserRole.REVIEWER or row.specialty is None:
         return
@@ -254,6 +255,62 @@ def _apply_import_profile(db: Session, user: User, row: BulkUserImportRow) -> No
         db.add(reviewer)
         db.flush()
     reviewer.specialty = row.specialty
+
+
+def _find_user_by_email(db: Session, email: str) -> User | None:
+    """이메일 대소문자 차이로 중복 계정이 생기지 않게 조회한다."""
+    normalized = email.lower()
+    return db.query(User).filter(func.lower(User.email) == normalized).first()
+
+
+def _consume_open_setup_tokens(db: Session, user_id: int) -> None:
+    """재등록 시 기존 초대/비밀번호 설정 링크를 모두 무효화한다."""
+    now = datetime.now(timezone.utc)
+    tokens = (
+        db.query(PasswordSetupToken)
+        .filter(
+            PasswordSetupToken.user_id == user_id,
+            PasswordSetupToken.consumed_at.is_(None),
+        )
+        .all()
+    )
+    for token in tokens:
+        token.consumed_at = now
+
+
+def _reset_kakao_state(user: User) -> None:
+    """삭제 전 카카오 인증/매칭 상태가 재등록 계정에 남지 않도록 초기화한다."""
+    user.kakao_id = None
+    user.kakao_uuid = None
+    user.kakao_access_token = None
+    user.kakao_refresh_token = None
+    user.kakao_token_expires_at = None
+    user.kakao_scopes_ok = None
+    user.kakao_scopes_checked_at = None
+
+
+def _restore_inactive_user_for_registration(
+    db: Session,
+    user: User,
+    *,
+    name: str,
+    email: str,
+    role: UserRole,
+    phone: str | None,
+    group_no: int | None,
+    initial_password: str,
+) -> None:
+    """삭제(비활성)된 계정을 신규 등록 요청으로 재활성화한다."""
+    user.name = name
+    user.email = email
+    user.role = role
+    user.phone = phone
+    user.password_hash = get_password_hash(initial_password)
+    user.must_change_password = True
+    user.is_active = True
+    user.group_no = group_no if role != UserRole.REVIEWER else None
+    _reset_kakao_state(user)
+    _consume_open_setup_tokens(db, user.id)
 
 
 # --- Pydantic 스키마 ---
@@ -520,25 +577,41 @@ def create_user(
     ),
 ):
     """사용자 등록 (팀장/총괄간사). 일회용 초기 비밀번호를 응답으로 반환."""
-    if db.query(User).filter(User.email == body.email).first():
+    email = str(body.email).lower()
+    existing = _find_user_by_email(db, email)
+    if existing and existing.is_active:
         raise HTTPException(status_code=409, detail="이미 등록된 이메일입니다")
 
     initial_password = _generate_initial_password()
-    user = User(
-        name=body.name,
-        email=body.email,
-        role=body.role,
-        phone=body.phone,
-        password_hash=get_password_hash(initial_password),
-        must_change_password=True,
-        # 검토위원이 아닌 경우의 group_no 만 User 컬럼에 직접 저장.
-        group_no=body.group_no if body.role != UserRole.REVIEWER else None,
-    )
-    db.add(user)
-    db.flush()
+    if existing:
+        user = existing
+        _restore_inactive_user_for_registration(
+            db,
+            user,
+            name=body.name,
+            email=email,
+            role=body.role,
+            phone=body.phone,
+            group_no=body.group_no,
+            initial_password=initial_password,
+        )
+    else:
+        user = User(
+            name=body.name,
+            email=email,
+            role=body.role,
+            phone=body.phone,
+            password_hash=get_password_hash(initial_password),
+            must_change_password=True,
+            # 검토위원이 아닌 경우의 group_no 만 User 컬럼에 직접 저장.
+            group_no=body.group_no if body.role != UserRole.REVIEWER else None,
+        )
+        db.add(user)
+        db.flush()
+
     # Reviewer 행 보장 + 배정된 건물 reviewer_id 자동 백필
     ensure_reviewer_link(db, user)
-    if body.role == UserRole.REVIEWER and body.group_no is not None:
+    if body.role == UserRole.REVIEWER:
         # ensure_reviewer_link 직후라 Reviewer 행이 보장됨.
         _set_group_no(db, user, body.group_no)
     db.commit()
@@ -604,26 +677,45 @@ async def import_users_excel(
         accounts: list[BulkImportAccount] = []
         created_users: list[User] = []
         created_entries: list[tuple[User, BulkUserImportRow]] = []
-        existing_emails = {email.lower() for (email,) in db.query(User.email).all()}
+        existing_users_by_email = {
+            u.email.lower(): u for u in db.query(User).all()
+        }
         seen_emails: set[str] = set()
 
         for row in import_rows:
-            if row.email in existing_emails or row.email in seen_emails:
+            if row.email in seen_emails:
                 skipped += 1
                 continue
             seen_emails.add(row.email)
 
             initial_password = _generate_initial_password()
-            user = User(
-                name=row.name,
-                email=row.email,
-                role=row.role,
-                phone=row.phone,
-                password_hash=get_password_hash(initial_password),
-                must_change_password=True,
-                group_no=row.group_no if row.role != UserRole.REVIEWER else None,
-            )
-            db.add(user)
+            existing = existing_users_by_email.get(row.email)
+            if existing and existing.is_active:
+                skipped += 1
+                continue
+            if existing:
+                user = existing
+                _restore_inactive_user_for_registration(
+                    db,
+                    user,
+                    name=row.name,
+                    email=row.email,
+                    role=row.role,
+                    phone=row.phone,
+                    group_no=row.group_no,
+                    initial_password=initial_password,
+                )
+            else:
+                user = User(
+                    name=row.name,
+                    email=row.email,
+                    role=row.role,
+                    phone=row.phone,
+                    password_hash=get_password_hash(initial_password),
+                    must_change_password=True,
+                    group_no=row.group_no if row.role != UserRole.REVIEWER else None,
+                )
+                db.add(user)
             accounts.append(BulkImportAccount(
                 email=row.email, name=row.name, initial_password=initial_password,
             ))
@@ -906,7 +998,7 @@ async def send_consent_reminder(
 
     - 카카오 매칭(`kakao_uuid`)된 사용자: 발신 관리자의 카카오 토큰으로 친구 메시지 발송
     - 미매칭 또는 발송 실패: manual — 운영자가 다른 채널로 login URL 안내
-    - 사용자가 login URL에서 카카오 로그인 시 누락 scope 동의 화면이 자동 노출됨
+    - 사용자가 login URL에 진입하면 프론트에서 카카오 추가동의 흐름을 자동 시작함
     """
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
@@ -914,7 +1006,7 @@ async def send_consent_reminder(
     if not user.is_active:
         raise HTTPException(status_code=400, detail="비활성 사용자입니다")
 
-    login_url = f"{settings.frontend_base_url.rstrip('/')}/login"
+    login_url = f"{settings.frontend_base_url.rstrip('/')}/login?kakao=consent"
     delivery = "manual"
     error: str | None = None
 

@@ -1,9 +1,15 @@
 """사용자 엑셀 일괄등록 회귀 테스트."""
 
 import io
+from datetime import datetime, timedelta, timezone
 
 from openpyxl import Workbook
 
+from models.password_setup_token import (
+    PasswordSetupToken,
+    TokenDeliveryChannel,
+    TokenPurpose,
+)
 from models.reviewer import Reviewer
 from models.user import User, UserRole
 
@@ -109,3 +115,66 @@ def test_import_users_excel_keeps_legacy_template_compatible(
     assert user.name == "박간사"
     assert user.role == UserRole.SECRETARY
     assert user.phone == "010-1111-2222"
+
+
+def test_import_users_excel_reactivates_inactive_email(
+    client, db_session, make_user
+):
+    """일괄등록에서도 비활성 사용자 이메일은 재등록 대상으로 처리한다."""
+    _, headers = make_user(UserRole.TEAM_LEADER)
+    inactive, _ = make_user(
+        UserRole.REVIEWER,
+        name="삭제사용자",
+        email="inactive-import@example.com",
+        must_change_password=True,
+        kakao_id="old-import-kakao",
+        kakao_uuid="old-import-uuid",
+    )
+    inactive.is_active = False
+    db_session.add(Reviewer(user_id=inactive.id, group_no=1))
+    token = PasswordSetupToken(
+        token_hash="inactive_import_token_hash",
+        user_id=inactive.id,
+        purpose=TokenPurpose.INITIAL_SETUP,
+        delivery_channel=TokenDeliveryChannel.MANUAL,
+        expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+    )
+    db_session.add(token)
+    db_session.commit()
+
+    payload = _workbook_bytes([
+        ["조", "회원명", "휴대전화번호", "이메일"],
+        ["4조", "재등록사용자", "010-4444-5555", "inactive-import@example.com"],
+    ])
+    files = {
+        "file": (
+            "reactivate.xlsx",
+            payload,
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+    }
+
+    res = client.post("/api/users/import-excel", headers=headers, files=files)
+
+    assert res.status_code == 200
+    body = res.json()
+    assert body["created"] == 1
+    assert body["skipped"] == 0
+    assert body["accounts"][0]["email"] == "inactive-import@example.com"
+
+    db_session.expire_all()
+    restored = db_session.query(User).filter(User.id == inactive.id).one()
+    assert restored.is_active is True
+    assert restored.name == "재등록사용자"
+    assert restored.phone == "010-4444-5555"
+    assert restored.kakao_id is None
+    assert restored.kakao_uuid is None
+
+    reviewer = db_session.query(Reviewer).filter(Reviewer.user_id == inactive.id).one()
+    assert reviewer.group_no == 4
+    restored_token = (
+        db_session.query(PasswordSetupToken)
+        .filter(PasswordSetupToken.id == token.id)
+        .one()
+    )
+    assert restored_token.consumed_at is not None

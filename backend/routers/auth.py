@@ -3,7 +3,7 @@
 import logging
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 import bcrypt
 from jose import JWTError, jwt
@@ -85,17 +85,11 @@ class UserResponse(BaseModel):
 
     @classmethod
     def from_user(cls, user: "User") -> "UserResponse":
-        from config import settings as _settings
+        from services.kakao import get_reauthorize_url
+
         reauthorize_url: str | None = None
         if user.kakao_id and user.kakao_scopes_ok is False:
-            scope_param = "profile_nickname,friends,talk_message"
-            reauthorize_url = (
-                f"https://kauth.kakao.com/oauth/authorize"
-                f"?client_id={_settings.kakao_rest_api_key}"
-                f"&redirect_uri={_settings.kakao_redirect_uri}"
-                f"&response_type=code"
-                f"&scope={scope_param}"
-            )
+            reauthorize_url = get_reauthorize_url()
         return cls(
             id=user.id,
             name=user.name,
@@ -221,10 +215,13 @@ def login(
 
 
 @router.get("/kakao/login")
-def kakao_login():
+def kakao_login(
+    consent: bool = Query(False, description="부족 동의항목 추가동의 흐름 여부"),
+):
     """카카오 로그인 URL 반환"""
     from services.kakao import get_authorize_url
-    return {"url": get_authorize_url()}
+
+    return {"url": get_authorize_url(prompt="select_account" if consent else None)}
 
 
 @router.get("/kakao/callback")

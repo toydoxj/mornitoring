@@ -11,12 +11,29 @@
 
 import asyncio
 from datetime import datetime, timedelta, timezone
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 
 from models.kakao_link_session import KakaoLinkSession
 from models.user import UserRole
 from services.kakao import generate_oauth_state
+
+
+def test_kakao_login_consent_url_requests_additional_consent(client):
+    """재동의 로그인 URL은 scope/state와 계정 선택 프롬프트를 포함한다."""
+    res = client.get("/api/auth/kakao/login?consent=true")
+    assert res.status_code == 200
+
+    parsed = urlparse(res.json()["url"])
+    params = parse_qs(parsed.query)
+    assert parsed.scheme == "https"
+    assert parsed.netloc == "kauth.kakao.com"
+    assert params["redirect_uri"] == ["http://localhost/callback"]
+    assert params["response_type"] == ["code"]
+    assert params["scope"] == ["profile_nickname,friends,talk_message"]
+    assert params["prompt"] == ["select_account"]
+    assert params["state"][0]
 
 
 # ===== 1. OAuth 콜백 — 기존 사용자 로그인 =====

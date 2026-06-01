@@ -81,9 +81,12 @@ export default function DashboardLayout({
     setBannerDismissed((prev) => ({ ...prev, [key]: true }))
   }
 
-  const handleConnectKakao = async () => {
+  const handleConnectKakao = async (consent = false) => {
     try {
-      const { data } = await apiClient.get<{ url: string }>("/api/auth/kakao/login")
+      const endpoint = consent
+        ? "/api/auth/kakao/login?consent=true"
+        : "/api/auth/kakao/login"
+      const { data } = await apiClient.get<{ url: string }>(endpoint)
       window.location.href = data.url
     } catch (err) {
       console.error("카카오 연동 시작 실패:", err)
@@ -241,7 +244,7 @@ export default function DashboardLayout({
               아래 버튼으로 카카오 로그인 + 동의를 진행해주세요.
             </span>
             <div className="flex gap-2 sm:shrink-0">
-              <Button size="sm" onClick={handleConnectKakao}>
+              <Button size="sm" onClick={() => handleConnectKakao()}>
                 카카오 연동하기
               </Button>
               <Button
@@ -265,16 +268,9 @@ export default function DashboardLayout({
                 ⚠️ 카카오 알림을 받으려면 <strong>추가 동의</strong>가 필요합니다.
               </span>
               <div className="flex gap-2 sm:shrink-0">
-                {user.kakao_reauthorize_url && (
-                  <Button
-                    size="sm"
-                    onClick={() => {
-                      window.location.href = user.kakao_reauthorize_url!
-                    }}
-                  >
-                    동의하러 가기
-                  </Button>
-                )}
+                <Button size="sm" onClick={() => handleConnectKakao(true)}>
+                  동의하러 가기
+                </Button>
                 <Button
                   size="sm"
                   variant="ghost"
