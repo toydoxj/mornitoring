@@ -75,6 +75,38 @@ interface UserScopeDiagnosis {
   error: string | null
 }
 
+interface BulkImportAccount {
+  email: string
+  name: string
+  initial_password: string
+}
+
+interface BulkInviteSummary {
+  total: number
+  kakao_sent: number
+  manual: number
+  failed: number
+  sender_error: string | null
+}
+
+interface BulkInviteResultItem {
+  user_id: number
+  name: string
+  delivery: string
+  expires_at: string
+  setup_url: string | null
+  error: string | null
+}
+
+interface BulkImportResponse {
+  created: number
+  skipped: number
+  errors: string[]
+  accounts: BulkImportAccount[]
+  invite_summary: BulkInviteSummary | null
+  invite_results: BulkInviteResultItem[]
+}
+
 const ROLE_OPTIONS: { value: UserRole; label: string }[] = [
   { value: "team_leader", label: "팀장" },
   { value: "chief_secretary", label: "총괄간사" },
@@ -109,11 +141,7 @@ export default function AdminPage() {
 
   // 엑셀 일괄 등록
   const [bulkUploading, setBulkUploading] = useState(false)
-  const [bulkResult, setBulkResult] = useState<{
-    created: number
-    skipped: number
-    accounts?: { email: string; name: string; initial_password: string }[]
-  } | null>(null)
+  const [bulkResult, setBulkResult] = useState<BulkImportResponse | null>(null)
   const [credentialDialog, setCredentialDialog] = useState<{
     title: string
     userName: string
@@ -136,21 +164,8 @@ export default function AdminPage() {
   const [bulkInviting, setBulkInviting] = useState(false)
   const [autoSendInviteOnImport, setAutoSendInviteOnImport] = useState(true)
   const [bulkInviteResult, setBulkInviteResult] = useState<{
-    summary: {
-      total: number
-      kakao_sent: number
-      manual: number
-      failed: number
-      sender_error: string | null
-    }
-    results: Array<{
-      user_id: number
-      name: string
-      delivery: string
-      expires_at: string
-      setup_url: string | null
-      error: string | null
-    }>
+    summary: BulkInviteSummary
+    results: BulkInviteResultItem[]
   } | null>(null)
 
   // 수정 다이얼로그
@@ -303,7 +318,7 @@ export default function AdminPage() {
     try {
       const formData = new FormData()
       formData.append("file", file)
-      const { data } = await apiClient.post(
+      const { data } = await apiClient.post<BulkImportResponse>(
         `/api/users/import-excel?auto_send_invite=${autoSendInviteOnImport}`,
         formData,
         { headers: { "Content-Type": "multipart/form-data" } },
@@ -317,8 +332,18 @@ export default function AdminPage() {
         })
       }
       fetchUsers()
-    } catch {
-      setBulkResult({ created: 0, skipped: 0 })
+    } catch (err) {
+      const axiosErr = err as { response?: { data?: { detail?: unknown } } }
+      const detail = axiosErr.response?.data?.detail
+      const message = typeof detail === "string" ? detail : "일괄등록 실패"
+      setBulkResult({
+        created: 0,
+        skipped: 0,
+        errors: [message],
+        accounts: [],
+        invite_summary: null,
+        invite_results: [],
+      })
     } finally {
       setBulkUploading(false)
       e.target.value = ""
@@ -684,6 +709,19 @@ export default function AdminPage() {
                       .join("\n")
                   }
                 />
+              )}
+              {bulkResult.errors.length > 0 && (
+                <div className="rounded-md border border-amber-200 bg-amber-50 p-2 text-xs text-amber-800">
+                  <p className="font-medium">확인 필요 {bulkResult.errors.length}건</p>
+                  <ul className="mt-1 space-y-0.5">
+                    {bulkResult.errors.slice(0, 5).map((item) => (
+                      <li key={item}>{item}</li>
+                    ))}
+                  </ul>
+                  {bulkResult.errors.length > 5 && (
+                    <p className="mt-1">외 {bulkResult.errors.length - 5}건</p>
+                  )}
+                </div>
               )}
             </div>
           )}
@@ -1312,7 +1350,7 @@ export default function AdminPage() {
                 <option value="">미배정</option>
                 {[1, 2, 3, 4, 5, 6, 7].map((n) => (
                   <option key={n} value={n}>
-                    {n}조
+                    {n}
                   </option>
                 ))}
               </select>

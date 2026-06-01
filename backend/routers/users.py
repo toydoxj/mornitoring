@@ -1,8 +1,11 @@
 """사용자 관리 라우터"""
 
+import re
 import secrets
+from dataclasses import dataclass
 from pathlib import Path
 
+from email_validator import EmailNotValidError, validate_email
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
 from openpyxl import load_workbook
 from pydantic import BaseModel, EmailStr, Field
@@ -53,6 +56,162 @@ ROLE_MAP = {
 }
 
 
+@dataclass
+class BulkUserImportRow:
+    row_idx: int
+    name: str
+    email: str
+    role: UserRole
+    phone: str | None = None
+    group_no: int | None = None
+    specialty: str | None = None
+
+
+def _cell_to_text(value: object) -> str | None:
+    """엑셀 셀 값을 사용자 입력 문자열로 정규화."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        text = value.strip()
+    elif isinstance(value, float) and value.is_integer():
+        text = str(int(value)).strip()
+    else:
+        text = str(value).strip()
+    return text or None
+
+
+def _normalize_header(value: object) -> str:
+    """헤더 비교용 문자열 정규화: 공백/개행 제거 + 소문자."""
+    text = _cell_to_text(value)
+    if not text:
+        return ""
+    return re.sub(r"\s+", "", text).lower()
+
+
+def _field_from_header(value: object) -> str | None:
+    """현재 명단/기존 템플릿의 헤더명을 내부 필드명으로 매핑."""
+    header = _normalize_header(value)
+    if not header:
+        return None
+    if header in {"이름", "성명", "회원명", "name"}:
+        return "name"
+    if "이메일" in header or header in {"email", "e-mail", "mail"}:
+        return "email"
+    if header in {"역할", "권한", "role"}:
+        return "role"
+    if (
+        "휴대전화" in header
+        or "휴대폰" in header
+        or "전화번호" in header
+        or header in {"phone", "mobile", "tel"}
+    ):
+        return "phone"
+    if header in {"조", "조번호", "group", "groupno", "group_no"}:
+        return "group_no"
+    if "특수분야" in header or "전문분야" in header or header == "specialty":
+        return "specialty"
+    return None
+
+
+def _detect_user_import_columns(ws) -> tuple[int, dict[str, int]]:
+    """이름/이메일 헤더가 있는 행을 찾아 필드별 컬럼 인덱스를 반환."""
+    max_scan_row = min(ws.max_row or 1, 10)
+    for row_idx, row in enumerate(
+        ws.iter_rows(min_row=1, max_row=max_scan_row, values_only=True),
+        start=1,
+    ):
+        columns: dict[str, int] = {}
+        for col_idx, value in enumerate(row):
+            field = _field_from_header(value)
+            if field and field not in columns:
+                columns[field] = col_idx
+        if "name" in columns and "email" in columns:
+            return row_idx, columns
+    raise HTTPException(
+        status_code=400,
+        detail=(
+            "엑셀에서 이름/이메일 헤더를 찾을 수 없습니다. "
+            "지원 헤더: 회원명 또는 이름, 이메일"
+        ),
+    )
+
+
+def _row_value(row: tuple[object, ...], columns: dict[str, int], field: str) -> str | None:
+    col_idx = columns.get(field)
+    if col_idx is None or col_idx >= len(row):
+        return None
+    return _cell_to_text(row[col_idx])
+
+
+def _normalize_email(value: str) -> str:
+    """일괄등록용 이메일 검증 및 정규화."""
+    try:
+        info = validate_email(value, check_deliverability=False)
+    except EmailNotValidError as exc:
+        raise ValueError(str(exc)) from exc
+    return info.normalized.lower()
+
+
+def _parse_group_no(value: str | None) -> int | None:
+    """'6조', '6 조' 같은 엑셀 값을 1~7 정수로 변환."""
+    if not value:
+        return None
+    match = re.search(r"[1-7]", value)
+    if not match:
+        raise ValueError("조는 1~7 범위여야 합니다")
+    return int(match.group(0))
+
+
+def _parse_user_import_rows(ws) -> tuple[list[BulkUserImportRow], list[str]]:
+    """사용자 일괄등록 엑셀을 헤더 기반으로 파싱."""
+    header_row_idx, columns = _detect_user_import_columns(ws)
+    rows: list[BulkUserImportRow] = []
+    errors: list[str] = []
+
+    for row_idx, row in enumerate(
+        ws.iter_rows(min_row=header_row_idx + 1, values_only=True),
+        start=header_row_idx + 1,
+    ):
+        if not any(_cell_to_text(value) for value in row):
+            continue
+
+        name = _row_value(row, columns, "name")
+        email_raw = _row_value(row, columns, "email")
+        if not name and not email_raw:
+            continue
+        if not name or not email_raw:
+            errors.append(f"{row_idx}행: 이름과 이메일은 필수입니다")
+            continue
+
+        try:
+            email = _normalize_email(email_raw)
+        except ValueError as exc:
+            errors.append(f"{row_idx}행: 이메일 형식 오류({exc})")
+            continue
+
+        role_str = _row_value(row, columns, "role")
+        role = ROLE_MAP.get(role_str, UserRole.REVIEWER) if role_str else UserRole.REVIEWER
+        phone = _row_value(row, columns, "phone")
+        specialty = _row_value(row, columns, "specialty")
+        try:
+            group_no = _parse_group_no(_row_value(row, columns, "group_no"))
+        except ValueError as exc:
+            errors.append(f"{row_idx}행: {exc}")
+            continue
+
+        rows.append(BulkUserImportRow(
+            row_idx=row_idx,
+            name=name,
+            email=email,
+            role=role,
+            phone=phone,
+            group_no=group_no,
+            specialty=specialty,
+        ))
+
+    return rows, errors
+
+
 def _resolve_group_no(user: User, reviewer_by_user: dict[int, Reviewer]) -> int | None:
     """역할별 group_no 단일 진실 분기.
 
@@ -81,6 +240,20 @@ def _set_group_no(db: Session, user: User, group_no: int | None) -> None:
             reviewer.group_no = group_no
     else:
         user.group_no = group_no
+
+
+def _apply_import_profile(db: Session, user: User, row: BulkUserImportRow) -> None:
+    """일괄등록 행의 부가 정보를 역할에 맞는 테이블에 저장."""
+    if row.group_no is not None:
+        _set_group_no(db, user, row.group_no)
+    if user.role != UserRole.REVIEWER or row.specialty is None:
+        return
+    reviewer = db.query(Reviewer).filter(Reviewer.user_id == user.id).first()
+    if reviewer is None:
+        reviewer = Reviewer(user_id=user.id)
+        db.add(reviewer)
+        db.flush()
+    reviewer.specialty = row.specialty
 
 
 # --- Pydantic 스키마 ---
@@ -404,7 +577,9 @@ async def import_users_excel(
 ):
     """사용자 일괄 등록 (엑셀). 각 신규 계정의 일회용 초기 비밀번호를 응답에 포함.
 
-    엑셀 형식: A열=이름, B열=이메일, C열=역할(팀장/총괄간사/간사/검토위원), D열=전화번호(선택)
+    엑셀 형식: 헤더명 기반 자동 매핑.
+    - 기존 템플릿: 이름, 이메일, 역할, 전화번호
+    - 검토위원 명단: 조, 회원명, 휴대전화번호, 특수분야, 이메일
     auto_send_invite=true인 경우 신규 계정에 한해 send_invites를 호출하고
     invite_summary/invite_results를 응답에 포함한다.
     """
@@ -414,52 +589,53 @@ async def import_users_excel(
     tmp_path = await stream_upload_to_tempfile(file, max_mb=10, suffix=".xlsx")
 
     try:
-        wb = load_workbook(str(tmp_path), data_only=True, read_only=True)
+        try:
+            wb = load_workbook(str(tmp_path), data_only=True, read_only=True)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=400,
+                detail="엑셀 파일을 읽을 수 없습니다. .xlsx 형식을 확인해주세요",
+            ) from exc
         ws = wb.active
+        import_rows, errors = _parse_user_import_rows(ws)
 
         created = 0
         skipped = 0
-        errors: list[str] = []
         accounts: list[BulkImportAccount] = []
         created_users: list[User] = []
+        created_entries: list[tuple[User, BulkUserImportRow]] = []
+        existing_emails = {email.lower() for (email,) in db.query(User.email).all()}
+        seen_emails: set[str] = set()
 
-        for row_idx, row in enumerate(ws.iter_rows(min_row=2), start=2):
-            name = str(row[0].value).strip() if row[0].value else None
-            email = str(row[1].value).strip() if len(row) > 1 and row[1].value else None
-            role_str = str(row[2].value).strip() if len(row) > 2 and row[2].value else None
-            phone = str(row[3].value).strip() if len(row) > 3 and row[3].value else None
-
-            if not name or not email:
-                continue
-
-            # 역할 매핑
-            role = ROLE_MAP.get(role_str, UserRole.REVIEWER) if role_str else UserRole.REVIEWER
-
-            # 중복 체크
-            if db.query(User).filter(User.email == email).first():
+        for row in import_rows:
+            if row.email in existing_emails or row.email in seen_emails:
                 skipped += 1
                 continue
+            seen_emails.add(row.email)
 
             initial_password = _generate_initial_password()
             user = User(
-                name=name,
-                email=email,
-                role=role,
-                phone=phone,
+                name=row.name,
+                email=row.email,
+                role=row.role,
+                phone=row.phone,
                 password_hash=get_password_hash(initial_password),
                 must_change_password=True,
+                group_no=row.group_no if row.role != UserRole.REVIEWER else None,
             )
             db.add(user)
             accounts.append(BulkImportAccount(
-                email=email, name=name, initial_password=initial_password,
+                email=row.email, name=row.name, initial_password=initial_password,
             ))
             created += 1
             created_users.append(user)
+            created_entries.append((user, row))
 
         # flush로 신규 user.id 확정 후 사용자별 Reviewer 자동 연결
         db.flush()
-        for u in created_users:
+        for u, row in created_entries:
             ensure_reviewer_link(db, u)
+            _apply_import_profile(db, u, row)
 
         db.commit()
         # commit 후 user.id 재확보
