@@ -42,6 +42,9 @@ class User(Base):
     phone: Mapped[str | None] = mapped_column(String(20))
     kakao_id: Mapped[str | None] = mapped_column(String(100))
     kakao_uuid: Mapped[str | None] = mapped_column(String(100))
+    # 카카오 로그인 사용자 조회(`/v2/user/me`)에서 받은 for_partner.uuid.
+    # kakao_uuid는 관리자 친구 목록에서 매칭한 발송용 uuid라 별도로 보관한다.
+    kakao_login_uuid: Mapped[str | None] = mapped_column(String(100))
     kakao_access_token: Mapped[str | None] = mapped_column(String(500))
     kakao_refresh_token: Mapped[str | None] = mapped_column(String(500))
     kakao_token_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

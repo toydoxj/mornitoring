@@ -11,6 +11,7 @@ from services.kakao import (
     REQUIRED_KAKAO_SCOPES,
     ensure_valid_token,
     get_friends,
+    get_kakao_identity_status,
     get_kakao_token_status,
     get_reauthorize_url,
     get_user_scopes,
@@ -162,6 +163,11 @@ async def match_friend(
     user = db.query(User).filter(User.id == body.user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다")
+    if user.kakao_login_uuid and user.kakao_login_uuid != body.kakao_uuid:
+        raise HTTPException(
+            status_code=409,
+            detail="카카오 로그인 계정과 선택한 친구가 다릅니다",
+        )
 
     # 동일 UUID가 다른 사용자에 이미 매칭되어 있다면 해제
     existing = (
@@ -212,6 +218,7 @@ async def unlink_kakao_oauth(
         raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다")
 
     user.kakao_id = None
+    user.kakao_login_uuid = None
     user.kakao_access_token = None
     user.kakao_refresh_token = None
     user.kakao_token_expires_at = None
@@ -230,6 +237,8 @@ class UserMatchStatus(BaseModel):
     kakao_oauth_linked: bool  # 본 서비스에 카카오 로그인 완료 (kakao_id 존재)
     kakao_linked: bool  # 내 친구 목록에서 매칭 완료 (kakao_uuid 존재) — 기존 필드 유지
     kakao_uuid: str | None = None
+    kakao_login_uuid: str | None = None
+    kakao_identity_status: str
     kakao_token_status: str | None = None
     kakao_token_expires_at: str | None = None
     kakao_scopes_status: str | None = None
@@ -290,6 +299,8 @@ async def list_users_match_status(
             kakao_oauth_linked=bool(u.kakao_id),
             kakao_linked=bool(u.kakao_uuid),
             kakao_uuid=u.kakao_uuid,
+            kakao_login_uuid=u.kakao_login_uuid,
+            kakao_identity_status=get_kakao_identity_status(u),
             kakao_token_status=kakao_token_status,
             kakao_token_expires_at=kakao_token_expires_at,
             kakao_scopes_status=_scopes_status(u),

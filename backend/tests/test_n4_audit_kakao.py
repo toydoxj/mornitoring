@@ -110,6 +110,7 @@ def test_team_leader_can_unlink_kakao_oauth_without_unmatching(
         UserRole.REVIEWER,
         kakao_id="wrong-kakao-id",
         kakao_uuid="matched-friend-uuid",
+        kakao_login_uuid="login-uuid",
         kakao_access_token="access-token",
         kakao_refresh_token="refresh-token",
         kakao_scopes_ok=True,
@@ -124,6 +125,51 @@ def test_team_leader_can_unlink_kakao_oauth_without_unmatching(
     refreshed = db_session.query(UserModel).filter(UserModel.id == target.id).first()
     assert refreshed.kakao_id is None
     assert refreshed.kakao_uuid == "matched-friend-uuid"
+    assert refreshed.kakao_login_uuid is None
     assert refreshed.kakao_access_token is None
     assert refreshed.kakao_refresh_token is None
     assert refreshed.kakao_scopes_ok is None
+
+
+def test_list_users_match_status_reports_kakao_identity_status(client, make_user):
+    """친구 매칭 uuid와 로그인 uuid의 일치 여부를 목록에 표시한다."""
+    _, headers = make_user(UserRole.TEAM_LEADER)
+    matched, _ = make_user(
+        UserRole.REVIEWER,
+        email="identity-matched@example.com",
+        kakao_id="matched-id",
+        kakao_uuid="same-uuid",
+        kakao_login_uuid="same-uuid",
+    )
+    mismatch, _ = make_user(
+        UserRole.REVIEWER,
+        email="identity-mismatch@example.com",
+        kakao_id="mismatch-id",
+        kakao_uuid="friend-uuid",
+        kakao_login_uuid="login-uuid",
+    )
+
+    res = client.get("/api/kakao/reviewers", headers=headers)
+    assert res.status_code == 200
+    by_id = {item["user_id"]: item for item in res.json()}
+    assert by_id[matched.id]["kakao_identity_status"] == "matched"
+    assert by_id[mismatch.id]["kakao_identity_status"] == "mismatch"
+
+
+def test_match_kakao_rejects_uuid_different_from_login_uuid(client, make_user):
+    """로그인 uuid가 확인된 사용자는 다른 친구 uuid로 매칭할 수 없다."""
+    _, headers = make_user(UserRole.TEAM_LEADER)
+    target, _ = make_user(
+        UserRole.REVIEWER,
+        kakao_id="login-linked-id",
+        kakao_login_uuid="real-login-uuid",
+    )
+
+    res = client.post(
+        "/api/kakao/match",
+        headers=headers,
+        json={"user_id": target.id, "kakao_uuid": "other-friend-uuid"},
+    )
+
+    assert res.status_code == 409
+    assert "다릅니다" in res.json()["detail"]

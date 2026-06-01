@@ -129,6 +129,7 @@ def test_import_users_excel_reactivates_inactive_email(
         must_change_password=True,
         kakao_id="old-import-kakao",
         kakao_uuid="old-import-uuid",
+        kakao_login_uuid="old-import-login-uuid",
     )
     inactive.is_active = False
     db_session.add(Reviewer(user_id=inactive.id, group_no=1))
@@ -169,6 +170,7 @@ def test_import_users_excel_reactivates_inactive_email(
     assert restored.phone == "010-4444-5555"
     assert restored.kakao_id is None
     assert restored.kakao_uuid is None
+    assert restored.kakao_login_uuid is None
 
     reviewer = db_session.query(Reviewer).filter(Reviewer.user_id == inactive.id).one()
     assert reviewer.group_no == 4

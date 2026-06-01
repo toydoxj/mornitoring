@@ -71,6 +71,7 @@ def test_create_user_reactivates_soft_deleted_email(
         email="egw-reactivate@example.com",
         kakao_id="old-kakao-id",
         kakao_uuid="old-kakao-uuid",
+        kakao_login_uuid="old-login-uuid",
         kakao_access_token="old-access",
         kakao_refresh_token="old-refresh",
         kakao_scopes_ok=True,
@@ -116,6 +117,7 @@ def test_create_user_reactivates_soft_deleted_email(
     assert verify_password(body["initial_password"], restored.password_hash)
     assert restored.kakao_id is None
     assert restored.kakao_uuid is None
+    assert restored.kakao_login_uuid is None
     assert restored.kakao_access_token is None
     assert restored.kakao_refresh_token is None
     assert restored.kakao_scopes_ok is None

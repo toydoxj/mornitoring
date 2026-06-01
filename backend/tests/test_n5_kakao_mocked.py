@@ -67,7 +67,7 @@ def test_kakao_callback_existing_user_logs_in(client, db_session, kakao_mock, ma
     )
 
     kakao_mock.token_ok(access_token="new_access", refresh_token="new_refresh")
-    kakao_mock.user_info_ok(kakao_id="98765", nickname="홍길동")
+    kakao_mock.user_info_ok(kakao_id="98765", nickname="홍길동", uuid="login-uuid-98765")
 
     state = generate_oauth_state()
     res = client.get(f"/api/auth/kakao/callback?code=auth_code_x&state={state}")
@@ -81,6 +81,8 @@ def test_kakao_callback_existing_user_logs_in(client, db_session, kakao_mock, ma
     from models.user import User as UserModel
     refreshed = db_session.query(UserModel).filter(UserModel.id == user.id).first()
     assert refreshed.kakao_access_token == "new_access"
+    assert refreshed.kakao_login_uuid == "login-uuid-98765"
+    assert refreshed.kakao_uuid is None
 
 
 def test_kakao_callback_setup_context_rejects_other_linked_user(
@@ -137,7 +139,7 @@ def test_kakao_callback_unknown_kakao_id_returns_link_session(
 ):
     """매칭된 사용자 없는 kakao_id → need_link + link_session_id 응답."""
     kakao_mock.token_ok()
-    kakao_mock.user_info_ok(kakao_id="99999", nickname="신규유저")
+    kakao_mock.user_info_ok(kakao_id="99999", nickname="신규유저", uuid="login-uuid-99999")
 
     state = generate_oauth_state()
     res = client.get(f"/api/auth/kakao/callback?code=any_code&state={state}")
@@ -155,6 +157,7 @@ def test_kakao_callback_unknown_kakao_id_returns_link_session(
     ).all()
     assert len(rows) == 1
     assert rows[0].kakao_id == "99999"
+    assert rows[0].kakao_login_uuid == "login-uuid-99999"
 
 
 # ===== 3. /link-account 성공 =====
@@ -171,7 +174,7 @@ def test_link_account_success_saves_kakao_id(
 
     # 먼저 OAuth 콜백으로 link_session 생성
     kakao_mock.token_ok(access_token="kakao_acc_z", refresh_token="kakao_ref_z")
-    kakao_mock.user_info_ok(kakao_id="55555")
+    kakao_mock.user_info_ok(kakao_id="55555", uuid="login-uuid-55555")
     state = generate_oauth_state()
     callback_res = client.get(f"/api/auth/kakao/callback?code=any&state={state}")
     session_id = callback_res.json()["link_session_id"]
@@ -192,6 +195,7 @@ def test_link_account_success_saves_kakao_id(
     from models.user import User as UserModel
     refreshed = db_session.query(UserModel).filter(UserModel.id == user.id).first()
     assert refreshed.kakao_id == "55555"
+    assert refreshed.kakao_login_uuid == "login-uuid-55555"
     assert refreshed.kakao_access_token == "kakao_acc_z"
 
 

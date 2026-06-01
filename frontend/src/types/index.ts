@@ -1,5 +1,6 @@
 // 사용자 역할
 export type UserRole = "team_leader" | "chief_secretary" | "secretary" | "reviewer"
+export type KakaoIdentityStatus = "matched" | "mismatch" | "unknown" | "unmatched" | "not_linked"
 
 // 사용자
 export interface User {
@@ -12,6 +13,8 @@ export interface User {
   kakao_linked?: boolean      // 카카오 로그인 완료
   kakao_matched?: boolean     // 친구 매칭 완료
   kakao_uuid?: string | null
+  kakao_login_uuid?: string | null
+  kakao_identity_status?: KakaoIdentityStatus
   // 카카오 토큰 상태 (access token 만료/refresh 가능 여부)
   kakao_token_status?: KakaoTokenStatus | null
   kakao_token_expires_at?: string | null
@@ -54,6 +57,14 @@ export const KAKAO_TOKEN_STATUS_LABELS: Record<KakaoTokenStatus, string> = {
   refresh_unavailable: "갱신 불가",
   invalid: "갱신 실패",
   unknown: "미확인",
+}
+
+export const KAKAO_IDENTITY_STATUS_LABELS: Record<KakaoIdentityStatus, string> = {
+  matched: "일치",
+  mismatch: "불일치",
+  unknown: "확인불가",
+  unmatched: "미매칭",
+  not_linked: "미완료",
 }
 
 export type SetupStatus = "setup_completed" | "pending" | "expired" | "not_invited"

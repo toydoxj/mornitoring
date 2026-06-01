@@ -23,7 +23,7 @@ from models.reviewer import Reviewer
 from models.user import User, UserRole
 from routers.auth import get_current_user, get_password_hash, require_roles
 from services.invite import InviteResult, send_invites
-from services.kakao import get_kakao_token_status
+from services.kakao import get_kakao_identity_status, get_kakao_token_status
 from services.reviewer_link import ensure_reviewer_link
 
 router = APIRouter()
@@ -282,6 +282,7 @@ def _reset_kakao_state(user: User) -> None:
     """삭제 전 카카오 인증/매칭 상태가 재등록 계정에 남지 않도록 초기화한다."""
     user.kakao_id = None
     user.kakao_uuid = None
+    user.kakao_login_uuid = None
     user.kakao_access_token = None
     user.kakao_refresh_token = None
     user.kakao_token_expires_at = None
@@ -347,6 +348,8 @@ class UserResponse(BaseModel):
     kakao_linked: bool = False        # 카카오 로그인 완료(kakao_id 존재)
     kakao_matched: bool = False       # 친구 매칭 완료(kakao_uuid 존재)
     kakao_uuid: str | None = None
+    kakao_login_uuid: str | None = None
+    kakao_identity_status: str = "not_linked"
     # 카카오 토큰 상태 — not_linked/valid/refresh_needed/refresh_unavailable/invalid/...
     kakao_token_status: str | None = None
     kakao_token_expires_at: str | None = None
@@ -554,6 +557,8 @@ def list_users(
             kakao_linked=bool(u.kakao_id),
             kakao_matched=bool(u.kakao_uuid),
             kakao_uuid=u.kakao_uuid,
+            kakao_login_uuid=u.kakao_login_uuid,
+            kakao_identity_status=get_kakao_identity_status(u),
             kakao_token_status=kakao_token_status,
             kakao_token_expires_at=kakao_token_expires_at,
             kakao_scopes_status=_scopes_status(u),
@@ -632,6 +637,8 @@ def create_user(
         kakao_linked=bool(user.kakao_id),
         kakao_matched=bool(user.kakao_uuid),
         kakao_uuid=user.kakao_uuid,
+        kakao_login_uuid=user.kakao_login_uuid,
+        kakao_identity_status=get_kakao_identity_status(user),
         kakao_token_status=kakao_token_status,
         kakao_token_expires_at=kakao_token_expires_at,
         initial_password=initial_password,
@@ -807,6 +814,8 @@ def get_user(
         kakao_linked=bool(user.kakao_id),
         kakao_matched=bool(user.kakao_uuid),
         kakao_uuid=user.kakao_uuid,
+        kakao_login_uuid=user.kakao_login_uuid,
+        kakao_identity_status=get_kakao_identity_status(user),
         kakao_token_status=kakao_token_status,
         kakao_token_expires_at=kakao_token_expires_at,
         group_no=_resolve_group_no(user, reviewer_map),
@@ -852,6 +861,8 @@ def update_user(
         kakao_linked=bool(user.kakao_id),
         kakao_matched=bool(user.kakao_uuid),
         kakao_uuid=user.kakao_uuid,
+        kakao_login_uuid=user.kakao_login_uuid,
+        kakao_identity_status=get_kakao_identity_status(user),
         kakao_token_status=kakao_token_status,
         kakao_token_expires_at=kakao_token_expires_at,
         group_no=_resolve_group_no(user, reviewer_map),

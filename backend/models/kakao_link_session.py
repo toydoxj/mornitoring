@@ -26,6 +26,7 @@ class KakaoLinkSession(Base):
         String(64), primary_key=True, default=_generate_session_id
     )
     kakao_id: Mapped[str] = mapped_column(String(100), index=True)
+    kakao_login_uuid: Mapped[str | None] = mapped_column(String(100))
     kakao_access_token: Mapped[str] = mapped_column(String(500))
     kakao_refresh_token: Mapped[str | None] = mapped_column(String(500))
     kakao_expires_in: Mapped[int | None] = mapped_column(Integer)

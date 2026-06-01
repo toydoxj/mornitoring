@@ -21,8 +21,8 @@ import {
 } from "@/components/ui/table"
 import apiClient from "@/lib/api/client"
 import { useAuthStore } from "@/stores/authStore"
-import type { KakaoTokenStatus } from "@/types"
-import { KAKAO_TOKEN_STATUS_LABELS } from "@/types"
+import type { KakaoIdentityStatus, KakaoTokenStatus } from "@/types"
+import { KAKAO_IDENTITY_STATUS_LABELS, KAKAO_TOKEN_STATUS_LABELS } from "@/types"
 
 type UserRole = "team_leader" | "chief_secretary" | "secretary" | "reviewer"
 
@@ -34,6 +34,8 @@ interface UserStatus {
   kakao_oauth_linked: boolean
   kakao_linked: boolean
   kakao_uuid: string | null
+  kakao_login_uuid: string | null
+  kakao_identity_status: KakaoIdentityStatus
   kakao_token_status: KakaoTokenStatus | null
   kakao_token_expires_at: string | null
   kakao_scopes_status: string | null
@@ -279,6 +281,23 @@ export default function KakaoMatchPage() {
     )
   }
 
+  const renderKakaoIdentityBadge = (status?: KakaoIdentityStatus | null) => {
+    const s = status ?? "unknown"
+    const cls =
+      s === "matched"
+        ? "bg-green-100 text-green-700 border-green-300"
+        : s === "mismatch"
+          ? "bg-red-100 text-red-700 border-red-300"
+          : s === "unknown"
+            ? "bg-amber-100 text-amber-800 border-amber-300"
+            : "bg-gray-100 text-gray-700 border-gray-300"
+    return (
+      <Badge variant="outline" className={cls}>
+        {KAKAO_IDENTITY_STATUS_LABELS[s]}
+      </Badge>
+    )
+  }
+
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -373,6 +392,7 @@ export default function KakaoMatchPage() {
               <TableHead className="w-[120px]">카카오 로그인</TableHead>
               <TableHead className="w-[110px]">토큰</TableHead>
               <TableHead className="w-[120px]">친구 매칭</TableHead>
+              <TableHead className="w-[110px]">일치 확인</TableHead>
               <TableHead className="w-[260px]">작업</TableHead>
             </TableRow>
           </TableHeader>
@@ -424,6 +444,9 @@ export default function KakaoMatchPage() {
                     ) : (
                       <Badge variant="outline">미매칭</Badge>
                     )}
+                  </TableCell>
+                  <TableCell>
+                    {renderKakaoIdentityBadge(r.kakao_identity_status)}
                   </TableCell>
                   <TableCell>
                     {isSelf ? (

@@ -252,6 +252,7 @@ async def kakao_callback(
     from services.kakao import (
         create_link_session,
         decode_oauth_state,
+        extract_kakao_login_uuid,
         exchange_code,
         generate_setup_context,
         get_user_info,
@@ -299,10 +300,7 @@ async def kakao_callback(
         log_event("error", "kakao_user_info_failed")
         raise HTTPException(status_code=400, detail="카카오 로그인 처리 중 오류가 발생했습니다")
     kakao_id = str(kakao_user["id"])
-    kakao_uuid = (
-        kakao_user.get("uuid")
-        or kakao_user.get("for_partner", {}).get("uuid")
-    )
+    kakao_uuid = extract_kakao_login_uuid(kakao_user)
     # 닉네임: properties.nickname 또는 kakao_account.profile.nickname
     kakao_name = (
         kakao_user.get("properties", {}).get("nickname", "")
@@ -354,8 +352,7 @@ async def kakao_callback(
                     "본인 카카오 계정으로 다시 로그인해주세요"
                 ),
             )
-        if user.kakao_uuid is None and kakao_uuid:
-            user.kakao_uuid = str(kakao_uuid)
+        user.kakao_login_uuid = kakao_uuid
         user.kakao_access_token = kakao_access
         user.kakao_refresh_token = kakao_refresh
         user.kakao_token_expires_at = kakao_token_expires_at
@@ -407,6 +404,7 @@ async def kakao_callback(
     session_id = create_link_session(
         db,
         kakao_id=kakao_id,
+        kakao_login_uuid=kakao_uuid,
         kakao_access_token=kakao_access,
         kakao_refresh_token=kakao_refresh,
         kakao_expires_in=kakao_expires_in,
@@ -507,6 +505,7 @@ async def link_account(
 
     # 모든 검증 통과 — 사용자 업데이트 + 세션 소모를 한 트랜잭션에서 commit
     user.kakao_id = session.kakao_id
+    user.kakao_login_uuid = session.kakao_login_uuid
     user.kakao_access_token = session.kakao_access_token
     user.kakao_refresh_token = session.kakao_refresh_token or ""
     if session.kakao_expires_in:

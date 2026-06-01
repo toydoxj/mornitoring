@@ -89,6 +89,7 @@ def create_link_session(
     db: Session,
     *,
     kakao_id: str,
+    kakao_login_uuid: str | None = None,
     kakao_access_token: str,
     kakao_refresh_token: str,
     kakao_expires_in: int | None,
@@ -101,6 +102,7 @@ def create_link_session(
     """
     session = KakaoLinkSession(
         kakao_id=kakao_id,
+        kakao_login_uuid=kakao_login_uuid,
         kakao_access_token=kakao_access_token,
         kakao_refresh_token=kakao_refresh_token or None,
         kakao_expires_in=kakao_expires_in,
@@ -110,6 +112,28 @@ def create_link_session(
     db.commit()
     db.refresh(session)
     return session.id
+
+
+def extract_kakao_login_uuid(kakao_user: dict) -> str | None:
+    """카카오 사용자 조회 응답에서 로그인 사용자의 uuid를 추출한다."""
+    value = (
+        kakao_user.get("for_partner", {}).get("uuid")
+        or kakao_user.get("uuid")
+    )
+    return str(value) if value else None
+
+
+def get_kakao_identity_status(user: User) -> str:
+    """친구 매칭 uuid와 로그인 uuid의 일치 상태를 반환한다."""
+    if not user.kakao_id:
+        return "not_linked"
+    if not user.kakao_uuid:
+        return "unmatched"
+    if not user.kakao_login_uuid:
+        return "unknown"
+    if user.kakao_uuid == user.kakao_login_uuid:
+        return "matched"
+    return "mismatch"
 
 
 def _ensure_aware_utc(dt: datetime | None) -> datetime | None:

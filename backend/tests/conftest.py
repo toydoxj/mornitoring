@@ -221,7 +221,7 @@ def kakao_mock():
                     "kakao_account": {"profile": {"nickname": nickname}},
                 }
                 if uuid is not None:
-                    body["uuid"] = uuid
+                    body["for_partner"] = {"uuid": uuid}
                 return mock.get(f"{KAKAO_API}/v2/user/me").mock(
                     return_value=httpx.Response(200, json=body)
                 )

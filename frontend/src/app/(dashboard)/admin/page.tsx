@@ -21,8 +21,16 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import apiClient from "@/lib/api/client"
-import type { KakaoScopesStatus, KakaoTokenStatus, SetupStatus, User, UserRole } from "@/types"
+import type {
+  KakaoIdentityStatus,
+  KakaoScopesStatus,
+  KakaoTokenStatus,
+  SetupStatus,
+  User,
+  UserRole,
+} from "@/types"
 import {
+  KAKAO_IDENTITY_STATUS_LABELS,
   KAKAO_SCOPES_LABELS,
   KAKAO_TOKEN_STATUS_LABELS,
   ROLE_LABELS,
@@ -651,6 +659,23 @@ export default function AdminPage() {
     )
   }
 
+  const renderKakaoIdentityBadge = (status?: KakaoIdentityStatus | null) => {
+    const s = status ?? "unknown"
+    const cls =
+      s === "matched"
+        ? "bg-green-100 text-green-700 border-green-300"
+        : s === "mismatch"
+          ? "bg-red-100 text-red-700 border-red-300"
+          : s === "unknown"
+            ? "bg-amber-100 text-amber-800 border-amber-300"
+            : "bg-gray-100 text-gray-700 border-gray-300"
+    return (
+      <Badge variant="outline" className={cls}>
+        {KAKAO_IDENTITY_STATUS_LABELS[s]}
+      </Badge>
+    )
+  }
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
@@ -860,6 +885,7 @@ export default function AdminPage() {
               <TableHead className="w-[100px] text-center">카카오 로그인</TableHead>
               <TableHead className="w-[100px] text-center">토큰</TableHead>
               <TableHead className="w-[100px] text-center">친구 매칭</TableHead>
+              <TableHead className="w-[100px] text-center">일치 확인</TableHead>
               <TableHead className="w-[90px] text-center">동의</TableHead>
               <TableHead className="w-[100px] text-center">비번 상태</TableHead>
               <TableHead className="w-[80px] text-center">상태</TableHead>
@@ -920,6 +946,9 @@ export default function AdminPage() {
                     ) : (
                       <Badge variant="outline">미매칭</Badge>
                     )}
+                  </TableCell>
+                  <TableCell className="text-center">
+                    {renderKakaoIdentityBadge(user.kakao_identity_status)}
                   </TableCell>
                   <TableCell className="text-center">
                     {(() => {
