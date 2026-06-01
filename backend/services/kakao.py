@@ -20,25 +20,66 @@ TOKEN_REFRESH_MARGIN = timedelta(minutes=5)
 REQUIRED_KAKAO_SCOPES = ("profile_nickname", "friends", "talk_message")
 
 
-def generate_oauth_state() -> str:
+def generate_oauth_state(*, setup_user_id: int | None = None) -> str:
     """CSRF 방어용 state JWT 생성 (10분 유효)."""
     exp = datetime.now(timezone.utc) + timedelta(minutes=10)
+    payload: dict[str, str | int] = {
+        "nonce": secrets.token_urlsafe(16),
+        "exp": int(exp.timestamp()),
+    }
+    if setup_user_id is not None:
+        payload["setup_user_id"] = setup_user_id
+    return jwt.encode(payload, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
+
+
+def decode_oauth_state(state: str) -> dict | None:
+    """state JWT 검증 후 payload 반환 — 실패 시 None."""
+    if not state:
+        return None
+    try:
+        return jwt.decode(
+            state, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm]
+        )
+    except JWTError:
+        return None
+
+
+def verify_oauth_state(state: str) -> bool:
+    """state JWT 검증 — 서명·만료 확인."""
+    return decode_oauth_state(state) is not None
+
+
+def generate_setup_context(user_id: int) -> str:
+    """초대 직후 카카오 연동 대상자를 고정하는 짧은 서명 토큰."""
+    exp = datetime.now(timezone.utc) + timedelta(minutes=10)
     return jwt.encode(
-        {"nonce": secrets.token_urlsafe(16), "exp": int(exp.timestamp())},
+        {
+            "type": "setup_kakao_link",
+            "user_id": user_id,
+            "nonce": secrets.token_urlsafe(16),
+            "exp": int(exp.timestamp()),
+        },
         settings.jwt_secret_key,
         algorithm=settings.jwt_algorithm,
     )
 
 
-def verify_oauth_state(state: str) -> bool:
-    """state JWT 검증 — 서명·만료 확인."""
-    if not state:
-        return False
+def decode_setup_context(setup_context: str) -> int | None:
+    """초대 카카오 연동 컨텍스트에서 대상 user_id를 꺼낸다."""
+    if not setup_context:
+        return None
     try:
-        jwt.decode(state, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm])
-        return True
+        payload = jwt.decode(
+            setup_context, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm]
+        )
     except JWTError:
-        return False
+        return None
+    if payload.get("type") != "setup_kakao_link":
+        return None
+    try:
+        return int(payload.get("user_id"))
+    except (TypeError, ValueError):
+        return None
 
 
 LINK_SESSION_TTL_SECONDS = 600  # 10분
@@ -150,9 +191,10 @@ def get_authorize_url(
     *,
     scopes: Sequence[str] | None = REQUIRED_KAKAO_SCOPES,
     prompt: str | None = None,
+    setup_user_id: int | None = None,
 ) -> str:
     """카카오 로그인/추가동의 인가 URL 생성 (CSRF state 포함)."""
-    state = generate_oauth_state()
+    state = generate_oauth_state(setup_user_id=setup_user_id)
     params = {
         "client_id": settings.kakao_rest_api_key,
         "redirect_uri": settings.kakao_redirect_uri,

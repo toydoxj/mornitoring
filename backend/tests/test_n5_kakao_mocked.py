@@ -17,7 +17,11 @@ import pytest
 
 from models.kakao_link_session import KakaoLinkSession
 from models.user import UserRole
-from services.kakao import generate_oauth_state
+from services.kakao import (
+    decode_oauth_state,
+    generate_oauth_state,
+    generate_setup_context,
+)
 
 
 def test_kakao_login_consent_url_requests_additional_consent(client):
@@ -34,6 +38,22 @@ def test_kakao_login_consent_url_requests_additional_consent(client):
     assert params["scope"] == ["profile_nickname,friends,talk_message"]
     assert params["prompt"] == ["select_account"]
     assert params["state"][0]
+
+
+def test_kakao_login_setup_context_binds_setup_user(client, make_user):
+    """초대 직후 카카오 연동 URL은 state에 초대 대상 user_id를 담는다."""
+    target, _ = make_user(UserRole.REVIEWER)
+    setup_context = generate_setup_context(target.id)
+
+    res = client.get(f"/api/auth/kakao/login?setup_context={setup_context}")
+    assert res.status_code == 200
+
+    parsed = urlparse(res.json()["url"])
+    params = parse_qs(parsed.query)
+    state_payload = decode_oauth_state(params["state"][0])
+    assert state_payload is not None
+    assert state_payload["setup_user_id"] == target.id
+    assert params["prompt"] == ["select_account"]
 
 
 # ===== 1. OAuth 콜백 — 기존 사용자 로그인 =====
@@ -61,6 +81,53 @@ def test_kakao_callback_existing_user_logs_in(client, db_session, kakao_mock, ma
     from models.user import User as UserModel
     refreshed = db_session.query(UserModel).filter(UserModel.id == user.id).first()
     assert refreshed.kakao_access_token == "new_access"
+
+
+def test_kakao_callback_setup_context_rejects_other_linked_user(
+    client, kakao_mock, make_user
+):
+    """다른 사람 초대 링크에서 내 카카오 계정 로그인이 완료되면 안 된다."""
+    target, _ = make_user(
+        UserRole.REVIEWER,
+        email="invite-owner@example.com",
+        kakao_uuid="owner-uuid",
+    )
+    other, _ = make_user(
+        UserRole.REVIEWER,
+        email="already-linked@example.com",
+        kakao_id="22222",
+        kakao_uuid="other-uuid",
+    )
+
+    kakao_mock.token_ok(access_token="other_access", refresh_token="other_refresh")
+    kakao_mock.user_info_ok(kakao_id="22222", uuid="other-uuid")
+
+    state = generate_oauth_state(setup_user_id=target.id)
+    res = client.get(f"/api/auth/kakao/callback?code=auth_code_x&state={state}")
+
+    assert res.status_code == 409
+    assert "다른 사용자" in res.json()["detail"]
+    assert other.id != target.id
+
+
+def test_kakao_callback_setup_context_rejects_uuid_mismatch(
+    client, kakao_mock, make_user
+):
+    """초대 대상자의 카카오 uuid와 로그인한 카카오 uuid가 다르면 연결 세션도 만들지 않는다."""
+    target, _ = make_user(
+        UserRole.REVIEWER,
+        email="uuid-owner@example.com",
+        kakao_uuid="owner-uuid",
+    )
+
+    kakao_mock.token_ok(access_token="new_access", refresh_token="new_refresh")
+    kakao_mock.user_info_ok(kakao_id="33333", uuid="wrong-uuid")
+
+    state = generate_oauth_state(setup_user_id=target.id)
+    res = client.get(f"/api/auth/kakao/callback?code=auth_code_x&state={state}")
+
+    assert res.status_code == 409
+    assert "카카오 계정이 다릅니다" in res.json()["detail"]
 
 
 # ===== 2. OAuth 콜백 — need_link =====

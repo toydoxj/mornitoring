@@ -29,6 +29,7 @@ function SetupPasswordContent() {
   const [error, setError] = useState("")
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [kakaoAlreadyLinked, setKakaoAlreadyLinked] = useState(false)
+  const [kakaoSetupContext, setKakaoSetupContext] = useState("")
 
   useEffect(() => {
     if (!token) {
@@ -77,6 +78,7 @@ function SetupPasswordContent() {
         message: string
         email?: string
         kakao_linked?: boolean
+        kakao_setup_context?: string
       }>("/api/auth/password-setup", {
         token,
         new_password: newPassword,
@@ -85,6 +87,10 @@ function SetupPasswordContent() {
       // (비밀번호는 저장하지 않음 — 사용자가 다시 입력)
       if (data.email) {
         sessionStorage.setItem("pending_link_email", data.email)
+      }
+      if (data.kakao_setup_context) {
+        sessionStorage.setItem("pending_link_context", data.kakao_setup_context)
+        setKakaoSetupContext(data.kakao_setup_context)
       }
       setKakaoAlreadyLinked(!!data.kakao_linked)
       setStage("done")
@@ -98,7 +104,15 @@ function SetupPasswordContent() {
 
   const handleConnectKakao = async () => {
     try {
-      const { data } = await apiClient.get<{ url: string }>("/api/auth/kakao/login")
+      const params = new URLSearchParams()
+      if (kakaoSetupContext) {
+        params.set("setup_context", kakaoSetupContext)
+      }
+      const query = params.toString()
+      const endpoint = query
+        ? `/api/auth/kakao/login?${query}`
+        : "/api/auth/kakao/login"
+      const { data } = await apiClient.get<{ url: string }>(endpoint)
       window.location.href = data.url
     } catch {
       // 카카오 URL 조회 실패 시 로그인 화면으로 fallback

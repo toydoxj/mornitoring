@@ -217,11 +217,28 @@ def login(
 @router.get("/kakao/login")
 def kakao_login(
     consent: bool = Query(False, description="부족 동의항목 추가동의 흐름 여부"),
+    setup_context: str | None = Query(
+        None, description="초대 비밀번호 설정 직후 카카오 연동 컨텍스트"
+    ),
 ):
     """카카오 로그인 URL 반환"""
-    from services.kakao import get_authorize_url
+    from services.kakao import decode_setup_context, get_authorize_url
 
-    return {"url": get_authorize_url(prompt="select_account" if consent else None)}
+    setup_user_id: int | None = None
+    if setup_context:
+        setup_user_id = decode_setup_context(setup_context)
+        if setup_user_id is None:
+            raise HTTPException(
+                status_code=400,
+                detail="카카오 연동 요청이 만료되었습니다. 다시 시도해주세요",
+            )
+
+    return {
+        "url": get_authorize_url(
+            prompt="select_account" if consent or setup_user_id else None,
+            setup_user_id=setup_user_id,
+        )
+    }
 
 
 @router.get("/kakao/callback")
@@ -234,14 +251,25 @@ async def kakao_callback(
     """카카오 인가 코드 → 토큰 교환 → 사용자 조회/생성 → JWT 발급"""
     from services.kakao import (
         create_link_session,
+        decode_oauth_state,
         exchange_code,
+        generate_setup_context,
         get_user_info,
-        verify_oauth_state,
     )
 
     # CSRF 방어: state JWT 검증
-    if not verify_oauth_state(state or ""):
+    state_payload = decode_oauth_state(state or "")
+    if state_payload is None:
         log_event("warning", "kakao_callback_invalid_state")
+        raise HTTPException(status_code=400, detail="유효하지 않은 로그인 요청입니다")
+    try:
+        setup_user_id = (
+            int(state_payload["setup_user_id"])
+            if state_payload.get("setup_user_id") is not None
+            else None
+        )
+    except (TypeError, ValueError):
+        log_event("warning", "kakao_callback_invalid_state_setup_user_id")
         raise HTTPException(status_code=400, detail="유효하지 않은 로그인 요청입니다")
 
     # 카카오 토큰 교환
@@ -271,15 +299,63 @@ async def kakao_callback(
         log_event("error", "kakao_user_info_failed")
         raise HTTPException(status_code=400, detail="카카오 로그인 처리 중 오류가 발생했습니다")
     kakao_id = str(kakao_user["id"])
+    kakao_uuid = (
+        kakao_user.get("uuid")
+        or kakao_user.get("for_partner", {}).get("uuid")
+    )
     # 닉네임: properties.nickname 또는 kakao_account.profile.nickname
     kakao_name = (
         kakao_user.get("properties", {}).get("nickname", "")
         or kakao_user.get("kakao_account", {}).get("profile", {}).get("nickname", "")
     )
 
+    setup_target: User | None = None
+    if setup_user_id is not None:
+        setup_target = (
+            db.query(User)
+            .filter(User.id == setup_user_id, User.is_active.is_(True))
+            .first()
+        )
+        if setup_target is None:
+            raise HTTPException(
+                status_code=401,
+                detail="초대 링크 대상 계정을 찾을 수 없습니다. 관리자에게 새 초대를 요청해주세요",
+            )
+
     # DB에서 사용자 조회 (kakao_id 기준)
     user = db.query(User).filter(User.kakao_id == kakao_id).first()
     if user:
+        if setup_target is not None and user.id != setup_target.id:
+            log_event(
+                "warning", "kakao_setup_target_mismatch",
+                setup_user_id=setup_target.id, kakao_user_id=user.id,
+            )
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "이 초대 링크는 다른 사용자에게 발송된 링크입니다. "
+                    "본인 초대 링크로 다시 접속해주세요"
+                ),
+            )
+        if (
+            setup_target is not None
+            and setup_target.kakao_uuid
+            and kakao_uuid
+            and setup_target.kakao_uuid != kakao_uuid
+        ):
+            log_event(
+                "warning", "kakao_setup_uuid_mismatch",
+                setup_user_id=setup_target.id,
+            )
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "초대 대상자와 로그인한 카카오 계정이 다릅니다. "
+                    "본인 카카오 계정으로 다시 로그인해주세요"
+                ),
+            )
+        if user.kakao_uuid is None and kakao_uuid:
+            user.kakao_uuid = str(kakao_uuid)
         user.kakao_access_token = kakao_access
         user.kakao_refresh_token = kakao_refresh
         user.kakao_token_expires_at = kakao_token_expires_at
@@ -296,6 +372,34 @@ async def kakao_callback(
         )
         db.commit()
         return TokenResponse(access_token=access_token, must_change_password=False)
+
+    if setup_target is not None:
+        if setup_target.kakao_id and setup_target.kakao_id != kakao_id:
+            raise HTTPException(
+                status_code=409,
+                detail="초대 대상자와 로그인한 카카오 계정이 다릅니다",
+            )
+        if setup_target.kakao_uuid:
+            if not kakao_uuid:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "카카오 계정 확인 정보가 부족합니다. "
+                        "동의 항목을 확인한 뒤 다시 시도해주세요"
+                    ),
+                )
+            if setup_target.kakao_uuid != kakao_uuid:
+                log_event(
+                    "warning", "kakao_setup_uuid_mismatch",
+                    setup_user_id=setup_target.id,
+                )
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "초대 대상자와 로그인한 카카오 계정이 다릅니다. "
+                        "본인 카카오 계정으로 다시 로그인해주세요"
+                    ),
+                )
 
     # 카카오 ID 매칭 실패 → 이메일+비번으로 /link-account 호출 필요
     # (이름 기반 자동 매칭은 동명이인 위험으로 제거)
@@ -314,6 +418,11 @@ async def kakao_callback(
         "need_link": True,
         "kakao_name": kakao_name or "",
         "link_session_id": session_id,
+        "setup_context": (
+            generate_setup_context(setup_target.id)
+            if setup_target is not None
+            else None
+        ),
     }
 
 
@@ -321,6 +430,7 @@ class LinkAccountRequest(BaseModel):
     email: EmailStr
     password: str = Field(min_length=1, max_length=200)
     link_session_id: str = Field(min_length=1, max_length=64)
+    setup_context: str | None = Field(default=None, max_length=1000)
 
 
 @router.post("/link-account")
@@ -335,7 +445,7 @@ async def link_account(
     수행한다. 잘못된 비밀번호 시도가 세션을 소모시키는 DoS를 방지하기 위해
     `lock_link_session`이 행 락만 잡고 마킹은 미루는 패턴.
     """
-    from services.kakao import lock_link_session
+    from services.kakao import decode_setup_context, lock_link_session
 
     invalid_session = HTTPException(
         status_code=401,
@@ -357,6 +467,23 @@ async def link_account(
     if not verify_password(body.password, user.password_hash):
         log_event("warning", "link_account_bad_credentials", email=body.email, reason="bad_password")
         raise invalid_credentials
+
+    if body.setup_context:
+        setup_user_id = decode_setup_context(body.setup_context)
+        if setup_user_id is None:
+            raise HTTPException(
+                status_code=401,
+                detail="계정 연결 요청이 만료되었습니다. 카카오 연동을 다시 시도해주세요",
+            )
+        if user.id != setup_user_id:
+            log_event(
+                "warning", "link_account_setup_target_mismatch",
+                setup_user_id=setup_user_id, submitted_user_id=user.id,
+            )
+            raise HTTPException(
+                status_code=409,
+                detail="초대 대상 계정과 입력한 계정이 다릅니다",
+            )
 
     # 이미 다른 카카오 계정이 연결된 사용자
     if user.kakao_id and user.kakao_id != session.kakao_id:
@@ -529,8 +656,11 @@ def setup_password(body: PasswordSetupRequest, db: Session = Depends(get_db)):
         "info", "password_setup_completed",
         user_id=user.id, purpose=token.purpose.value,
     )
+    from services.kakao import generate_setup_context
+
     return {
         "message": "비밀번호가 설정되었습니다",
         "email": user.email,
         "kakao_linked": bool(user.kakao_id),
+        "kakao_setup_context": generate_setup_context(user.id),
     }

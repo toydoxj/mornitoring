@@ -6,6 +6,14 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import apiClient from "@/lib/api/client"
 import { useAuthStore } from "@/stores/authStore"
 
+type KakaoCallbackResponse = {
+  access_token: string
+  need_link?: boolean
+  kakao_name?: string
+  link_session_id?: string
+  setup_context?: string | null
+}
+
 function KakaoCallbackContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -23,18 +31,27 @@ function KakaoCallbackContent() {
       try {
         const params = new URLSearchParams({ code })
         if (state) params.set("state", state)
-        const { data } = await apiClient.get(`/api/auth/kakao/callback?${params.toString()}`)
+        const { data } = await apiClient.get<KakaoCallbackResponse>(
+          `/api/auth/kakao/callback?${params.toString()}`
+        )
 
         // 계정 연결 필요 — 카카오 토큰은 서버 세션에 보관되고,
         // 추측 불가한 session_id만 sessionStorage에 잠시 보관해 URL 노출을 0으로 유지한다.
-        if (data.need_link) {
+        if (data.need_link && data.link_session_id) {
           sessionStorage.setItem("kakao_link_session_id", data.link_session_id)
           sessionStorage.setItem("kakao_link_name", data.kakao_name || "")
+          if (data.setup_context) {
+            sessionStorage.setItem("pending_link_context", data.setup_context)
+          } else {
+            sessionStorage.removeItem("pending_link_context")
+          }
           router.push("/link-account")
           return
         }
 
         // 정상 로그인
+        sessionStorage.removeItem("pending_link_context")
+        sessionStorage.removeItem("pending_link_email")
         localStorage.setItem("access_token", data.access_token)
         await fetchMe()
         router.push("/dashboard")

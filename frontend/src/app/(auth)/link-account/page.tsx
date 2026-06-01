@@ -14,6 +14,7 @@ function LinkAccountContent() {
   const fetchMe = useAuthStore((s) => s.fetchMe)
 
   const [linkSessionId, setLinkSessionId] = useState("")
+  const [setupContext, setSetupContext] = useState("")
   const [kakaoName, setKakaoName] = useState("")
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
@@ -27,6 +28,7 @@ function LinkAccountContent() {
       return
     }
     setLinkSessionId(sessionId)
+    setSetupContext(sessionStorage.getItem("pending_link_context") || "")
     setKakaoName(sessionStorage.getItem("kakao_link_name") || "")
     // 비번 셋팅 직후 카카오 OAuth로 자동 이동한 케이스: 이메일 자동 채움
     const pendingEmail = sessionStorage.getItem("pending_link_email")
@@ -46,10 +48,12 @@ function LinkAccountContent() {
         email,
         password,
         link_session_id: linkSessionId,
+        setup_context: setupContext || undefined,
       })
 
       sessionStorage.removeItem("kakao_link_session_id")
       sessionStorage.removeItem("kakao_link_name")
+      sessionStorage.removeItem("pending_link_context")
       localStorage.setItem("access_token", data.access_token)
       await fetchMe()
       router.push("/dashboard")
@@ -105,7 +109,13 @@ function LinkAccountContent() {
             type="button"
             variant="ghost"
             className="w-full"
-            onClick={() => router.push("/login")}
+            onClick={() => {
+              sessionStorage.removeItem("kakao_link_session_id")
+              sessionStorage.removeItem("kakao_link_name")
+              sessionStorage.removeItem("pending_link_context")
+              sessionStorage.removeItem("pending_link_email")
+              router.push("/login")
+            }}
           >
             다른 방법으로 로그인
           </Button>

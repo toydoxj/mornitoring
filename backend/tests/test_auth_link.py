@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 
 from models.kakao_link_session import KakaoLinkSession
 from models.user import UserRole
+from services.kakao import generate_setup_context
 
 
 def _create_link_session(
@@ -105,3 +106,34 @@ def test_link_account_success_consumes_session_and_links_kakao(
         },
     )
     assert res2.status_code == 401
+
+
+def test_link_account_setup_context_rejects_different_user(
+    client, db_session, make_user
+):
+    """초대 카카오 연동 컨텍스트가 있으면 다른 이메일 계정으로 연결할 수 없다."""
+    target, _ = make_user(
+        UserRole.REVIEWER,
+        email="invite-context-owner@example.com",
+        password="targetpass123",
+    )
+    other, _ = make_user(
+        UserRole.REVIEWER,
+        email="wrong-link-target@example.com",
+        password="otherpass123",
+    )
+    session = _create_link_session(db_session, kakao_id="kakao-context-789")
+    setup_context = generate_setup_context(target.id)
+
+    res = client.post(
+        "/api/auth/link-account",
+        json={
+            "email": other.email,
+            "password": "otherpass123",
+            "link_session_id": session.id,
+            "setup_context": setup_context,
+        },
+    )
+
+    assert res.status_code == 409
+    assert "초대 대상 계정" in res.json()["detail"]

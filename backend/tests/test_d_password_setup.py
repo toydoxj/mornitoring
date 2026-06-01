@@ -18,6 +18,7 @@ from models.password_setup_token import (
 )
 from models.user import UserRole
 from routers.auth import verify_password
+from services.kakao import decode_setup_context
 
 
 def _hash(token: str) -> str:
@@ -147,6 +148,8 @@ def test_password_setup_completes_and_consumes_token(
         json={"token": token, "new_password": "NewSecurePass123"},
     )
     assert res_setup.status_code == 200
+    setup_context = res_setup.json()["kakao_setup_context"]
+    assert decode_setup_context(setup_context) == target.id
 
     # 토큰 소비됨
     db_session.expire_all()

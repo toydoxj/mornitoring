@@ -214,16 +214,16 @@ def kakao_mock():
                     )
                 )
 
-            def user_info_ok(self, *, kakao_id="98765", nickname="카카오테스트"):
+            def user_info_ok(self, *, kakao_id="98765", nickname="카카오테스트", uuid=None):
+                body = {
+                    "id": int(kakao_id),
+                    "properties": {"nickname": nickname},
+                    "kakao_account": {"profile": {"nickname": nickname}},
+                }
+                if uuid is not None:
+                    body["uuid"] = uuid
                 return mock.get(f"{KAKAO_API}/v2/user/me").mock(
-                    return_value=httpx.Response(
-                        200,
-                        json={
-                            "id": int(kakao_id),
-                            "properties": {"nickname": nickname},
-                            "kakao_account": {"profile": {"nickname": nickname}},
-                        },
-                    )
+                    return_value=httpx.Response(200, json=body)
                 )
 
             def friend_send_ok(
