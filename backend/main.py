@@ -152,5 +152,5 @@ app.include_router(checklist.router, prefix="/api/checklist", tags=["상세체�
 
 
 @app.get("/api/health")
-def health_check():
+async def health_check():
     return {"status": "ok"}

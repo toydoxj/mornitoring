@@ -162,43 +162,58 @@ export default function DashboardPage() {
   const canManageReports = !!user && ["team_leader", "chief_secretary"].includes(user.role)
 
   useEffect(() => {
-    // 각 섹션은 독립적이므로 병렬 호출 + 개별 에러 격리로 첫 페인트 속도를 크게 줄인다.
-    // 각 요청 완료 시 loadedCount를 증가시켜 사용자에게 진행률을 시각적으로 보여준다.
+    const runLimited = async (
+      tasks: Array<() => Promise<void>>,
+      limit: number,
+    ) => {
+      let nextIndex = 0
+      const workers = Array.from({ length: Math.min(limit, tasks.length) }, async () => {
+        while (nextIndex < tasks.length) {
+          const task = tasks[nextIndex]
+          nextIndex += 1
+          await task()
+        }
+      })
+      await Promise.all(workers)
+    }
+
+    // 각 섹션은 독립적이므로 개별 에러는 격리하되, DB 커넥션 풀이
+    // 한꺼번에 고갈되지 않도록 동시 요청 수를 제한한다.
     const fetchAll = async () => {
       const trackProgress = <T,>(p: Promise<T>): Promise<T> => {
         return p.finally(() => setLoadedCount((c) => c + 1))
       }
 
-      const tasks: Promise<void>[] = [
-        trackProgress(apiClient.get<MyStats>("/api/buildings/my-stats"))
+      const tasks: Array<() => Promise<void>> = [
+        () => trackProgress(apiClient.get<MyStats>("/api/buildings/my-stats"))
           .then(({ data }) => setMyStats(data))
           .catch((err) => console.error("개인 통계 조회 실패:", err)),
 
-        trackProgress(apiClient.get<{ items: PostItem[] }>("/api/announcements", { params: { size: 5 } }))
+        () => trackProgress(apiClient.get<{ items: PostItem[] }>("/api/announcements", { params: { size: 5 } }))
           .then(({ data }) => setAnnouncements(data.items))
           .catch((err) => console.error("공지사항 조회 실패:", err)),
 
-        trackProgress(apiClient.get<{ items: PostItem[] }>("/api/discussions", { params: { size: 5 } }))
+        () => trackProgress(apiClient.get<{ items: PostItem[] }>("/api/discussions", { params: { size: 5 } }))
           .then(({ data }) => setDiscussions(data.items))
           .catch((err) => console.error("토론방 조회 실패:", err)),
 
-        trackProgress(apiClient.get<{ items: NotificationItem[] }>("/api/notifications/my", { params: { size: 5, page: 1 } }))
+        () => trackProgress(apiClient.get<{ items: NotificationItem[] }>("/api/notifications/my", { params: { size: 5, page: 1 } }))
           .then(({ data }) => setNotifications(data.items))
           .catch((err) => console.error("내 알림 조회 실패:", err)),
 
-        trackProgress(apiClient.get<{ items: MyInquiryItem[] }>("/api/reviews/my-inquiries", { params: { size: 5 } }))
+        () => trackProgress(apiClient.get<{ items: MyInquiryItem[] }>("/api/reviews/my-inquiries", { params: { size: 5 } }))
           .then(({ data }) => setMyInquiries(data.items))
           .catch((err) => console.error("내 문의사항 조회 실패:", err)),
       ]
 
       if (isAdmin) {
         tasks.push(
-          trackProgress(apiClient.get<DashboardStats>("/api/buildings/stats"))
+          () => trackProgress(apiClient.get<DashboardStats>("/api/buildings/stats"))
             .then(({ data }) => setStats(data))
             .catch((err) => console.error("전체 통계 조회 실패:", err))
         )
         tasks.push(
-          trackProgress(apiClient.get<ReviewerSchedule[]>("/api/buildings/reviewer-schedule"))
+          () => trackProgress(apiClient.get<ReviewerSchedule[]>("/api/buildings/reviewer-schedule"))
             .then(({ data }) => setReviewerSchedule(data))
             .catch((err) => console.error("검토위원 일정 조회 실패:", err))
         )
@@ -206,7 +221,7 @@ export default function DashboardPage() {
 
       setTotalTasks(tasks.length)
       setLoadedCount(0)
-      await Promise.all(tasks)
+      await runLimited(tasks, 2)
       setIsLoading(false)
     }
     fetchAll()
@@ -927,4 +942,3 @@ function FlowStageCard({
     </div>
   )
 }
-

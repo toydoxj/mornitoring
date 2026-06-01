@@ -47,6 +47,12 @@ class Settings(BaseSettings):
     # 여러 관리자가 같은 대시보드를 동시에 열 때 반복 집계 쿼리를 줄인다.
     stats_cache_ttl_seconds: int = 5
 
+    # SQLAlchemy DB 커넥션 풀. 트래픽이 몰릴 때 오래 대기해 전체 worker가
+    # 막히지 않도록 timeout은 짧게 둔다.
+    db_pool_size: int = 5
+    db_max_overflow: int = 5
+    db_pool_timeout_seconds: int = 5
+
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     @field_validator("cors_origins", mode="before")
