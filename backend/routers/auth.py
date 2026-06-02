@@ -413,6 +413,55 @@ async def kakao_callback(
                         "본인 카카오 계정으로 다시 로그인해주세요"
                     ),
                 )
+        if setup_target.kakao_uuid and setup_target.kakao_uuid == kakao_uuid:
+            other = (
+                db.query(User)
+                .filter(User.kakao_id == kakao_id, User.id != setup_target.id)
+                .first()
+            )
+            if other is not None:
+                raise HTTPException(
+                    status_code=409,
+                    detail="이미 다른 사용자에게 연결된 카카오 계정입니다",
+                )
+
+            setup_target.kakao_id = kakao_id
+            setup_target.kakao_login_uuid = kakao_uuid
+            setup_target.kakao_access_token = kakao_access
+            setup_target.kakao_refresh_token = kakao_refresh
+            setup_target.kakao_token_expires_at = kakao_token_expires_at
+            try:
+                db.commit()
+            except IntegrityError:
+                db.rollback()
+                raise HTTPException(
+                    status_code=409,
+                    detail="이미 다른 사용자에게 연결된 카카오 계정입니다",
+                )
+
+            from services.kakao import diagnose_and_cache_scopes
+            await diagnose_and_cache_scopes(setup_target, kakao_access, db)
+            db.refresh(setup_target)
+            access_token = create_access_token(
+                {
+                    "sub": str(setup_target.id),
+                    "role": setup_target.role.value,
+                }
+            )
+            _safe_log_action(
+                db,
+                user_id=setup_target.id,
+                action="login",
+                target_type="user",
+                target_id=setup_target.id,
+                after_data={"provider": "kakao_setup_link"},
+                ip_address=_client_ip(request),
+            )
+            db.commit()
+            return TokenResponse(
+                access_token=access_token,
+                must_change_password=False,
+            )
 
     # 카카오 ID 매칭 실패 → 이메일+비번으로 /link-account 호출 필요
     # (이름 기반 자동 매칭은 동명이인 위험으로 제거)

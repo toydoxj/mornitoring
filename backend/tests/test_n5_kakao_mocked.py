@@ -132,6 +132,35 @@ def test_kakao_callback_setup_context_rejects_uuid_mismatch(
     assert "카카오 계정이 다릅니다" in res.json()["detail"]
 
 
+def test_kakao_callback_setup_context_auto_links_matching_uuid(
+    client, db_session, kakao_mock, make_user
+):
+    """초대 대상 uuid와 로그인 uuid가 일치하면 이메일/비밀번호 연결 화면 없이 연결한다."""
+    target, _ = make_user(
+        UserRole.REVIEWER,
+        email="setup-auto-link@example.com",
+        kakao_uuid="target-uuid",
+    )
+
+    kakao_mock.token_ok(access_token="auto_access", refresh_token="auto_refresh")
+    kakao_mock.user_info_ok(kakao_id="44444", uuid="target-uuid")
+
+    state = generate_oauth_state(setup_user_id=target.id)
+    res = client.get(f"/api/auth/kakao/callback?code=auth_code_x&state={state}")
+
+    assert res.status_code == 200
+    body = res.json()
+    assert body["access_token"]
+    assert body.get("need_link") is None or body.get("need_link") is False
+
+    db_session.expire_all()
+    from models.user import User as UserModel
+    refreshed = db_session.query(UserModel).filter(UserModel.id == target.id).first()
+    assert refreshed.kakao_id == "44444"
+    assert refreshed.kakao_login_uuid == "target-uuid"
+    assert refreshed.kakao_access_token == "auto_access"
+
+
 # ===== 2. OAuth 콜백 — need_link =====
 
 def test_kakao_callback_unknown_kakao_id_returns_link_session(
