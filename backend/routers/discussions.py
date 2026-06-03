@@ -144,6 +144,10 @@ class CommentCreate(BaseModel):
     content: str
 
 
+class CommentUpdate(BaseModel):
+    content: str
+
+
 # ---- 목록/상세 ----
 
 @router.get("", response_model=DiscussionListResponse)
@@ -335,6 +339,40 @@ def create_comment(
     db.commit()
     db.refresh(c)
     return _comment_to_response(c, [])
+
+
+@router.patch("/comments/{comment_id}", response_model=CommentResponse)
+def update_comment(
+    comment_id: int,
+    body: CommentUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """댓글 수정 (본인 또는 팀장/총괄간사)."""
+    content = (body.content or "").strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="내용을 입력해주세요")
+
+    c = db.query(DiscussionComment).filter(DiscussionComment.id == comment_id).first()
+    if not c:
+        raise HTTPException(status_code=404, detail="댓글을 찾을 수 없습니다")
+
+    is_owner = c.author_id == current_user.id
+    is_admin = current_user.role in (UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY)
+    if not is_owner and not is_admin:
+        raise HTTPException(status_code=403, detail="수정 권한이 없습니다")
+
+    c.content = content
+    db.commit()
+    db.refresh(c)
+
+    attachments = (
+        db.query(DiscussionCommentAttachment)
+        .filter(DiscussionCommentAttachment.comment_id == c.id)
+        .order_by(DiscussionCommentAttachment.created_at)
+        .all()
+    )
+    return _comment_to_response(c, attachments)
 
 
 @router.delete("/comments/{comment_id}", status_code=204)

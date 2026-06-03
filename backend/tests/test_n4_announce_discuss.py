@@ -4,7 +4,7 @@
 - announcements: 글 CRUD는 SECRETARY 이상, 댓글은 모든 인증 사용자, 댓글 삭제는 본인/팀장/총괄간사
 - discussions: 모든 인증 사용자 자유 작성/댓글/첨부, 본인 글/댓글만 수정·삭제(관리자는 모두 가능)
 
-코드 변경 없음. 회귀 테스트로 정책을 고정한다.
+이 파일은 게시판 권한 정책을 회귀 테스트로 고정한다.
 """
 
 from models.user import UserRole
@@ -148,6 +148,78 @@ def test_reviewer_can_edit_own_discussion(client, make_reviewer):
     )
     assert res.status_code == 200
     assert res.json()["title"] == "수정"
+
+
+def test_reviewer_can_edit_own_discussion_comment(client, make_reviewer):
+    _, _, headers = make_reviewer()
+    d = client.post(
+        "/api/discussions",
+        headers=headers,
+        json={"title": "내 글", "content": "본문"},
+    ).json()
+    comment = client.post(
+        f"/api/discussions/{d['id']}/comments",
+        headers=headers,
+        json={"content": "댓글"},
+    ).json()
+
+    res = client.patch(
+        f"/api/discussions/comments/{comment['id']}",
+        headers=headers,
+        json={"content": "수정한 댓글"},
+    )
+
+    assert res.status_code == 200
+    assert res.json()["content"] == "수정한 댓글"
+
+
+def test_reviewer_cannot_edit_others_discussion_comment(client, make_reviewer):
+    _, _, headers_a = make_reviewer()
+    _, _, headers_b = make_reviewer()
+    d = client.post(
+        "/api/discussions",
+        headers=headers_a,
+        json={"title": "A 글", "content": "본문"},
+    ).json()
+    comment = client.post(
+        f"/api/discussions/{d['id']}/comments",
+        headers=headers_a,
+        json={"content": "A의 댓글"},
+    ).json()
+
+    res = client.patch(
+        f"/api/discussions/comments/{comment['id']}",
+        headers=headers_b,
+        json={"content": "변경 시도"},
+    )
+
+    assert res.status_code == 403
+
+
+def test_team_leader_can_edit_any_discussion_comment(
+    client, make_reviewer, make_user
+):
+    _, _, headers_r = make_reviewer()
+    _, headers_lead = make_user(UserRole.TEAM_LEADER)
+    d = client.post(
+        "/api/discussions",
+        headers=headers_r,
+        json={"title": "REVIEWER 글", "content": "본문"},
+    ).json()
+    comment = client.post(
+        f"/api/discussions/{d['id']}/comments",
+        headers=headers_r,
+        json={"content": "검토위원 댓글"},
+    ).json()
+
+    res = client.patch(
+        f"/api/discussions/comments/{comment['id']}",
+        headers=headers_lead,
+        json={"content": "관리자 수정 댓글"},
+    )
+
+    assert res.status_code == 200
+    assert res.json()["content"] == "관리자 수정 댓글"
 
 
 def test_reviewer_cannot_delete_others_discussion(client, make_reviewer):

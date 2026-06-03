@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react"
 import { useParams, useRouter } from "next/navigation"
-import { Paperclip } from "lucide-react"
+import { Paperclip, Pencil, Trash2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -72,6 +72,9 @@ export default function DiscussionDetailPage() {
   const [isLoading, setIsLoading] = useState(true)
   const [newComment, setNewComment] = useState("")
   const [submittingComment, setSubmittingComment] = useState(false)
+  const [editingCommentId, setEditingCommentId] = useState<number | null>(null)
+  const [editingCommentContent, setEditingCommentContent] = useState("")
+  const [submittingCommentEdit, setSubmittingCommentEdit] = useState(false)
 
   const [editOpen, setEditOpen] = useState(false)
   const [editTitle, setEditTitle] = useState("")
@@ -82,7 +85,7 @@ export default function DiscussionDetailPage() {
   const [uploadingFile, setUploadingFile] = useState(false)
 
   const isOwner = !!user && !!d && user.id === d.author_id
-  const isAdmin = user && ["team_leader", "chief_secretary"].includes(user.role)
+  const isAdmin = !!user && ["team_leader", "chief_secretary"].includes(user.role)
   const canEdit = isOwner || isAdmin
 
   const fetchData = async () => {
@@ -126,12 +129,45 @@ export default function DiscussionDetailPage() {
     if (!confirm("댓글을 삭제하시겠습니까?")) return
     try {
       await apiClient.delete(`/api/discussions/comments/${commentId}`)
+      if (editingCommentId === commentId) {
+        setEditingCommentId(null)
+        setEditingCommentContent("")
+      }
       fetchData()
     } catch (err) {
       const msg =
         (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
         ?? "삭제 실패"
       alert(msg)
+    }
+  }
+
+  const openCommentEdit = (comment: Comment) => {
+    setEditingCommentId(comment.id)
+    setEditingCommentContent(comment.content)
+  }
+
+  const cancelCommentEdit = () => {
+    setEditingCommentId(null)
+    setEditingCommentContent("")
+  }
+
+  const handleSaveCommentEdit = async () => {
+    if (!editingCommentId || !editingCommentContent.trim()) return
+    setSubmittingCommentEdit(true)
+    try {
+      await apiClient.patch(`/api/discussions/comments/${editingCommentId}`, {
+        content: editingCommentContent,
+      })
+      cancelCommentEdit()
+      fetchData()
+    } catch (err) {
+      const msg =
+        (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
+        ?? "수정 실패"
+      alert(msg)
+    } finally {
+      setSubmittingCommentEdit(false)
     }
   }
 
@@ -349,6 +385,7 @@ export default function DiscussionDetailPage() {
             ) : (
               d.comments.map((c) => {
                 const isCommentOwner = user?.id === c.author_id
+                const isEditingComment = editingCommentId === c.id
                 const canUploadToComment = !!user  // 로그인 사용자 전원
                 return (
                   <div key={c.id} className="rounded-md border p-3">
@@ -360,16 +397,62 @@ export default function DiscussionDetailPage() {
                         </span>
                       </div>
                       {(isCommentOwner || isAdmin) && (
-                        <Button
-                          size="icon-xs"
-                          variant="ghost"
-                          onClick={() => handleDeleteComment(c.id)}
-                        >
-                          ×
-                        </Button>
+                        <div className="flex shrink-0 gap-1">
+                          {!isEditingComment && (
+                            <Button
+                              size="icon-xs"
+                              variant="ghost"
+                              onClick={() => openCommentEdit(c)}
+                              disabled={submittingCommentEdit}
+                              aria-label="댓글 수정"
+                            >
+                              <Pencil />
+                            </Button>
+                          )}
+                          <Button
+                            size="icon-xs"
+                            variant="ghost"
+                            onClick={() => handleDeleteComment(c.id)}
+                            disabled={submittingCommentEdit}
+                            aria-label="댓글 삭제"
+                          >
+                            <Trash2 />
+                          </Button>
+                        </div>
                       )}
                     </div>
-                    <p className="mt-1 whitespace-pre-wrap break-words text-sm">{c.content}</p>
+                    {isEditingComment ? (
+                      <div className="mt-2 space-y-2">
+                        <textarea
+                          className="w-full min-h-[80px] rounded-md border px-3 py-2 text-sm"
+                          value={editingCommentContent}
+                          onChange={(e) => setEditingCommentContent(e.target.value)}
+                          disabled={submittingCommentEdit}
+                          autoFocus
+                        />
+                        <div className="flex justify-end gap-2">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={cancelCommentEdit}
+                            disabled={submittingCommentEdit}
+                          >
+                            취소
+                          </Button>
+                          <Button
+                            size="sm"
+                            onClick={handleSaveCommentEdit}
+                            disabled={!editingCommentContent.trim()}
+                            loading={submittingCommentEdit}
+                            loadingText="저장 중..."
+                          >
+                            저장
+                          </Button>
+                        </div>
+                      </div>
+                    ) : (
+                      <p className="mt-1 whitespace-pre-wrap break-words text-sm">{c.content}</p>
+                    )}
 
                     {(c.attachments?.length ?? 0) > 0 && (
                       <div className="mt-2 space-y-2">
