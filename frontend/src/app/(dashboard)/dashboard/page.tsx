@@ -12,6 +12,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
+import { Skeleton } from "@/components/ui/skeleton"
 import apiClient from "@/lib/api/client"
 import { useAuthStore } from "@/stores/authStore"
 
@@ -147,21 +148,23 @@ export default function DashboardPage() {
   const user = useAuthStore((s) => s.user)
   const [stats, setStats] = useState<DashboardStats | null>(null)
   const [myStats, setMyStats] = useState<MyStats | null>(null)
-  const [announcements, setAnnouncements] = useState<PostItem[]>([])
-  const [discussions, setDiscussions] = useState<PostItem[]>([])
-  const [notifications, setNotifications] = useState<NotificationItem[]>([])
-  const [myInquiries, setMyInquiries] = useState<MyInquiryItem[]>([])
+  const [announcements, setAnnouncements] = useState<PostItem[] | null>(null)
+  const [discussions, setDiscussions] = useState<PostItem[] | null>(null)
+  const [notifications, setNotifications] = useState<NotificationItem[] | null>(null)
+  const [myInquiries, setMyInquiries] = useState<MyInquiryItem[] | null>(null)
   const [reviewerSchedule, setReviewerSchedule] = useState<ReviewerSchedule[]>([])
   const [isLoading, setIsLoading] = useState(true)
   // 병렬 호출 진행률 표시용
   const [loadedCount, setLoadedCount] = useState(0)
   const [totalTasks, setTotalTasks] = useState(0)
 
-  const isAdmin = user && ["team_leader", "chief_secretary", "secretary"].includes(user.role)
+  const isAdmin = !!user && ["team_leader", "chief_secretary", "secretary"].includes(user.role)
   // 검토서 관리 페이지 이동 권한: 팀장/총괄간사만 (간사는 카드 비클릭)
   const canManageReports = !!user && ["team_leader", "chief_secretary"].includes(user.role)
 
   useEffect(() => {
+    let isMounted = true
+
     const runLimited = async (
       tasks: Array<() => Promise<void>>,
       limit: number,
@@ -181,74 +184,93 @@ export default function DashboardPage() {
     // 한꺼번에 고갈되지 않도록 동시 요청 수를 제한한다.
     const fetchAll = async () => {
       const trackProgress = <T,>(p: Promise<T>): Promise<T> => {
-        return p.finally(() => setLoadedCount((c) => c + 1))
+        return p.finally(() => {
+          if (isMounted) {
+            setLoadedCount((c) => c + 1)
+          }
+        })
       }
 
       const tasks: Array<() => Promise<void>> = [
         () => trackProgress(apiClient.get<MyStats>("/api/buildings/my-stats"))
-          .then(({ data }) => setMyStats(data))
+          .then(({ data }) => {
+            if (isMounted) setMyStats(data)
+          })
           .catch((err) => console.error("개인 통계 조회 실패:", err)),
-
-        () => trackProgress(apiClient.get<{ items: PostItem[] }>("/api/announcements", { params: { size: 5 } }))
-          .then(({ data }) => setAnnouncements(data.items))
-          .catch((err) => console.error("공지사항 조회 실패:", err)),
-
-        () => trackProgress(apiClient.get<{ items: PostItem[] }>("/api/discussions", { params: { size: 5 } }))
-          .then(({ data }) => setDiscussions(data.items))
-          .catch((err) => console.error("토론방 조회 실패:", err)),
-
-        () => trackProgress(apiClient.get<{ items: NotificationItem[] }>("/api/notifications/my", { params: { size: 5, page: 1 } }))
-          .then(({ data }) => setNotifications(data.items))
-          .catch((err) => console.error("내 알림 조회 실패:", err)),
-
-        () => trackProgress(apiClient.get<{ items: MyInquiryItem[] }>("/api/reviews/my-inquiries", { params: { size: 5 } }))
-          .then(({ data }) => setMyInquiries(data.items))
-          .catch((err) => console.error("내 문의사항 조회 실패:", err)),
       ]
 
       if (isAdmin) {
         tasks.push(
           () => trackProgress(apiClient.get<DashboardStats>("/api/buildings/stats"))
-            .then(({ data }) => setStats(data))
+            .then(({ data }) => {
+              if (isMounted) setStats(data)
+            })
             .catch((err) => console.error("전체 통계 조회 실패:", err))
         )
         tasks.push(
           () => trackProgress(apiClient.get<ReviewerSchedule[]>("/api/buildings/reviewer-schedule"))
-            .then(({ data }) => setReviewerSchedule(data))
+            .then(({ data }) => {
+              if (isMounted) setReviewerSchedule(data)
+            })
             .catch((err) => console.error("검토위원 일정 조회 실패:", err))
         )
       }
 
-      setTotalTasks(tasks.length)
-      setLoadedCount(0)
-      await runLimited(tasks, 2)
-      setIsLoading(false)
+      tasks.push(
+        () => trackProgress(apiClient.get<{ items: PostItem[] }>("/api/announcements", { params: { size: 5 } }))
+          .then(({ data }) => {
+            if (isMounted) setAnnouncements(data.items)
+          })
+          .catch((err) => {
+            console.error("공지사항 조회 실패:", err)
+            if (isMounted) setAnnouncements([])
+          }),
+        () => trackProgress(apiClient.get<{ items: PostItem[] }>("/api/discussions", { params: { size: 5 } }))
+          .then(({ data }) => {
+            if (isMounted) setDiscussions(data.items)
+          })
+          .catch((err) => {
+            console.error("토론방 조회 실패:", err)
+            if (isMounted) setDiscussions([])
+          }),
+        () => trackProgress(apiClient.get<{ items: NotificationItem[] }>("/api/notifications/my", { params: { size: 5, page: 1 } }))
+          .then(({ data }) => {
+            if (isMounted) setNotifications(data.items)
+          })
+          .catch((err) => {
+            console.error("내 알림 조회 실패:", err)
+            if (isMounted) setNotifications([])
+          }),
+        () => trackProgress(apiClient.get<{ items: MyInquiryItem[] }>("/api/reviews/my-inquiries", { params: { size: 5 } }))
+          .then(({ data }) => {
+            if (isMounted) setMyInquiries(data.items)
+          })
+          .catch((err) => {
+            console.error("내 문의사항 조회 실패:", err)
+            if (isMounted) setMyInquiries([])
+          }),
+      )
+
+      if (isMounted) {
+        setTotalTasks(tasks.length)
+        setLoadedCount(0)
+        setIsLoading(true)
+      }
+      await runLimited(tasks, 3)
+      if (isMounted) {
+        setIsLoading(false)
+      }
     }
     fetchAll()
+
+    return () => {
+      isMounted = false
+    }
   }, [isAdmin])
 
-  if (isLoading) {
-    const percent = totalTasks > 0
-      ? Math.min(100, Math.round((loadedCount / totalTasks) * 100))
-      : 0
-    return (
-      <div className="flex flex-col items-center justify-center gap-3 py-20">
-        <div className="text-sm text-muted-foreground">
-          대시보드 불러오는 중... ({loadedCount}/{totalTasks || "-"})
-        </div>
-        <div className="h-2 w-64 overflow-hidden rounded-full bg-muted">
-          <div
-            className="h-full bg-primary transition-all duration-300 ease-out"
-            style={{ width: `${percent}%` }}
-            role="progressbar"
-            aria-valuenow={percent}
-            aria-valuemin={0}
-            aria-valuemax={100}
-          />
-        </div>
-      </div>
-    )
-  }
+  const loadingPercent = totalTasks > 0
+    ? Math.min(100, Math.round((loadedCount / totalTasks) * 100))
+    : 0
 
   return (
     <div className="space-y-6">
@@ -258,6 +280,25 @@ export default function DashboardPage() {
           {user?.name}님, 환영합니다
         </p>
       </div>
+
+      {isLoading && (
+        <div className="rounded-md border bg-white px-4 py-3">
+          <div className="mb-2 flex items-center justify-between text-xs text-muted-foreground">
+            <span>대시보드 불러오는 중</span>
+            <span>{loadedCount}/{totalTasks || "-"}</span>
+          </div>
+          <div className="h-2 overflow-hidden rounded-full bg-muted">
+            <div
+              className="h-full bg-primary transition-all duration-300 ease-out"
+              style={{ width: `${loadingPercent}%` }}
+              role="progressbar"
+              aria-valuenow={loadingPercent}
+              aria-valuemin={0}
+              aria-valuemax={100}
+            />
+          </div>
+        </div>
+      )}
 
       {/* 단계별 집계 / 현황 — 한 줄 2박스 (xl 이상), 그 이하는 세로 */}
       {isAdmin && stats && (
@@ -406,7 +447,9 @@ export default function DashboardPage() {
             </button>
           </CardHeader>
           <CardContent className="space-y-2">
-            {announcements.length === 0 ? (
+            {announcements === null ? (
+              <ListSkeleton />
+            ) : announcements.length === 0 ? (
               <p className="text-sm text-muted-foreground py-2">등록된 공지가 없습니다.</p>
             ) : (
               announcements.map((a) => (
@@ -438,7 +481,9 @@ export default function DashboardPage() {
             <CardTitle className="text-base">내가 받은 카톡 알림</CardTitle>
           </CardHeader>
           <CardContent className="space-y-2">
-            {notifications.length === 0 ? (
+            {notifications === null ? (
+              <ListSkeleton />
+            ) : notifications.length === 0 ? (
               <p className="text-sm text-muted-foreground py-2">받은 알림이 없습니다.</p>
             ) : (
               notifications.map((n) => (
@@ -478,7 +523,9 @@ export default function DashboardPage() {
             </button>
           </CardHeader>
           <CardContent className="space-y-2">
-            {discussions.length === 0 ? (
+            {discussions === null ? (
+              <ListSkeleton />
+            ) : discussions.length === 0 ? (
               <p className="text-sm text-muted-foreground py-2">등록된 글이 없습니다.</p>
             ) : (
               discussions.map((d) => (
@@ -510,7 +557,9 @@ export default function DashboardPage() {
             <CardTitle className="text-base">나의 문의사항</CardTitle>
           </CardHeader>
           <CardContent className="space-y-2">
-            {myInquiries.length === 0 ? (
+            {myInquiries === null ? (
+              <ListSkeleton />
+            ) : myInquiries.length === 0 ? (
               <p className="text-sm text-muted-foreground py-2">작성한 문의가 없습니다.</p>
             ) : (
               myInquiries.map((q) => (
@@ -609,6 +658,19 @@ export default function DashboardPage() {
         </Card>
       )}
 
+    </div>
+  )
+}
+
+function ListSkeleton({ rows = 3 }: { rows?: number }) {
+  return (
+    <div className="space-y-2" aria-label="목록 로딩 중">
+      {Array.from({ length: rows }, (_, index) => (
+        <div key={index} className="rounded-md border p-2">
+          <Skeleton className="h-4 w-3/5" />
+          <Skeleton className="mt-2 h-3 w-2/5" />
+        </div>
+      ))}
     </div>
   )
 }
