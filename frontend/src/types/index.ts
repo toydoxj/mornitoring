@@ -1,5 +1,10 @@
 // 사용자 역할
-export type UserRole = "team_leader" | "chief_secretary" | "secretary" | "reviewer"
+export type UserRole =
+  | "team_leader"
+  | "chief_secretary"
+  | "secretary"
+  | "manager"
+  | "reviewer"
 export type KakaoIdentityStatus = "matched" | "mismatch" | "unknown" | "unmatched" | "not_linked"
 
 // 사용자
@@ -173,6 +178,7 @@ export const ROLE_LABELS: Record<UserRole, string> = {
   team_leader: "팀장",
   chief_secretary: "총괄간사",
   secretary: "간사",
+  manager: "관리원",
   reviewer: "검토위원",
 }
 

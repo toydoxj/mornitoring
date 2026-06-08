@@ -130,7 +130,7 @@ export default function StatisticsPage() {
   const [isLoading, setIsLoading] = useState(true)
 
   const isAdmin =
-    !!user && ["team_leader", "chief_secretary", "secretary"].includes(user.role)
+    !!user && ["team_leader", "chief_secretary", "secretary", "manager"].includes(user.role)
 
   // 검토위원은 접근 불가 — 사용자 정보 로드 후 비인가 접근 시 대시보드로 이동
   useEffect(() => {

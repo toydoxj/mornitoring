@@ -158,9 +158,11 @@ export default function DashboardPage() {
   const [loadedCount, setLoadedCount] = useState(0)
   const [totalTasks, setTotalTasks] = useState(0)
 
-  const isAdmin = !!user && ["team_leader", "chief_secretary", "secretary"].includes(user.role)
-  // 검토서 관리 페이지 이동 권한: 팀장/총괄간사만 (간사는 카드 비클릭)
-  const canManageReports = !!user && ["team_leader", "chief_secretary"].includes(user.role)
+  const isAdmin =
+    !!user && ["team_leader", "chief_secretary", "secretary", "manager"].includes(user.role)
+  // 검토서 관리 페이지 이동 권한: 팀장/총괄간사/관리원만 (간사는 카드 비클릭)
+  const canManageReports =
+    !!user && ["team_leader", "chief_secretary", "manager"].includes(user.role)
 
   useEffect(() => {
     let isMounted = true

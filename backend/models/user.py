@@ -13,6 +13,7 @@ class UserRole(str, enum.Enum):
     TEAM_LEADER = "team_leader"          # 모니터링 팀장
     CHIEF_SECRETARY = "chief_secretary"  # 총괄간사
     SECRETARY = "secretary"              # 간사
+    MANAGER = "manager"                  # 관리원
     REVIEWER = "reviewer"                # 검토위원
 
 

@@ -25,7 +25,7 @@ import { useAuthStore } from "@/stores/authStore"
 import type { KakaoIdentityStatus, KakaoTokenStatus } from "@/types"
 import { KAKAO_IDENTITY_STATUS_LABELS, KAKAO_TOKEN_STATUS_LABELS } from "@/types"
 
-type UserRole = "team_leader" | "chief_secretary" | "secretary" | "reviewer"
+type UserRole = "team_leader" | "chief_secretary" | "secretary" | "manager" | "reviewer"
 
 interface UserStatus {
   user_id: number
@@ -61,6 +61,7 @@ const ROLE_LABELS: Record<UserRole, string> = {
   team_leader: "팀장",
   chief_secretary: "총괄간사",
   secretary: "간사",
+  manager: "관리원",
   reviewer: "검토위원",
 }
 

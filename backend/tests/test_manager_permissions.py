@@ -1,0 +1,183 @@
+from models.announcement import Announcement
+from models.checklist import ChecklistOpinion
+from models.discussion import Discussion
+from models.inquiry import Inquiry
+from models.review_stage import PhaseType, ReviewStage
+from models.user import UserRole
+
+
+def test_manager_can_read_limited_user_directory(
+    client, db_session, make_user, make_reviewer
+):
+    _, headers = make_user(UserRole.MANAGER, name="관리원")
+    reviewer_user, reviewer, _ = make_reviewer(group_no=4)
+    reviewer_user.phone = "010-1234-5678"
+    db_session.commit()
+
+    res = client.get("/api/users", headers=headers, params={"size": 100})
+
+    assert res.status_code == 200
+    item = next(u for u in res.json()["items"] if u["id"] == reviewer_user.id)
+    assert item["name"] == reviewer_user.name
+    assert item["email"] == reviewer_user.email
+    assert item["role"] == "reviewer"
+    assert item["phone"] == "010-1234-5678"
+    assert item["group_no"] == reviewer.group_no
+    assert item["setup_status"] is None
+    assert item["kakao_token_status"] is None
+
+
+def test_manager_cannot_mutate_users(client, make_user):
+    _, headers = make_user(UserRole.MANAGER)
+    target, _ = make_user(UserRole.REVIEWER)
+
+    create_res = client.post(
+        "/api/users",
+        headers=headers,
+        json={
+            "name": "신규관리대상",
+            "email": "new-manager-target@example.com",
+            "role": "reviewer",
+        },
+    )
+    update_res = client.patch(
+        f"/api/users/{target.id}",
+        headers=headers,
+        json={"name": "변경불가"},
+    )
+    delete_res = client.delete(f"/api/users/{target.id}", headers=headers)
+
+    assert create_res.status_code == 403
+    assert update_res.status_code == 403
+    assert delete_res.status_code == 403
+
+
+def test_manager_can_read_core_pages_and_review_files(
+    client, db_session, make_user, make_building
+):
+    manager, headers = make_user(UserRole.MANAGER)
+    building = make_building(mgmt_no="MGR-READ-001")
+    announcement = Announcement(
+        author_id=manager.id,
+        author_name=manager.name,
+        title="관리원 공지 조회",
+        content="공지 내용",
+    )
+    discussion = Discussion(
+        author_id=manager.id,
+        author_name=manager.name,
+        title="관리원 토론 조회",
+        content="토론 내용",
+    )
+    opinion = ChecklistOpinion(
+        item_key="manager-checklist",
+        author_id=manager.id,
+        author_name=manager.name,
+        content="체크리스트 의견",
+    )
+    db_session.add_all([announcement, discussion, opinion])
+    db_session.commit()
+    db_session.refresh(announcement)
+    db_session.refresh(discussion)
+
+    assert client.get("/api/buildings/stats", headers=headers).status_code == 200
+    assert client.get("/api/buildings", headers=headers).status_code == 200
+    assert client.get(f"/api/buildings/{building.id}", headers=headers).status_code == 200
+    assert client.get("/api/buildings/reviewer-names", headers=headers).status_code == 200
+    assert client.get("/api/ledger/export", headers=headers).status_code == 200
+    assert client.get("/api/announcements", headers=headers).status_code == 200
+    assert client.get(
+        f"/api/announcements/{announcement.id}",
+        headers=headers,
+    ).status_code == 200
+    assert client.post(
+        "/api/announcements",
+        headers=headers,
+        json={"title": "관리원 작성 불가", "content": "내용"},
+    ).status_code == 403
+    assert client.get("/api/discussions", headers=headers).status_code == 200
+    assert client.get(
+        f"/api/discussions/{discussion.id}",
+        headers=headers,
+    ).status_code == 200
+    assert client.get(
+        "/api/checklist/opinions/summary",
+        headers=headers,
+    ).status_code == 200
+    assert client.get(
+        "/api/checklist/items/manager-checklist/opinions",
+        headers=headers,
+    ).status_code == 200
+    assert client.get("/api/reviews/files", headers=headers).status_code == 200
+    assert client.delete(
+        "/api/reviews/files",
+        headers=headers,
+        params={"key": "reviews/test.xlsm"},
+    ).status_code == 403
+
+
+def test_manager_can_read_inquiries_but_not_reply_or_delete(
+    client, db_session, make_user, make_building
+):
+    _, headers = make_user(UserRole.MANAGER)
+    submitter, _ = make_user(UserRole.REVIEWER, name="문의자")
+    building = make_building(mgmt_no="MGR-INQ-001")
+    inquiry = Inquiry(
+        building_id=building.id,
+        mgmt_no=building.mgmt_no,
+        phase="preliminary",
+        submitter_id=submitter.id,
+        submitter_name=submitter.name,
+        content="확인 요청",
+    )
+    db_session.add(inquiry)
+    db_session.commit()
+    db_session.refresh(inquiry)
+
+    list_res = client.get("/api/reviews/inquiries", headers=headers)
+    reply_res = client.patch(
+        f"/api/reviews/inquiry/{inquiry.id}",
+        headers=headers,
+        json={"reply": "관리원 답변 불가", "status": "completed"},
+    )
+    delete_res = client.delete(f"/api/reviews/inquiry/{inquiry.id}", headers=headers)
+
+    assert list_res.status_code == 200
+    assert list_res.json()["total"] == 1
+    assert reply_res.status_code == 403
+    assert delete_res.status_code == 403
+
+
+def test_manager_can_read_inappropriate_review_but_not_change_it(
+    client, db_session, make_user, make_building
+):
+    _, headers = make_user(UserRole.MANAGER)
+    building = make_building(mgmt_no="MGR-BAD-001")
+    stage = ReviewStage(
+        building_id=building.id,
+        phase=PhaseType.PRELIMINARY,
+        phase_order=0,
+        inappropriate_review_needed=True,
+    )
+    db_session.add(stage)
+    db_session.commit()
+    db_session.refresh(stage)
+
+    list_res = client.get("/api/reviews/inappropriate", headers=headers)
+    notes_res = client.get(f"/api/reviews/inappropriate/{stage.id}/notes", headers=headers)
+    decision_res = client.patch(
+        f"/api/reviews/inappropriate/{stage.id}",
+        headers=headers,
+        json={"decision": "confirmed_serious"},
+    )
+    note_create_res = client.post(
+        f"/api/reviews/inappropriate/{stage.id}/notes",
+        headers=headers,
+        json={"content": "관리원 의견 등록 불가"},
+    )
+
+    assert list_res.status_code == 200
+    assert list_res.json()["total"] == 1
+    assert notes_res.status_code == 200
+    assert decision_res.status_code == 403
+    assert note_create_res.status_code == 403

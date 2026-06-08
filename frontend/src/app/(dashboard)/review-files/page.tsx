@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -12,6 +12,7 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import apiClient from "@/lib/api/client"
+import { useAuthStore } from "@/stores/authStore"
 
 interface ReviewFile {
   key: string
@@ -23,11 +24,14 @@ interface ReviewFile {
 }
 
 export default function ReviewFilesPage() {
+  const user = useAuthStore((s) => s.user)
   const [files, setFiles] = useState<ReviewFile[]>([])
   const [filterPhase, setFilterPhase] = useState("")
   const [isLoading, setIsLoading] = useState(true)
+  const canDeleteFiles =
+    !!user && ["team_leader", "chief_secretary"].includes(user.role)
 
-  const fetchFiles = async () => {
+  const fetchFiles = useCallback(async () => {
     setIsLoading(true)
     try {
       const params: Record<string, string> = {}
@@ -39,11 +43,11 @@ export default function ReviewFilesPage() {
     } finally {
       setIsLoading(false)
     }
-  }
+  }, [filterPhase])
 
   useEffect(() => {
     fetchFiles()
-  }, [filterPhase])
+  }, [fetchFiles])
 
   const handleDownload = async (key: string, filename: string) => {
     try {
@@ -221,24 +225,28 @@ export default function ReviewFilesPage() {
                   >
                     전체 다운로드
                   </Button>
-                  <Button
-                    size="sm"
-                    variant="secondary"
-                    onClick={() => handleDownloadThenDelete(phase, date)}
-                    loading={deletingGroup === `${phase}|||${date}`}
-                    loadingText="처리 중..."
-                  >
-                    다운로드 후 삭제
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="destructive"
-                    onClick={() => handleDeleteAll(phase, date)}
-                    loading={deletingGroup === `${phase}|||${date}`}
-                    loadingText="삭제 중..."
-                  >
-                    전체 삭제
-                  </Button>
+                  {canDeleteFiles && (
+                    <>
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => handleDownloadThenDelete(phase, date)}
+                        loading={deletingGroup === `${phase}|||${date}`}
+                        loadingText="처리 중..."
+                      >
+                        다운로드 후 삭제
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="destructive"
+                        onClick={() => handleDeleteAll(phase, date)}
+                        loading={deletingGroup === `${phase}|||${date}`}
+                        loadingText="삭제 중..."
+                      >
+                        전체 삭제
+                      </Button>
+                    </>
+                  )}
                 </div>
               </div>
               <div className="rounded-md border bg-white">
@@ -264,15 +272,17 @@ export default function ReviewFilesPage() {
                             >
                               다운로드
                             </Button>
-                            <Button
-                              size="sm"
-                              variant="destructive"
-                              onClick={() => handleDelete(f.key, f.filename)}
-                              loading={deletingKey === f.key}
-                              loadingText="삭제 중..."
-                            >
-                              삭제
-                            </Button>
+                            {canDeleteFiles && (
+                              <Button
+                                size="sm"
+                                variant="destructive"
+                                onClick={() => handleDelete(f.key, f.filename)}
+                                loading={deletingKey === f.key}
+                                loadingText="삭제 중..."
+                              >
+                                삭제
+                              </Button>
+                            )}
                           </div>
                         </TableCell>
                       </TableRow>

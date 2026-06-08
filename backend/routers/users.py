@@ -49,10 +49,12 @@ ROLE_MAP = {
     "팀장": UserRole.TEAM_LEADER,
     "총괄간사": UserRole.CHIEF_SECRETARY,
     "간사": UserRole.SECRETARY,
+    "관리원": UserRole.MANAGER,
     "검토위원": UserRole.REVIEWER,
     "team_leader": UserRole.TEAM_LEADER,
     "chief_secretary": UserRole.CHIEF_SECRETARY,
     "secretary": UserRole.SECRETARY,
+    "manager": UserRole.MANAGER,
     "reviewer": UserRole.REVIEWER,
 }
 
@@ -453,13 +455,26 @@ def list_users(
     size: int = Query(20, ge=1, le=100),
     db: Session = Depends(get_db),
     current_user: User = Depends(
-        require_roles(UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY)
+        require_roles(
+            UserRole.TEAM_LEADER,
+            UserRole.CHIEF_SECRETARY,
+            UserRole.MANAGER,
+        )
     ),
 ):
-    """사용자 목록 조회 (팀장/총괄간사만). 비밀번호 셋업 상태 포함."""
+    """사용자 목록 조회.
+
+    팀장/총괄간사는 운영 상태까지 보고, 관리원은 이름/조/권한/전화번호/이메일
+    조회 용도로만 사용한다.
+    """
     from datetime import datetime, timezone
     from models.password_setup_token import PasswordSetupToken
     from services.password_setup import _ensure_aware_utc
+
+    is_manager = current_user.role == UserRole.MANAGER
+    if is_manager:
+        include_inactive = False
+        setup_status = None
 
     query = db.query(User)
     if not include_inactive:
@@ -475,7 +490,8 @@ def list_users(
         (User.role == UserRole.TEAM_LEADER, 0),
         (User.role == UserRole.CHIEF_SECRETARY, 1),
         (User.role == UserRole.SECRETARY, 2),
-        (User.role == UserRole.REVIEWER, 3),
+        (User.role == UserRole.MANAGER, 3),
+        (User.role == UserRole.REVIEWER, 4),
         else_=99,
     )
     query = query.order_by(role_rank, User.name)
@@ -550,6 +566,17 @@ def list_users(
 
     items: list[UserResponse] = []
     for (u, status, last_sent) in items_all:
+        if is_manager:
+            items.append(UserResponse(
+                id=u.id,
+                name=u.name,
+                email=u.email,
+                role=u.role,
+                phone=u.phone,
+                is_active=u.is_active,
+                group_no=_resolve_group_no(u, reviewer_by_user),
+            ))
+            continue
         kakao_token_status, kakao_token_expires_at = get_kakao_token_status(u)
         items.append(UserResponse(
             id=u.id, name=u.name, email=u.email, role=u.role,
@@ -789,12 +816,17 @@ def get_user(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """사용자 상세 조회 — 본인 또는 관리자(팀장/총괄간사)만.
+    """사용자 상세 조회 — 본인 또는 운영 조회 권한자만.
 
     REVIEWER/SECRETARY가 임의의 user_id로 다른 사용자 정보(이메일/전화번호 등)를
     조회하지 못하도록 방어. 존재 자체를 노출하지 않기 위해 권한 미달 시 404.
+    관리원은 이름/조/권한/전화번호/이메일 조회 용도라 운영 상태 필드는 비워서 반환한다.
     """
-    is_admin = current_user.role in (UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY)
+    is_admin = current_user.role in (
+        UserRole.TEAM_LEADER,
+        UserRole.CHIEF_SECRETARY,
+        UserRole.MANAGER,
+    )
     is_self = current_user.id == user_id
     if not (is_admin or is_self):
         raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다")
@@ -807,6 +839,16 @@ def get_user(
         if user.role == UserRole.REVIEWER else None
     )
     reviewer_map: dict[int, Reviewer] = {reviewer.user_id: reviewer} if reviewer else {}
+    if current_user.role == UserRole.MANAGER and not is_self:
+        return UserResponse(
+            id=user.id,
+            name=user.name,
+            email=user.email,
+            role=user.role,
+            phone=user.phone,
+            is_active=user.is_active,
+            group_no=_resolve_group_no(user, reviewer_map),
+        )
     kakao_token_status, kakao_token_expires_at = get_kakao_token_status(user)
     return UserResponse(
         id=user.id, name=user.name, email=user.email, role=user.role,

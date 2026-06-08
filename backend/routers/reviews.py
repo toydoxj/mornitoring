@@ -677,10 +677,14 @@ def list_uploaded_files(
     phase: str | None = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(
-        require_roles(UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY)
+        require_roles(
+            UserRole.TEAM_LEADER,
+            UserRole.CHIEF_SECRETARY,
+            UserRole.MANAGER,
+        )
     ),
 ):
-    """업로드된 검토서 파일 목록 (총괄간사/팀장)"""
+    """업로드된 검토서 파일 목록 (팀장/총괄간사/관리원)."""
     prefix = "reviews/"
     if phase:
         from services.s3_storage import PHASE_FOLDER_MAP
@@ -696,7 +700,11 @@ def download_file(
     key: str = Query(...),
     db: Session = Depends(get_db),
     current_user: User = Depends(
-        require_roles(UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY)
+        require_roles(
+            UserRole.TEAM_LEADER,
+            UserRole.CHIEF_SECRETARY,
+            UserRole.MANAGER,
+        )
     ),
 ):
     """검토서 파일 다운로드 URL 생성 (presigned URL 반환만)."""
@@ -968,7 +976,11 @@ async def update_inquiry(
     body: InquiryUpdateRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(
-        require_roles(UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY, UserRole.SECRETARY)
+        require_roles(
+            UserRole.TEAM_LEADER,
+            UserRole.CHIEF_SECRETARY,
+            UserRole.SECRETARY,
+        )
     ),
 ):
     """문의사항 답변/상태/단계 변경.
@@ -1051,7 +1063,12 @@ def list_inquiries(
     size: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db),
     current_user: User = Depends(
-        require_roles(UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY, UserRole.SECRETARY)
+        require_roles(
+            UserRole.TEAM_LEADER,
+            UserRole.CHIEF_SECRETARY,
+            UserRole.SECRETARY,
+            UserRole.MANAGER,
+        )
     ),
 ):
     """문의사항 목록 조회. 간사(조 배정)는 같은 조 건물의 문의만 노출."""
@@ -1493,7 +1510,12 @@ def list_inappropriate_reviews(
     decision: str | None = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(
-        require_roles(UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY, UserRole.SECRETARY)
+        require_roles(
+            UserRole.TEAM_LEADER,
+            UserRole.CHIEF_SECRETARY,
+            UserRole.SECRETARY,
+            UserRole.MANAGER,
+        )
     ),
 ):
     """부적합 검토 필요로 체크된 stage 목록 (간사 이상).
@@ -1636,7 +1658,12 @@ def list_inappropriate_notes(
     stage_id: int,
     db: Session = Depends(get_db),
     _: User = Depends(
-        require_roles(UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY, UserRole.SECRETARY)
+        require_roles(
+            UserRole.TEAM_LEADER,
+            UserRole.CHIEF_SECRETARY,
+            UserRole.SECRETARY,
+            UserRole.MANAGER,
+        )
     ),
 ):
     """부적합 stage의 간사진 의견 목록 (최신순)"""

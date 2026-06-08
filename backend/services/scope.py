@@ -1,7 +1,7 @@
 """사용자 역할/조 기반 데이터 가시성 헬퍼.
 
 운영 정책:
-- 팀장/총괄간사: 모든 데이터 (필터 미적용)
+- 팀장/총괄간사/관리원: 모든 데이터 (필터 미적용)
 - 간사 + group_no 있음: 같은 조 검토위원이 담당하는 건물/관련 데이터만
 - 간사 + group_no 없음(미배정): 모든 데이터 (운영 안전성 우선 — 사용자 결정)
 - 검토위원: 본인 reviewer_id 매칭만 (별도 헬퍼/엔드포인트에서 처리)
@@ -24,10 +24,14 @@ from models.user import User, UserRole
 def _is_unrestricted(user: User) -> bool:
     """전체 노출 권한이 있는 사용자 여부.
 
-    - 팀장/총괄간사: 항상 전체
+    - 팀장/총괄간사/관리원: 항상 전체
     - 간사 + group_no NULL: 운영진/총괄급 가정 → 전체
     """
-    if user.role in (UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY):
+    if user.role in (
+        UserRole.TEAM_LEADER,
+        UserRole.CHIEF_SECRETARY,
+        UserRole.MANAGER,
+    ):
         return True
     if user.role == UserRole.SECRETARY and user.group_no is None:
         return True

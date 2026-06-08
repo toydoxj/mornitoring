@@ -81,10 +81,15 @@ async def import_excel(
 def export_excel(
     db: Session = Depends(get_db),
     current_user: User = Depends(
-        require_roles(UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY, UserRole.SECRETARY)
+        require_roles(
+            UserRole.TEAM_LEADER,
+            UserRole.CHIEF_SECRETARY,
+            UserRole.SECRETARY,
+            UserRole.MANAGER,
+        )
     ),
 ):
-    """DB 데이터를 통합관리대장 형식의 엑셀로 export (팀장/총괄간사/간사)"""
+    """DB 데이터를 통합관리대장 형식의 엑셀로 export (팀장/총괄간사/간사/관리원)"""
     output = export_ledger(db)
     return StreamingResponse(
         output,

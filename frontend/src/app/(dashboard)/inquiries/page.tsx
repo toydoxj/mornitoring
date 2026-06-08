@@ -68,6 +68,7 @@ const STATUS_VARIANT: Record<string, "default" | "secondary" | "destructive" | "
 
 export default function InquiriesPage() {
   const user = useAuthStore((s) => s.user)
+  const isReadOnly = user?.role === "manager"
   const canAdminDelete =
     !!user && ["team_leader", "chief_secretary"].includes(user.role)
   const canManageInquiry =
@@ -376,84 +377,110 @@ export default function InquiriesPage() {
                       </Badge>
                     </TableCell>
                     <TableCell className="align-top">
-                      <Input
-                        value={replyMap[item.id] ?? item.reply ?? ""}
-                        onChange={(e) => setReplyMap({ ...replyMap, [item.id]: e.target.value })}
-                        placeholder="답변 입력"
-                        className="text-sm"
-                      />
-                      {(item.attachments ?? []).filter((a) => a.kind === "reply").length > 0 && (
-                        <div className="mt-2 space-y-1">
-                          {item.attachments!
-                            .filter((a) => a.kind === "reply")
-                            .map((a) => (
-                              <AttachmentItem
-                                key={a.id}
-                                attachment={a}
-                                canDelete={user?.id === a.uploaded_by || canAdminDelete}
-                                onDelete={() => handleDeleteInquiryAttachment(a.id)}
-                              />
-                            ))}
+                      {isReadOnly ? (
+                        <div className="text-sm whitespace-pre-wrap break-words">
+                          {item.reply || "-"}
+                          {(item.attachments ?? []).filter((a) => a.kind === "reply").length > 0 && (
+                            <div className="mt-2 space-y-1">
+                              {item.attachments!
+                                .filter((a) => a.kind === "reply")
+                                .map((a) => (
+                                  <AttachmentItem
+                                    key={a.id}
+                                    attachment={a}
+                                    canDelete={false}
+                                    onDelete={() => handleDeleteInquiryAttachment(a.id)}
+                                  />
+                                ))}
+                            </div>
+                          )}
                         </div>
+                      ) : (
+                        <>
+                          <Input
+                            value={replyMap[item.id] ?? item.reply ?? ""}
+                            onChange={(e) => setReplyMap({ ...replyMap, [item.id]: e.target.value })}
+                            placeholder="답변 입력"
+                            className="text-sm"
+                          />
+                          {(item.attachments ?? []).filter((a) => a.kind === "reply").length > 0 && (
+                            <div className="mt-2 space-y-1">
+                              {item.attachments!
+                                .filter((a) => a.kind === "reply")
+                                .map((a) => (
+                                  <AttachmentItem
+                                    key={a.id}
+                                    attachment={a}
+                                    canDelete={user?.id === a.uploaded_by || canAdminDelete}
+                                    onDelete={() => handleDeleteInquiryAttachment(a.id)}
+                                  />
+                                ))}
+                            </div>
+                          )}
+                          <div className="mt-2">
+                            <input
+                              ref={(el) => {
+                                replyFileInputs.current[item.id] = el
+                              }}
+                              type="file"
+                              className="hidden"
+                              onChange={(e) => handleUploadReplyAttachment(e, item.id)}
+                            />
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => replyFileInputs.current[item.id]?.click()}
+                              loading={uploadingReplyFor === item.id}
+                              loadingText="업로드 중..."
+                            >
+                              <Paperclip className="mr-1 h-3.5 w-3.5" />
+                              첨부
+                            </Button>
+                          </div>
+                        </>
                       )}
-                      <div className="mt-2">
-                        <input
-                          ref={(el) => {
-                            replyFileInputs.current[item.id] = el
-                          }}
-                          type="file"
-                          className="hidden"
-                          onChange={(e) => handleUploadReplyAttachment(e, item.id)}
-                        />
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => replyFileInputs.current[item.id]?.click()}
-                          loading={uploadingReplyFor === item.id}
-                          loadingText="업로드 중..."
-                        >
-                          <Paperclip className="mr-1 h-3.5 w-3.5" />
-                          첨부
-                        </Button>
-                      </div>
                     </TableCell>
                     <TableCell>
-                      <div className="flex gap-1 flex-wrap">
-                        <Button
-                          size="sm"
-                          variant="secondary"
-                          onClick={() => handleUpdate(item.id, "asking_agency")}
-                        >
-                          관리원문의
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="default"
-                          onClick={() => setReplyActionTarget(item)}
-                        >
-                          답변저장
-                        </Button>
-                        {canManageInquiry && (
-                          <>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => openEditDialog(item)}
-                            >
-                              수정
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="destructive"
-                              loading={deletingInquiryId === item.id}
-                              loadingText="삭제 중..."
-                              onClick={() => handleDeleteInquiry(item)}
-                            >
-                              삭제
-                            </Button>
-                          </>
-                        )}
-                      </div>
+                      {isReadOnly ? (
+                        <span className="text-sm text-muted-foreground">-</span>
+                      ) : (
+                        <div className="flex gap-1 flex-wrap">
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            onClick={() => handleUpdate(item.id, "asking_agency")}
+                          >
+                            관리원문의
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="default"
+                            onClick={() => setReplyActionTarget(item)}
+                          >
+                            답변저장
+                          </Button>
+                          {canManageInquiry && (
+                            <>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => openEditDialog(item)}
+                              >
+                                수정
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="destructive"
+                                loading={deletingInquiryId === item.id}
+                                loadingText="삭제 중..."
+                                onClick={() => handleDeleteInquiry(item)}
+                              >
+                                삭제
+                              </Button>
+                            </>
+                          )}
+                        </div>
+                      )}
                     </TableCell>
                   </TableRow>
                 ))

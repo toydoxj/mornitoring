@@ -303,7 +303,12 @@ class BuildingListResponse(BaseModel):
 def get_stats(
     db: Session = Depends(get_db),
     current_user: User = Depends(
-        require_roles(UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY, UserRole.SECRETARY)
+        require_roles(
+            UserRole.TEAM_LEADER,
+            UserRole.CHIEF_SECRETARY,
+            UserRole.SECRETARY,
+            UserRole.MANAGER,
+        )
     ),
 ):
     """대시보드 통계 (관리자 전용 — 전체 건물 통계 노출).
@@ -811,7 +816,12 @@ def list_buildings(
 def get_reviewer_names(
     db: Session = Depends(get_db),
     current_user: User = Depends(
-        require_roles(UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY, UserRole.SECRETARY)
+        require_roles(
+            UserRole.TEAM_LEADER,
+            UserRole.CHIEF_SECRETARY,
+            UserRole.SECRETARY,
+            UserRole.MANAGER,
+        )
     ),
 ):
     """배정된 검토위원 이름 목록 (관리자 전용 — 위원 enumeration 차단).
@@ -833,7 +843,11 @@ def create_building(
     body: BuildingCreate,
     db: Session = Depends(get_db),
     current_user: User = Depends(
-        require_roles(UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY, UserRole.SECRETARY)
+        require_roles(
+            UserRole.TEAM_LEADER,
+            UserRole.CHIEF_SECRETARY,
+            UserRole.SECRETARY,
+        )
     ),
 ):
     """건축물 등록"""
@@ -854,7 +868,12 @@ def create_building(
 def reviewer_schedule(
     db: Session = Depends(get_db),
     current_user: User = Depends(
-        require_roles(UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY, UserRole.SECRETARY)
+        require_roles(
+            UserRole.TEAM_LEADER,
+            UserRole.CHIEF_SECRETARY,
+            UserRole.SECRETARY,
+            UserRole.MANAGER,
+        )
     ),
 ):
     """검토위원별 일정관리 요약 — 대시보드 "검토위원별 일정관리" 테이블 데이터.
@@ -1002,7 +1021,11 @@ def my_stats(
     db: Session = Depends(get_db),
     current_user: User = Depends(
         require_roles(
-            UserRole.REVIEWER, UserRole.SECRETARY, UserRole.CHIEF_SECRETARY, UserRole.TEAM_LEADER
+            UserRole.REVIEWER,
+            UserRole.SECRETARY,
+            UserRole.CHIEF_SECRETARY,
+            UserRole.TEAM_LEADER,
+            UserRole.MANAGER,
         )
     ),
 ):

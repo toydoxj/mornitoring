@@ -37,6 +37,7 @@ import {
   ROLE_LABELS,
   SETUP_STATUS_LABELS,
 } from "@/types"
+import { useAuthStore } from "@/stores/authStore"
 
 interface UserListResponse {
   items: User[]
@@ -120,6 +121,7 @@ const ROLE_OPTIONS: { value: UserRole; label: string }[] = [
   { value: "team_leader", label: "팀장" },
   { value: "chief_secretary", label: "총괄간사" },
   { value: "secretary", label: "간사" },
+  { value: "manager", label: "관리원" },
   { value: "reviewer", label: "검토위원" },
 ]
 
@@ -131,6 +133,9 @@ const SCOPE_LABELS: Record<string, string> = {
 }
 
 export default function AdminPage() {
+  const currentUser = useAuthStore((s) => s.user)
+  const isReadOnly = currentUser?.role === "manager"
+  const canOperate = !!currentUser && !isReadOnly
   const [users, setUsers] = useState<User[]>([])
   const [total, setTotal] = useState(0)
   const [isLoading, setIsLoading] = useState(true)
@@ -255,8 +260,8 @@ export default function AdminPage() {
 
   useEffect(() => {
     fetchUsers()
-    fetchScopeStatus()
-  }, [])
+    if (canOperate) fetchScopeStatus()
+  }, [canOperate])
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -677,6 +682,62 @@ export default function AdminPage() {
       <Badge variant="outline" className={cls}>
         {KAKAO_IDENTITY_STATUS_LABELS[s]}
       </Badge>
+    )
+  }
+
+  if (isReadOnly) {
+    return (
+      <div className="space-y-4">
+        <div>
+          <h1 className="text-2xl font-bold">사용자 관리</h1>
+          <p className="text-sm text-muted-foreground">
+            전체 {total}명 · 이름, 조, 권한, 전화번호, 이메일 조회
+          </p>
+        </div>
+
+        <div className="rounded-md border bg-white overflow-x-auto">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>이름</TableHead>
+                <TableHead className="w-[90px] text-center">조</TableHead>
+                <TableHead className="w-[120px]">권한</TableHead>
+                <TableHead className="w-[150px]">전화번호</TableHead>
+                <TableHead>이메일</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {isLoading ? (
+                <TableRow>
+                  <TableCell colSpan={5} className="h-32 text-center">
+                    로딩 중...
+                  </TableCell>
+                </TableRow>
+              ) : visibleUsers.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={5} className="h-32 text-center text-muted-foreground">
+                    등록된 사용자가 없습니다
+                  </TableCell>
+                </TableRow>
+              ) : (
+                visibleUsers.map((user) => (
+                  <TableRow key={user.id}>
+                    <TableCell className="font-medium">{user.name}</TableCell>
+                    <TableCell className="text-center text-sm">
+                      {user.group_no ?? <span className="text-muted-foreground">-</span>}
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant="outline">{ROLE_LABELS[user.role]}</Badge>
+                    </TableCell>
+                    <TableCell>{user.phone || "-"}</TableCell>
+                    <TableCell>{user.email}</TableCell>
+                  </TableRow>
+                ))
+              )}
+            </TableBody>
+          </Table>
+        </div>
+      </div>
     )
   }
 

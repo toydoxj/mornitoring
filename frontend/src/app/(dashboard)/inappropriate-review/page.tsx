@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/table"
 import apiClient from "@/lib/api/client"
 import { RESULT_LABELS, type ResultType } from "@/types"
+import { useAuthStore } from "@/stores/authStore"
 
 // 지적단계(검토서 제출 단계) 전용 짧은 한글 라벨
 const INDICATION_PHASE_LABELS: Record<string, string> = {
@@ -70,12 +71,16 @@ const DECISION_LABELS: Record<Decision, string> = {
 
 export default function InappropriateReviewPage() {
   const router = useRouter()
+  const user = useAuthStore((s) => s.user)
   const [items, setItems] = useState<InappropriateItem[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [filter, setFilter] = useState<"all" | Decision>("all")
   const [updating, setUpdating] = useState<number | null>(null)
+  const canEditDecision =
+    !!user && ["team_leader", "chief_secretary", "secretary"].includes(user.role)
+  const tableColumnCount = canEditDecision ? 11 : 8
 
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     setIsLoading(true)
     try {
       const params: Record<string, string> = {}
@@ -90,11 +95,11 @@ export default function InappropriateReviewPage() {
     } finally {
       setIsLoading(false)
     }
-  }
+  }, [filter])
 
   useEffect(() => {
     fetchData()
-  }, [filter])
+  }, [fetchData])
 
   const handleDecision = async (stageId: number, decision: Decision) => {
     setUpdating(stageId)
@@ -144,22 +149,28 @@ export default function InappropriateReviewPage() {
               <TableHead className="w-[120px] text-center">고위험군</TableHead>
               <TableHead className="w-[120px] text-center">지적단계</TableHead>
               <TableHead className="w-[90px] text-center">최근판정</TableHead>
-              <TableHead className="w-[90px] text-center">확정(심각)</TableHead>
-              <TableHead className="w-[90px] text-center">확정(단순)</TableHead>
-              <TableHead className="w-[80px] text-center">대기</TableHead>
-              <TableHead className="w-[80px] text-center">제외</TableHead>
+              {canEditDecision ? (
+                <>
+                  <TableHead className="w-[90px] text-center">확정(심각)</TableHead>
+                  <TableHead className="w-[90px] text-center">확정(단순)</TableHead>
+                  <TableHead className="w-[80px] text-center">대기</TableHead>
+                  <TableHead className="w-[80px] text-center">제외</TableHead>
+                </>
+              ) : (
+                <TableHead className="w-[120px] text-center">판정</TableHead>
+              )}
             </TableRow>
           </TableHeader>
           <TableBody>
             {isLoading ? (
               <TableRow>
-                <TableCell colSpan={11} className="h-32 text-center">
+                <TableCell colSpan={tableColumnCount} className="h-32 text-center">
                   로딩 중...
                 </TableCell>
               </TableRow>
             ) : items.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={11} className="h-32 text-center text-muted-foreground">
+                <TableCell colSpan={tableColumnCount} className="h-32 text-center text-muted-foreground">
                   부적합 검토 대상이 없습니다
                 </TableCell>
               </TableRow>
@@ -226,47 +237,57 @@ export default function InappropriateReviewPage() {
                         <span className="text-muted-foreground">-</span>
                       )}
                     </TableCell>
-                    {/* 확정(심각) */}
-                    <TableCell className="text-center" onClick={(e) => e.stopPropagation()}>
-                      <Button
-                        size="sm"
-                        variant={d === "confirmed_serious" ? "default" : "outline"}
-                        onClick={() => handleDecision(b.stage_id, "confirmed_serious")}
-                        loading={updating === b.stage_id && d !== "confirmed_serious"}
-                      >
-                        확정(심각)
-                      </Button>
-                    </TableCell>
-                    {/* 확정(단순) */}
-                    <TableCell className="text-center" onClick={(e) => e.stopPropagation()}>
-                      <Button
-                        size="sm"
-                        variant={d === "confirmed_simple" ? "default" : "outline"}
-                        onClick={() => handleDecision(b.stage_id, "confirmed_simple")}
-                      >
-                        확정(단순)
-                      </Button>
-                    </TableCell>
-                    {/* 대기 */}
-                    <TableCell className="text-center" onClick={(e) => e.stopPropagation()}>
-                      <Button
-                        size="sm"
-                        variant={d === "pending" ? "default" : "outline"}
-                        onClick={() => handleDecision(b.stage_id, "pending")}
-                      >
-                        대기
-                      </Button>
-                    </TableCell>
-                    {/* 제외 */}
-                    <TableCell className="text-center" onClick={(e) => e.stopPropagation()}>
-                      <Button
-                        size="sm"
-                        variant={d === "excluded" ? "destructive" : "outline"}
-                        onClick={() => handleDecision(b.stage_id, "excluded")}
-                      >
-                        제외
-                      </Button>
-                    </TableCell>
+                    {canEditDecision ? (
+                      <>
+                        {/* 확정(심각) */}
+                        <TableCell className="text-center" onClick={(e) => e.stopPropagation()}>
+                          <Button
+                            size="sm"
+                            variant={d === "confirmed_serious" ? "default" : "outline"}
+                            onClick={() => handleDecision(b.stage_id, "confirmed_serious")}
+                            loading={updating === b.stage_id && d !== "confirmed_serious"}
+                          >
+                            확정(심각)
+                          </Button>
+                        </TableCell>
+                        {/* 확정(단순) */}
+                        <TableCell className="text-center" onClick={(e) => e.stopPropagation()}>
+                          <Button
+                            size="sm"
+                            variant={d === "confirmed_simple" ? "default" : "outline"}
+                            onClick={() => handleDecision(b.stage_id, "confirmed_simple")}
+                          >
+                            확정(단순)
+                          </Button>
+                        </TableCell>
+                        {/* 대기 */}
+                        <TableCell className="text-center" onClick={(e) => e.stopPropagation()}>
+                          <Button
+                            size="sm"
+                            variant={d === "pending" ? "default" : "outline"}
+                            onClick={() => handleDecision(b.stage_id, "pending")}
+                          >
+                            대기
+                          </Button>
+                        </TableCell>
+                        {/* 제외 */}
+                        <TableCell className="text-center" onClick={(e) => e.stopPropagation()}>
+                          <Button
+                            size="sm"
+                            variant={d === "excluded" ? "destructive" : "outline"}
+                            onClick={() => handleDecision(b.stage_id, "excluded")}
+                          >
+                            제외
+                          </Button>
+                        </TableCell>
+                      </>
+                    ) : (
+                      <TableCell className="text-center">
+                        <Badge variant={d === "excluded" ? "destructive" : "outline"}>
+                          {DECISION_LABELS[d]}
+                        </Badge>
+                      </TableCell>
+                    )}
                   </TableRow>
                 )
               })
@@ -274,7 +295,7 @@ export default function InappropriateReviewPage() {
           </TableBody>
         </Table>
       </div>
-      {items.length > 0 && (
+      {items.length > 0 && canEditDecision && (
         <p className="text-xs text-muted-foreground">
           현재 선택된 판정은 진하게 표시됩니다. 언제든 다른 상태로 변경 가능합니다.
         </p>

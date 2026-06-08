@@ -20,22 +20,22 @@ import { ROLE_LABELS } from "@/types"
 import apiClient from "@/lib/api/client"
 
 const NAV_ITEMS = [
-  { href: "/dashboard", label: "대시보드", roles: ["team_leader", "chief_secretary", "secretary", "reviewer"] },
-  { href: "/announcements", label: "공지사항", roles: ["team_leader", "chief_secretary", "secretary", "reviewer"] },
-  { href: "/discussions", label: "토론방", roles: ["team_leader", "chief_secretary", "secretary", "reviewer"] },
-  { href: "/checklist", label: "상세체크리스트", roles: ["team_leader", "chief_secretary", "secretary", "reviewer"] },
-  { href: "/buildings", label: "통합관리대장", roles: ["team_leader", "chief_secretary", "secretary"] },
+  { href: "/dashboard", label: "대시보드", roles: ["team_leader", "chief_secretary", "secretary", "manager", "reviewer"] },
+  { href: "/announcements", label: "공지사항", roles: ["team_leader", "chief_secretary", "secretary", "manager", "reviewer"] },
+  { href: "/discussions", label: "토론방", roles: ["team_leader", "chief_secretary", "secretary", "manager", "reviewer"] },
+  { href: "/reviewer-manual", label: "매뉴얼", roles: ["manager", "reviewer"] },
+  { href: "/checklist", label: "상세체크리스트", roles: ["team_leader", "chief_secretary", "secretary", "manager", "reviewer"] },
+  { href: "/buildings", label: "통합관리대장", roles: ["team_leader", "chief_secretary", "secretary", "manager"] },
   { href: "/distribution", label: "도서접수/배포", roles: ["team_leader", "chief_secretary"] },
   { href: "/my-reviews", label: "내 검토 대상", roles: ["chief_secretary", "secretary", "reviewer"] },
-  { href: "/review-files", label: "검토서 관리", roles: ["team_leader", "chief_secretary"] },
-  { href: "/inquiries", label: "문의사항", roles: ["team_leader", "chief_secretary", "secretary"] },
-  { href: "/inappropriate-review", label: "부적합 검토", roles: ["team_leader", "chief_secretary", "secretary"] },
-  { href: "/statistics", label: "통계자료", roles: ["team_leader", "chief_secretary", "secretary"] },
+  { href: "/review-files", label: "검토서 관리", roles: ["team_leader", "chief_secretary", "manager"] },
+  { href: "/inquiries", label: "문의사항", roles: ["team_leader", "chief_secretary", "secretary", "manager"] },
+  { href: "/inappropriate-review", label: "부적합 검토", roles: ["team_leader", "chief_secretary", "secretary", "manager"] },
+  { href: "/statistics", label: "통계자료", roles: ["team_leader", "chief_secretary", "secretary", "manager"] },
   { href: "/reminders", label: "리마인드", roles: ["team_leader", "chief_secretary", "secretary"] },
   { href: "/notifications", label: "알림 현황", roles: ["team_leader", "chief_secretary", "secretary"] },
-  { href: "/admin", label: "사용자 관리", roles: ["team_leader", "chief_secretary"] },
+  { href: "/admin", label: "사용자 관리", roles: ["team_leader", "chief_secretary", "manager"] },
   { href: "/audit/logins", label: "로그인 이력", roles: ["team_leader", "chief_secretary"] },
-  { href: "/reviewer-manual", label: "매뉴얼", roles: ["reviewer"] },
 ] as const
 
 export default function DashboardLayout({

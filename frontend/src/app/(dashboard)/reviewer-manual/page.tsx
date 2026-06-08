@@ -40,6 +40,7 @@ import {
 import { Label } from "@/components/ui/label"
 import { Separator } from "@/components/ui/separator"
 import apiClient from "@/lib/api/client"
+import { useAuthStore } from "@/stores/authStore"
 
 interface ManualStep {
   step: string
@@ -362,6 +363,8 @@ const faqs: FaqItem[] = [
 ]
 
 export default function ReviewerManualPage() {
+  const user = useAuthStore((s) => s.user)
+  const canUseMyReviews = user?.role !== "manager"
   const [improvementOpen, setImprovementOpen] = useState(false)
   const [improvementContent, setImprovementContent] = useState("")
   const [isSubmittingImprovement, setIsSubmittingImprovement] = useState(false)
@@ -400,14 +403,16 @@ export default function ReviewerManualPage() {
           <div className="max-w-3xl space-y-3">
             <div className="flex flex-wrap gap-2">
               <Badge variant="secondary" className="w-fit">
-                검토위원 전용
+                {user?.role === "manager" ? "업무 매뉴얼" : "검토위원 전용"}
               </Badge>
               <Badge variant="outline" className="w-fit">
                 2026 OT 자료 반영
               </Badge>
             </div>
             <div className="space-y-2">
-              <h1 className="text-2xl font-bold sm:text-3xl">검토위원 매뉴얼</h1>
+              <h1 className="text-2xl font-bold sm:text-3xl">
+                {user?.role === "manager" ? "업무 매뉴얼" : "검토위원 매뉴얼"}
+              </h1>
               <p className="text-sm leading-6 text-muted-foreground sm:text-base">
                 2026 모니터링 검토위원 OT 내용을 바탕으로 과업 이해, 도서 확인,
                 검토서 작성, 문의, 업로드까지 실제 업무 순서대로 정리했습니다.
@@ -415,12 +420,14 @@ export default function ReviewerManualPage() {
             </div>
           </div>
           <div className="flex flex-col gap-2 sm:flex-row lg:shrink-0">
-            <Link href="/my-reviews">
-              <Button className="w-full sm:w-auto">
-                <ClipboardList />
-                내 검토 대상
-              </Button>
-            </Link>
+            {canUseMyReviews && (
+              <Link href="/my-reviews">
+                <Button className="w-full sm:w-auto">
+                  <ClipboardList />
+                  내 검토 대상
+                </Button>
+              </Link>
+            )}
             <Link href="/announcements">
               <Button variant="outline" className="w-full sm:w-auto">
                 <Bell />
