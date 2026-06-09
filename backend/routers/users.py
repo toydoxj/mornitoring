@@ -447,6 +447,17 @@ class UserListResponse(BaseModel):
 @router.get("", response_model=UserListResponse)
 def list_users(
     role: UserRole | None = None,
+    name: str | None = Query(None, max_length=50, description="이름 검색어"),
+    sort_by: str = Query(
+        "role",
+        pattern="^(role|name|email|group_no|id)$",
+        description="정렬 기준: role/name/email/group_no/id",
+    ),
+    sort_order: str = Query(
+        "asc",
+        pattern="^(asc|desc)$",
+        description="정렬 방향: asc/desc",
+    ),
     include_inactive: bool = Query(False, description="비활성 사용자 포함 여부"),
     setup_status: str | None = Query(
         None, description="필터: setup_completed/pending/expired/not_invited"
@@ -481,8 +492,11 @@ def list_users(
         query = query.filter(User.is_active.is_(True))
     if role:
         query = query.filter(User.role == role)
+    search_name = (name or "").strip()
+    if search_name:
+        query = query.filter(User.name.ilike(f"%{search_name}%"))
 
-    # 정렬: 역할 순서(팀장→총괄간사→간사→검토위원) 후 이름 가나다.
+    # 정렬: 기본은 역할 순서(팀장→총괄간사→간사→관리원→검토위원) 후 이름 가나다.
     # SQL CASE 로 직접 정렬해 페이지네이션이 정확히 적용되게 한다.
     # (case({...}, value=...) 형태는 Enum 컬럼과의 매핑이 dialect 별로 차이가 있어
     #  명시적 WHEN 비교 형태로 작성)
@@ -494,7 +508,37 @@ def list_users(
         (User.role == UserRole.REVIEWER, 4),
         else_=99,
     )
-    query = query.order_by(role_rank, User.name)
+    normalized_sort_by = sort_by.lower()
+    is_desc = sort_order.lower() == "desc"
+    if normalized_sort_by == "group_no":
+        query = query.outerjoin(Reviewer, Reviewer.user_id == User.id)
+        group_expr = func.coalesce(User.group_no, Reviewer.group_no)
+        null_rank = case((group_expr.is_(None), 1), else_=0)
+        query = query.order_by(
+            null_rank,
+            group_expr.desc() if is_desc else group_expr.asc(),
+            User.name.asc(),
+            User.id.asc(),
+        )
+    elif normalized_sort_by == "name":
+        query = query.order_by(
+            User.name.desc() if is_desc else User.name.asc(),
+            User.id.asc(),
+        )
+    elif normalized_sort_by == "email":
+        query = query.order_by(
+            User.email.desc() if is_desc else User.email.asc(),
+            User.name.asc(),
+            User.id.asc(),
+        )
+    elif normalized_sort_by == "id":
+        query = query.order_by(User.id.desc() if is_desc else User.id.asc())
+    else:
+        query = query.order_by(
+            role_rank.desc() if is_desc else role_rank.asc(),
+            User.name.asc(),
+            User.id.asc(),
+        )
 
     # 페이지네이션 전에 setup_status 필터를 적용하려면 모든 사용자에 대해
     # 상태를 계산해야 한다(60명 규모라 부담 없음). 필터 미지정 시는 페이지만 잘라낸다.

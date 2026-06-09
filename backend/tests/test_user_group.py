@@ -144,3 +144,49 @@ def test_list_users_sorted_by_role_then_name(
         by_role.setdefault(u["role"], []).append(u["name"])
     for names in by_role.values():
         assert names == sorted(names)
+
+
+def test_list_users_filters_by_name_and_sorts_by_name(client, make_user):
+    _, admin_h = make_user(UserRole.TEAM_LEADER, name="운영자")
+    make_user(UserRole.SECRETARY, name="김가영", email="kim-a@example.com")
+    make_user(UserRole.REVIEWER, name="김나영", email="kim-b@example.com")
+    make_user(UserRole.REVIEWER, name="박다영", email="park@example.com")
+
+    res = client.get(
+        "/api/users",
+        headers=admin_h,
+        params={
+            "name": "김",
+            "sort_by": "name",
+            "sort_order": "asc",
+            "size": 100,
+        },
+    )
+
+    assert res.status_code == 200
+    body = res.json()
+    assert body["total"] == 2
+    assert [u["name"] for u in body["items"]] == ["김가영", "김나영"]
+
+
+def test_list_users_sorts_by_displayed_group_no(
+    client, db_session, make_user, make_reviewer
+):
+    admin, admin_h = make_user(UserRole.TEAM_LEADER, name="운영자")
+    secretary, _ = make_user(UserRole.SECRETARY, name="나간사")
+    secretary.group_no = 2
+    reviewer_user, _, _ = make_reviewer(group_no=1)
+    reviewer_user.name = "가검토"
+    db_session.commit()
+
+    res = client.get(
+        "/api/users",
+        headers=admin_h,
+        params={"sort_by": "group_no", "sort_order": "asc", "size": 100},
+    )
+
+    assert res.status_code == 200
+    items = res.json()["items"]
+    names = [u["name"] for u in items]
+    assert names.index(reviewer_user.name) < names.index(secretary.name)
+    assert names.index(secretary.name) < names.index(admin.name)

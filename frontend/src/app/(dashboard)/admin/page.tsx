@@ -1,6 +1,7 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
+import { ArrowDown, ArrowUp, ArrowUpDown, Search, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -132,6 +133,23 @@ const SCOPE_LABELS: Record<string, string> = {
   account_email: "이메일",
 }
 
+type UserSortBy = "role" | "name" | "email" | "group_no" | "id"
+type SortOrder = "asc" | "desc"
+
+const SORT_OPTIONS: { value: `${UserSortBy}:${SortOrder}`; label: string }[] = [
+  { value: "role:asc", label: "권한순" },
+  { value: "name:asc", label: "이름 오름차순" },
+  { value: "name:desc", label: "이름 내림차순" },
+  { value: "email:asc", label: "이메일 오름차순" },
+  { value: "email:desc", label: "이메일 내림차순" },
+  { value: "group_no:asc", label: "조 오름차순" },
+  { value: "group_no:desc", label: "조 내림차순" },
+  { value: "id:asc", label: "ID 오름차순" },
+  { value: "id:desc", label: "ID 내림차순" },
+]
+
+const USER_TABLE_COLUMN_COUNT = 15
+
 export default function AdminPage() {
   const currentUser = useAuthStore((s) => s.user)
   const isReadOnly = currentUser?.role === "manager"
@@ -139,6 +157,10 @@ export default function AdminPage() {
   const [users, setUsers] = useState<User[]>([])
   const [total, setTotal] = useState(0)
   const [isLoading, setIsLoading] = useState(true)
+  const [nameSearchInput, setNameSearchInput] = useState("")
+  const [nameSearch, setNameSearch] = useState("")
+  const [sortBy, setSortBy] = useState<UserSortBy>("role")
+  const [sortOrder, setSortOrder] = useState<SortOrder>("asc")
 
   // 등록 다이얼로그
   const [createOpen, setCreateOpen] = useState(false)
@@ -205,10 +227,17 @@ export default function AdminPage() {
   // 비번 미설정자 필터 (운영자가 재발송 대상 식별)
   const [showUnsetupOnly, setShowUnsetupOnly] = useState(false)
 
-  const fetchUsers = async () => {
+  const fetchUsers = useCallback(async () => {
+    setIsLoading(true)
     try {
+      const params: Record<string, string | number> = {
+        size: 100,
+        sort_by: sortBy,
+        sort_order: sortOrder,
+      }
+      if (nameSearch) params.name = nameSearch
       const { data } = await apiClient.get<UserListResponse>("/api/users", {
-        params: { size: 100 },
+        params,
       })
       setUsers(data.items)
       setTotal(data.total)
@@ -217,12 +246,14 @@ export default function AdminPage() {
     } finally {
       setIsLoading(false)
     }
-  }
+  }, [nameSearch, sortBy, sortOrder])
 
   // 미설정자 = setup_completed 외 (pending/expired/not_invited)
   const visibleUsers = showUnsetupOnly
     ? users.filter((u) => u.setup_status && u.setup_status !== "setup_completed")
     : users
+  const allVisibleSelected =
+    visibleUsers.length > 0 && visibleUsers.every((user) => selectedUserIds.has(user.id))
   const unsetupCount = users.filter(
     (u) => u.setup_status && u.setup_status !== "setup_completed"
   ).length
@@ -233,14 +264,14 @@ export default function AdminPage() {
     (u) => u.kakao_identity_status === "unknown"
   ).length
 
-  const fetchScopeStatus = async () => {
+  const fetchScopeStatus = useCallback(async () => {
     try {
       const { data } = await apiClient.get<ScopeStatus>("/api/kakao/me/scopes")
       setScopeStatus(data)
     } catch (err) {
       console.error("동의 항목 조회 실패:", err)
     }
-  }
+  }, [])
 
   const fetchFriends = async () => {
     setIsFetchingFriends(true)
@@ -260,8 +291,36 @@ export default function AdminPage() {
 
   useEffect(() => {
     fetchUsers()
+  }, [fetchUsers])
+
+  useEffect(() => {
     if (canOperate) fetchScopeStatus()
-  }, [canOperate])
+  }, [canOperate, fetchScopeStatus])
+
+  const handleNameSearch = (e: React.FormEvent) => {
+    e.preventDefault()
+    setNameSearch(nameSearchInput.trim())
+  }
+
+  const handleClearNameSearch = () => {
+    setNameSearchInput("")
+    setNameSearch("")
+  }
+
+  const handleSortChange = (nextSortBy: UserSortBy) => {
+    if (sortBy === nextSortBy) {
+      setSortOrder((current) => (current === "asc" ? "desc" : "asc"))
+      return
+    }
+    setSortBy(nextSortBy)
+    setSortOrder("asc")
+  }
+
+  const handleSortSelectChange = (value: string) => {
+    const [nextSortBy, nextSortOrder] = value.split(":")
+    setSortBy(nextSortBy as UserSortBy)
+    setSortOrder(nextSortOrder as SortOrder)
+  }
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -418,11 +477,18 @@ export default function AdminPage() {
   }
 
   const toggleAllUsers = () => {
-    if (selectedUserIds.size === users.length && users.length > 0) {
-      setSelectedUserIds(new Set())
-    } else {
-      setSelectedUserIds(new Set(users.map((u) => u.id)))
-    }
+    const visibleIds = visibleUsers.map((user) => user.id)
+    if (visibleIds.length === 0) return
+    setSelectedUserIds((prev) => {
+      const next = new Set(prev)
+      const shouldClear = visibleIds.every((id) => next.has(id))
+      if (shouldClear) {
+        visibleIds.forEach((id) => next.delete(id))
+      } else {
+        visibleIds.forEach((id) => next.add(id))
+      }
+      return next
+    })
   }
 
   const handleBulkSendInvite = async () => {
@@ -685,25 +751,110 @@ export default function AdminPage() {
     )
   }
 
+  const renderSortIcon = (target: UserSortBy) => {
+    const Icon =
+      sortBy === target
+        ? sortOrder === "asc"
+          ? ArrowUp
+          : ArrowDown
+        : ArrowUpDown
+    return <Icon className="ml-1 h-3.5 w-3.5" />
+  }
+
+  const renderSortableHead = (
+    target: UserSortBy,
+    label: string,
+    className?: string,
+  ) => (
+    <TableHead className={className}>
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        className="h-8 px-2 text-xs font-medium"
+        onClick={() => handleSortChange(target)}
+      >
+        {label}
+        {renderSortIcon(target)}
+      </Button>
+    </TableHead>
+  )
+
+  const renderUserListControls = () => (
+    <form
+      onSubmit={handleNameSearch}
+      className="flex flex-col gap-3 rounded-md border bg-white p-3 lg:flex-row lg:items-end lg:justify-between"
+    >
+      <div className="flex-1 space-y-1">
+        <Label htmlFor="user-name-search">이름 검색</Label>
+        <div className="relative">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            id="user-name-search"
+            value={nameSearchInput}
+            onChange={(e) => setNameSearchInput(e.target.value)}
+            placeholder="이름을 입력하세요"
+            className="pl-9"
+          />
+        </div>
+      </div>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+        <div className="space-y-1">
+          <Label htmlFor="user-sort">정렬</Label>
+          <select
+            id="user-sort"
+            value={`${sortBy}:${sortOrder}`}
+            onChange={(e) => handleSortSelectChange(e.target.value)}
+            className="h-9 min-w-[160px] rounded-md border bg-background px-3 text-sm"
+          >
+            {SORT_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="flex gap-2">
+          <Button type="submit" variant="outline">
+            <Search className="mr-1 h-4 w-4" />
+            검색
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={handleClearNameSearch}
+            disabled={!nameSearch && !nameSearchInput}
+          >
+            <X className="mr-1 h-4 w-4" />
+            초기화
+          </Button>
+        </div>
+      </div>
+    </form>
+  )
+
   if (isReadOnly) {
     return (
       <div className="space-y-4">
         <div>
           <h1 className="text-2xl font-bold">사용자 관리</h1>
           <p className="text-sm text-muted-foreground">
-            전체 {total}명 · 이름, 조, 권한, 전화번호, 이메일 조회
+            {nameSearch ? `검색 결과 ${total}명` : `전체 ${total}명`} · 이름, 조,
+            권한, 전화번호, 이메일 조회
           </p>
         </div>
+
+        {renderUserListControls()}
 
         <div className="rounded-md border bg-white overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>이름</TableHead>
-                <TableHead className="w-[90px] text-center">조</TableHead>
-                <TableHead className="w-[120px]">권한</TableHead>
+                {renderSortableHead("name", "이름")}
+                {renderSortableHead("group_no", "조", "w-[90px] text-center")}
+                {renderSortableHead("role", "권한", "w-[120px]")}
                 <TableHead className="w-[150px]">전화번호</TableHead>
-                <TableHead>이메일</TableHead>
+                {renderSortableHead("email", "이메일")}
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -716,7 +867,7 @@ export default function AdminPage() {
               ) : visibleUsers.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={5} className="h-32 text-center text-muted-foreground">
-                    등록된 사용자가 없습니다
+                    {nameSearch ? "검색 결과가 없습니다" : "등록된 사용자가 없습니다"}
                   </TableCell>
                 </TableRow>
               ) : (
@@ -747,7 +898,8 @@ export default function AdminPage() {
         <div>
           <h1 className="text-2xl font-bold">사용자 관리</h1>
           <p className="text-sm text-muted-foreground">
-            전체 {total}명 · 카카오 로그인 {linkedCount}명 · 친구 매칭 {matchedCount}명 ·
+            {nameSearch ? `검색 결과 ${total}명` : `전체 ${total}명`} ·
+            카카오 로그인 {linkedCount}명 · 친구 매칭 {matchedCount}명 ·
             <span className={unsetupCount > 0 ? "text-amber-700 font-medium ml-1" : "ml-1"}>
               비번 미설정 {unsetupCount}명
             </span>
@@ -839,6 +991,8 @@ export default function AdminPage() {
           <Button onClick={() => setCreateOpen(true)}>사용자 등록</Button>
         </div>
       </div>
+
+      {renderUserListControls()}
 
       {/* 내 카카오 동의 상태 배너 */}
       {scopeStatus && (
@@ -939,17 +1093,17 @@ export default function AdminPage() {
               <TableHead className="w-[40px] text-center">
                 <input
                   type="checkbox"
-                  checked={users.length > 0 && selectedUserIds.size === users.length}
+                  checked={allVisibleSelected}
                   onChange={toggleAllUsers}
                   aria-label="전체 선택"
                   className="h-4 w-4"
                 />
               </TableHead>
-              <TableHead className="w-[60px]">ID</TableHead>
-              <TableHead>이름</TableHead>
-              <TableHead>이메일</TableHead>
-              <TableHead className="w-[100px]">역할</TableHead>
-              <TableHead className="w-[70px] text-center">조</TableHead>
+              {renderSortableHead("id", "ID", "w-[60px]")}
+              {renderSortableHead("name", "이름")}
+              {renderSortableHead("email", "이메일")}
+              {renderSortableHead("role", "역할", "w-[100px]")}
+              {renderSortableHead("group_no", "조", "w-[70px] text-center")}
               <TableHead className="w-[120px]">전화번호</TableHead>
               <TableHead className="w-[100px] text-center">카카오 로그인</TableHead>
               <TableHead className="w-[100px] text-center">토큰</TableHead>
@@ -964,14 +1118,17 @@ export default function AdminPage() {
           <TableBody>
             {isLoading ? (
               <TableRow>
-                <TableCell colSpan={14} className="h-32 text-center">
+                <TableCell colSpan={USER_TABLE_COLUMN_COUNT} className="h-32 text-center">
                   로딩 중...
                 </TableCell>
               </TableRow>
-            ) : users.length === 0 ? (
+            ) : visibleUsers.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={14} className="h-32 text-center text-muted-foreground">
-                  등록된 사용자가 없습니다
+                <TableCell
+                  colSpan={USER_TABLE_COLUMN_COUNT}
+                  className="h-32 text-center text-muted-foreground"
+                >
+                  {nameSearch ? "검색 결과가 없습니다" : "등록된 사용자가 없습니다"}
                 </TableCell>
               </TableRow>
             ) : (
