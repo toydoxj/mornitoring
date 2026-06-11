@@ -73,4 +73,11 @@ frontend/ (Next.js)  ──HTTP/JSON──→  backend/ (FastAPI)
 
 - `.doc/PRD.md` — 제품 요구사항 (업무 프로세스 Phase 0~2)
 - `.doc/plan.md` — 구현 계획서 (4단계 Stage, 시나리오, 기술 결정)
+- `.doc/backup-recovery.md` — DB·첨부 백업 정책 및 재해 복구(DR) 절차
 - `.doc/관리대장 샘플.xlsx` — 통합관리대장 실제 양식 (102열, 7개 시트)
+
+## 백업
+
+- `.github/workflows/db-backup.yml` — 매일 KST 03:10 운영 DB를 `pg_dump`로 S3 오프사이트 백업 (수동 실행 가능, label 지정)
+- `backend/scripts/backup_db.py` — 덤프 + sha256 + meta + `.complete` 마커 4종 세트 업로드. 로컬 실행 비권장
+- `backend/db_backups/` — 로컬 수동 덤프 보관용. **git 추적 금지** (.gitignore 등록됨)

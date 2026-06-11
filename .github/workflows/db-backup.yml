@@ -1,0 +1,60 @@
+name: DB Backup
+
+# 운영 PostgreSQL(Supabase) 논리 백업을 AWS S3 에 일 1회 업로드.
+# 실패 시 GitHub 가 리포 관리자에게 자동 메일을 보낸다.
+# Supabase 자동 스냅샷과 별개로 벤더 외(오프사이트) 백업을 확보하는 게 목적.
+
+on:
+  schedule:
+    # KST 03:10 = UTC 18:10 (전일 기준).
+    # 운영 트래픽이 가장 적은 새벽 시간대.
+    - cron: '10 18 * * *'
+  workflow_dispatch:
+    inputs:
+      label:
+        description: '백업 파일명에 붙일 라벨 (예: pre-migration, manual)'
+        required: false
+        default: manual
+
+concurrency:
+  group: db-backup
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install pg_dump (PostgreSQL 17 client)
+        run: |
+          # pg_dump 는 서버 메이저 버전이 클라이언트보다 높으면 즉시 실패한다.
+          # 클라이언트 17 은 서버 15/16/17 모두 덤프 가능 (Supabase 메이저 업그레이드 대비).
+          sudo sh -c 'echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/pgdg.gpg
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client-17
+
+      - name: Install Python dependencies
+        run: pip install 'boto3>=1.42,<2' 'psycopg2-binary>=2.9,<3'
+
+      - name: Run backup
+        env:
+          DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
+          BACKUP_S3_BUCKET: ${{ secrets.BACKUP_S3_BUCKET }}
+          BACKUP_S3_PREFIX: ${{ vars.BACKUP_S3_PREFIX || 'db/' }}
+          BACKUP_KMS_KEY_ID: ${{ secrets.BACKUP_KMS_KEY_ID }}
+          AWS_REGION: ${{ vars.BACKUP_AWS_REGION || 'ap-northeast-2' }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.BACKUP_AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.BACKUP_AWS_SECRET_ACCESS_KEY }}
+          BACKUP_LABEL: ${{ github.event.inputs.label }}
+        run: python backend/scripts/backup_db.py
