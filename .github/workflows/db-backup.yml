@@ -60,3 +60,27 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.BACKUP_AWS_SECRET_ACCESS_KEY }}
           BACKUP_LABEL: ${{ github.event.inputs.label }}
         run: python backend/scripts/backup_db.py
+
+      # 외부 모니터링 (healthchecks.io Dead Man's Switch).
+      # 성공 핑이 24시간 + 유예 내에 도착하지 않으면 — 백업 실패든, cron 이
+      # 60일 무활동으로 자동 비활성화됐든 — 이메일 경보가 발송된다.
+      # HEALTHCHECK_PING_URL Secret 이 없으면 조용히 건너뛴다.
+      - name: Healthcheck ping (성공)
+        if: success()
+        env:
+          HC_URL: ${{ secrets.HEALTHCHECK_PING_URL }}
+        run: |
+          if [ -n "$HC_URL" ]; then
+            curl -fsS -m 10 --retry 3 "$HC_URL" > /dev/null && echo "healthcheck ping OK"
+          else
+            echo "HEALTHCHECK_PING_URL 미설정 — 핑 생략"
+          fi
+
+      - name: Healthcheck ping (실패 — 즉시 경보)
+        if: failure()
+        env:
+          HC_URL: ${{ secrets.HEALTHCHECK_PING_URL }}
+        run: |
+          if [ -n "$HC_URL" ]; then
+            curl -fsS -m 10 --retry 3 "$HC_URL/fail" > /dev/null || true
+          fi

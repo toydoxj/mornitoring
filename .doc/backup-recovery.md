@@ -93,6 +93,21 @@ RPO 목표: **24시간 이내**, RTO 목표: **4시간 이내** (PITR 미도입 
 - 매일 KST 03:10 자동 실행 + 수동 실행(workflow_dispatch) 가능
 - 실패 시 GitHub 가 리포 관리자에게 자동 메일 발송
 
+### 3.1.1 외부 모니터링 (healthchecks.io)
+GitHub 의 실패 메일만으로는 **"실행 자체가 안 되는" 장애**를 못 잡는다
+(60일 무활동 시 scheduled workflow 자동 비활성화, Actions 장애 등).
+healthchecks.io Dead Man's Switch 로 보완한다:
+
+- 백업 성공 시 워크플로가 핑 URL(`HEALTHCHECK_PING_URL` Secret) 호출
+- 실패 시 `<URL>/fail` 호출 → 즉시 경보
+- **핑이 기한(1일 + 유예 6시간) 내에 안 오면 원인 불문 이메일 경보**
+
+설정 (최초 1회):
+1. https://healthchecks.io 가입 → Add Check → 이름 `db-backup`
+2. Schedule: Period `1 day`, Grace `6 hours`
+3. Ping URL 복사 → `gh secret set HEALTHCHECK_PING_URL -R toydoxj/mornitoring`
+4. 핑 URL 은 비밀로 취급 (URL 만 알면 누구나 핑 가능 — 가짜 정상 신호 방지)
+
 ### 3.2 수동 백업 (배포/마이그레이션 직전)
 GitHub → Actions → `DB Backup` → **Run workflow**
 - `label` 에 `pre-migration` 또는 `pre-release` 입력
