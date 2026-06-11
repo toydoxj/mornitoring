@@ -43,6 +43,8 @@ jobs:
           curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/pgdg.gpg
           sudo apt-get update
           sudo apt-get install -y postgresql-client-17
+          # 러너에 기본 설치된 구버전 pg_restore 가 잡히지 않도록 17 경로를 PATH 앞에 둔다.
+          echo "/usr/lib/postgresql/17/bin" >> "$GITHUB_PATH"
 
       - name: Install Python dependencies
         run: pip install 'boto3>=1.42,<2' 'psycopg2-binary>=2.9,<3'
