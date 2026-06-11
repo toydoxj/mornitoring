@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from models.building import Building
 from models.review_stage import ReviewStage, PhaseType, ResultType
+from services.phase_transition import transition_phase
 from engines.column_mapping import col_letter_to_index
 
 DATA_START_ROW = 5
@@ -135,7 +136,7 @@ def _parse_result(val) -> ResultType | None:
     return mapping.get(s)
 
 
-def import_ledger_unified(file_path: str | Path, db: Session) -> dict:
+def import_ledger_unified(file_path: str | Path, db: Session, actor_user_id: int | None = None) -> dict:
     """통합 관리대장 시트를 DB에 import (일괄 처리 최적화)"""
     wb = load_workbook(str(file_path), data_only=True, read_only=True)
 
@@ -212,7 +213,10 @@ def import_ledger_unified(file_path: str | Path, db: Session) -> dict:
 
         if any(v is not None for v in prelim_data.values()):
             db.add(ReviewStage(building_id=building.id, phase=PhaseType.PRELIMINARY, phase_order=0, **prelim_data))
-            building.current_phase = "preliminary"
+            transition_phase(
+                db, building, to_phase="preliminary", trigger="import",
+                actor_user_id=actor_user_id, reason="ledger_import_unified",
+            )
 
         # 1차 보완
         supp1_data = {}
@@ -224,7 +228,10 @@ def import_ledger_unified(file_path: str | Path, db: Session) -> dict:
 
         if any(v is not None for v in supp1_data.values()):
             db.add(ReviewStage(building_id=building.id, phase=PhaseType.SUPPLEMENT_1, phase_order=1, **supp1_data))
-            building.current_phase = "supplement_1"
+            transition_phase(
+                db, building, to_phase="supplement_1", trigger="import",
+                actor_user_id=actor_user_id, reason="ledger_import_unified",
+            )
 
         result["imported"] += 1
         batch_count += 1

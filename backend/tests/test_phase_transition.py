@@ -6,6 +6,8 @@
 - POST /buildings/{id}/phase 가 매트릭스 외 변경을 400 으로 거부
 - PATCH /buildings/{id} 에서 current_phase 필드는 더 이상 받지 않음 (서버 사이드에서 무시)
 - assignments.assign 신규 배정 시 INITIAL 로그
+- IMPORT 트리거: 엑셀 초기 적재의 전진 전환 허용 / 역행·미지 단계 거부
+- import_ledger_unified 가 직접 대입 없이 trigger=import 로그를 남기는지 (통합)
 """
 
 import pytest
@@ -298,3 +300,128 @@ def test_assignments_assign_logs_initial(
     assert log.trigger == "initial"
     assert log.from_phase is None
     assert log.to_phase == "assigned"
+
+
+# ===== IMPORT 트리거 (엑셀 초기 적재) =====
+
+def test_transition_phase_import_from_empty(db_session, make_building):
+    """신규 적재: 빈 phase → 임의의 알려진 단계 허용 + 로그 trigger=import."""
+    b = make_building(mgmt_no="PT-IMP-NEW")
+    b.current_phase = None
+    db_session.commit()
+
+    log = transition_phase(
+        db_session, b, to_phase="supplement_1", trigger="import",
+        actor_user_id=None, reason="ledger_import_unified",
+    )
+    db_session.commit()
+
+    assert b.current_phase == "supplement_1"
+    assert log is not None
+    assert log.trigger == "import"
+    assert log.from_phase is None and log.to_phase == "supplement_1"
+    assert log.reason == "ledger_import_unified"
+
+
+def test_transition_phase_import_progressive_forward(db_session, make_building):
+    """같은 import 패스 안에서 preliminary → supplement_1 누진 설정 허용."""
+    b = make_building(mgmt_no="PT-IMP-FWD")
+    b.current_phase = None
+    db_session.commit()
+
+    transition_phase(db_session, b, to_phase="preliminary", trigger="import")
+    transition_phase(db_session, b, to_phase="supplement_1", trigger="import")
+    db_session.commit()
+
+    assert b.current_phase == "supplement_1"
+    logs = (
+        db_session.query(PhaseTransitionLog)
+        .filter(PhaseTransitionLog.mgmt_no == "PT-IMP-FWD")
+        .order_by(PhaseTransitionLog.id)
+        .all()
+    )
+    assert [(l.from_phase, l.to_phase) for l in logs] == [
+        (None, "preliminary"),
+        ("preliminary", "supplement_1"),
+    ]
+
+
+def test_transition_phase_import_rejects_backward(db_session, make_building):
+    """import 로 기존 단계를 되돌리는 역행은 거부."""
+    b = make_building(mgmt_no="PT-IMP-BACK")
+    b.current_phase = "supplement_1"
+    db_session.commit()
+
+    with pytest.raises(InvalidPhaseTransition):
+        transition_phase(db_session, b, to_phase="preliminary", trigger="import")
+    assert b.current_phase == "supplement_1"
+
+
+def test_transition_phase_import_rejects_unknown_phase(db_session, make_building):
+    """알 수 없는 단계 문자열로의 import 는 거부 (엑셀 오염 방어)."""
+    b = make_building(mgmt_no="PT-IMP-UNKNOWN")
+    b.current_phase = None
+    db_session.commit()
+
+    with pytest.raises(InvalidPhaseTransition):
+        transition_phase(db_session, b, to_phase="totally_bogus", trigger="import")
+    assert b.current_phase is None
+
+
+def test_import_ledger_unified_guards_and_logs(db_session, tmp_path):
+    """importer 가 직접 대입으로 회귀하면 이 테스트가 잡는다.
+
+    소형 통합 관리대장 xlsx 를 만들어 import_ledger_unified 실행:
+    - 예비+1차 데이터 행 → preliminary → supplement_1 누진 전환 + 로그 2건
+    - 예비만 있는 행 → preliminary + 로그 1건
+    - 단계 데이터 없는 행 → phase None + 로그 0건
+    """
+    from openpyxl import Workbook
+
+    from engines.ledger_import_unified import import_ledger_unified
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "통합 관리대장"
+    # 관리번호는 9자 이상 + '-' 포함이어야 파싱된다 (DATA_START_ROW=5)
+    ws["A5"] = "2026-0001"
+    ws["BQ5"] = "홍길동"     # 예비 검토자
+    ws["BV5"] = "적합"       # 예비판정
+    ws["CI5"] = "홍길동"     # 1차 보완 검토자
+    ws["CJ5"] = "재계산"     # 1차 보완 판정
+    ws["A6"] = "2026-0002"
+    ws["BV6"] = "적합"
+    ws["A7"] = "2026-0003"
+    path = tmp_path / "ledger.xlsx"
+    wb.save(path)
+
+    result = import_ledger_unified(path, db_session, actor_user_id=None)
+    assert result["imported"] == 3 and not result["errors"]
+
+    from models.building import Building
+
+    phases = {
+        b.mgmt_no: b.current_phase
+        for b in db_session.query(Building).filter(
+            Building.mgmt_no.in_(["2026-0001", "2026-0002", "2026-0003"])
+        )
+    }
+    assert phases == {
+        "2026-0001": "supplement_1",
+        "2026-0002": "preliminary",
+        "2026-0003": None,
+    }
+
+    logs = (
+        db_session.query(PhaseTransitionLog)
+        .filter(PhaseTransitionLog.mgmt_no.like("2026-000%"))
+        .order_by(PhaseTransitionLog.id)
+        .all()
+    )
+    assert [(l.mgmt_no, l.from_phase, l.to_phase) for l in logs] == [
+        ("2026-0001", None, "preliminary"),
+        ("2026-0001", "preliminary", "supplement_1"),
+        ("2026-0002", None, "preliminary"),
+    ]
+    assert all(l.trigger == "import" for l in logs)
+    assert all(l.reason == "ledger_import_unified" for l in logs)

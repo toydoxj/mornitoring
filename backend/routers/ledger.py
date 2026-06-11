@@ -12,6 +12,7 @@ from dependencies import stream_upload_to_tempfile
 from models.user import User, UserRole
 from routers.auth import get_current_user, require_roles
 from services.audit import log_action
+from services.phase_transition import InvalidPhaseTransition
 from engines.ledger_import import import_ledger
 from engines.ledger_import_2025 import import_ledger_2025
 from engines.ledger_import_unified import import_ledger_unified
@@ -61,11 +62,11 @@ async def import_excel(
     try:
         fmt = _detect_format(tmp_path)
         if fmt == "unified_new":
-            result = import_ledger_unified(tmp_path, db)
+            result = import_ledger_unified(tmp_path, db, actor_user_id=current_user.id)
         elif fmt == "2025":
-            result = import_ledger_2025(tmp_path, db)
+            result = import_ledger_2025(tmp_path, db, actor_user_id=current_user.id)
         else:
-            result = import_ledger(tmp_path, db)
+            result = import_ledger(tmp_path, db, actor_user_id=current_user.id)
         summary = result if isinstance(result, dict) else {"result": str(result)}
         log_action(
             db, current_user.id, "upload", "ledger",
@@ -73,6 +74,12 @@ async def import_excel(
         )
         db.commit()
         return result
+    except InvalidPhaseTransition as exc:
+        # 현행 importer 는 신규 건물에 전진 전환만 수행하므로 정상 데이터로는
+        # 도달하지 않지만, 향후 기존 건물 갱신이 추가될 때 부분 커밋 상태로
+        # 500 이 나가는 것을 막기 위한 방어선.
+        db.rollback()
+        raise HTTPException(status_code=400, detail=f"단계 전환 규칙 위반: {exc}")
     finally:
         tmp_path.unlink(missing_ok=True)
 

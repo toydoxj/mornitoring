@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from models.building import Building
 from models.review_stage import ReviewStage, PhaseType, ResultType
+from services.phase_transition import transition_phase
 from engines.column_mapping import (
     BUILDING_COLUMN_MAP,
     REVIEWER_COLUMN,
@@ -100,7 +101,7 @@ def _offset_col(base_col: str, offset: int) -> str:
     return index_to_col_letter(base_idx + offset)
 
 
-def import_ledger(file_path: str | Path, db: Session) -> dict:
+def import_ledger(file_path: str | Path, db: Session, actor_user_id: int | None = None) -> dict:
     """통합관리대장 엑셀 파일을 DB에 import
 
     Returns:
@@ -168,7 +169,10 @@ def import_ledger(file_path: str | Path, db: Session) -> dict:
                 **prelim_data,
             )
             db.add(stage)
-            building.current_phase = "preliminary"
+            transition_phase(
+                db, building, to_phase="preliminary", trigger="import",
+                actor_user_id=actor_user_id, reason="ledger_import",
+            )
 
         # 보완 단계 파싱 (1차~4차)
         phase_types = [PhaseType.SUPPLEMENT_1, PhaseType.SUPPLEMENT_2,
@@ -211,7 +215,10 @@ def import_ledger(file_path: str | Path, db: Session) -> dict:
                     **stage_data,
                 )
                 db.add(stage)
-                building.current_phase = phase_types[supp_no - 1].value
+                transition_phase(
+                    db, building, to_phase=phase_types[supp_no - 1].value,
+                    trigger="import", actor_user_id=actor_user_id, reason="ledger_import",
+                )
 
         result["imported"] += 1
 

@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from models.building import Building
 from models.review_stage import ReviewStage, PhaseType, ResultType
+from services.phase_transition import transition_phase
 from engines.column_mapping import col_letter_to_index
 
 DATA_START_ROW = 5
@@ -125,7 +126,7 @@ def _parse_result(val) -> ResultType | None:
     return mapping.get(s)
 
 
-def import_ledger_2025(file_path: str | Path, db: Session, sheet_name: str | None = None) -> dict:
+def import_ledger_2025(file_path: str | Path, db: Session, sheet_name: str | None = None, actor_user_id: int | None = None) -> dict:
     """2025년 관리대장 엑셀 파일을 DB에 import
 
     Returns:
@@ -201,7 +202,10 @@ def import_ledger_2025(file_path: str | Path, db: Session, sheet_name: str | Non
                 **prelim_data,
             )
             db.add(stage)
-            building.current_phase = "preliminary"
+            transition_phase(
+                db, building, to_phase="preliminary", trigger="import",
+                actor_user_id=actor_user_id, reason="ledger_import_2025",
+            )
 
         # 1차 보완 검토
         supp1_data = {}
@@ -219,7 +223,10 @@ def import_ledger_2025(file_path: str | Path, db: Session, sheet_name: str | Non
                 **supp1_data,
             )
             db.add(stage)
-            building.current_phase = "supplement_1"
+            transition_phase(
+                db, building, to_phase="supplement_1", trigger="import",
+                actor_user_id=actor_user_id, reason="ledger_import_2025",
+            )
 
         result["imported"] += 1
 

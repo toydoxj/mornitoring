@@ -13,6 +13,9 @@
              "supplement_N_received" -> "supplement_N"             (N=1~5)
     MANUAL:  현재 phase 기준 전후 1단계만 허용
              그 외 임의 점프 금지
+    IMPORT:  엑셀 관리대장 초기 적재 전용.
+             알려진 단계로의 전진만 허용 (빈 phase → 임의 단계 포함).
+             기존 건물의 phase 를 되돌리는 용도로는 사용 금지.
 
 사용 패턴:
     log = transition_phase(db, building, to_phase=..., trigger="receive",
@@ -30,7 +33,7 @@ from models.building import Building
 from models.phase_transition_log import PhaseTransitionLog
 
 
-TriggerType = Literal["initial", "receive", "upload", "manual"]
+TriggerType = Literal["initial", "receive", "upload", "manual", "import"]
 
 
 # RECEIVE: (출발 phase) -> (도착 phase)
@@ -87,6 +90,9 @@ def _build_manual_allowed_pairs() -> set[tuple[str, str]]:
 # MANUAL이 허용하는 (from, to) 쌍 — 현재 phase 기준 전후 1단계.
 _MANUAL_ALLOWED_PAIRS = _build_manual_allowed_pairs()
 
+# IMPORT 전진 검증용 단계 → 순서 인덱스.
+_PHASE_INDEX: dict[str, int] = {p: i for i, p in enumerate(_PHASE_SEQUENCE)}
+
 
 class InvalidPhaseTransition(ValueError):
     """매트릭스에 없는 (trigger, from, to) 전환 시도."""
@@ -142,6 +148,26 @@ def _validate_transition(trigger: TriggerType, from_phase: str | None, to_phase:
             raise InvalidPhaseTransition(
                 f"UPLOAD 전환 불허: from='{from_phase}' → '{to_phase}' (예상 '{expected}')"
             )
+        return
+
+    if trigger == "import":
+        # 엑셀 초기 적재: 신규 건물에 과거 진행 상태를 복원하는 경로.
+        # 같은 건물을 한 번의 import 안에서 preliminary → supplement_N 으로
+        # 누진 설정하므로, 알려진 단계로의 전진만 허용한다.
+        if to_phase not in _PHASE_INDEX:
+            raise InvalidPhaseTransition(
+                f"IMPORT 전환 불허: to='{to_phase}' 는 알 수 없는 단계"
+            )
+        if from_phase:
+            if from_phase not in _PHASE_INDEX:
+                raise InvalidPhaseTransition(
+                    f"IMPORT 전환 불허: from='{from_phase}' 는 알 수 없는 단계"
+                )
+            if _PHASE_INDEX[from_phase] >= _PHASE_INDEX[to_phase]:
+                raise InvalidPhaseTransition(
+                    f"IMPORT 전환 불허: ({from_phase} → {to_phase}) 역행/제자리 금지. "
+                    "기존 건물의 단계 정정은 MANUAL 전환을 사용하세요."
+                )
         return
 
     if trigger == "manual":
