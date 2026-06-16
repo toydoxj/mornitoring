@@ -132,10 +132,9 @@ app.add_middleware(
     allow_origins=settings.cors_origins,
     allow_origin_regex=(
         r"https://("
-        r"ksea-m|"
-        r"frontend-[a-z0-9-]+|"
-        r"frontend-git-[a-z0-9-]+"
-        r")\.vercel\.app"
+        r"www\.moni\.ksea\.or\.kr|"
+        r"(ksea-m|frontend-[a-z0-9-]+|frontend-git-[a-z0-9-]+)\.vercel\.app"
+        r")"
     ),
     allow_credentials=True,
     allow_methods=["*"],
