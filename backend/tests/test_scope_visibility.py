@@ -199,6 +199,7 @@ def test_stats_returns_regional_building_stats_with_total_row(
     assert floor_total["floors_16_over"] == 1
 
     risk_total = regional_stats["risk"][0]
+    assert risk_total["total"] == 4
     assert risk_total["special"] == 1
     assert risk_total["multi_use"] == 1
     assert risk_total["high_rise"] == 1
@@ -207,6 +208,7 @@ def test_stats_returns_regional_building_stats_with_total_row(
     assert risk_total["related_tech_coop"] == 1
 
     seoul = next(row for row in regional_stats["risk"] if row["region"] == "서울특별시")
+    assert seoul["total"] == 2
     assert seoul["related_tech_coop_target"] == 2
     assert seoul["related_tech_coop"] == 1
 

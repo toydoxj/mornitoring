@@ -52,6 +52,7 @@ interface ReviewerStat {
 
 type RegionalStatRow<T extends string> = {
   region: string
+  total?: number
 } & Record<T, number>
 
 interface RegionalStats {
@@ -452,10 +453,9 @@ function RegionalStatsTable<T extends string>({
   }
 
   const totalRow = rows.find((row) => row.region === "전체") ?? rows[0]
-  const grandTotal = columns.reduce(
-    (sum, column) => sum + (totalRow[column.key] ?? 0),
-    0
-  )
+  const getRowTotal = (row: RegionalStatRow<T>) =>
+    row.total ?? columns.reduce((sum, column) => sum + (row[column.key] ?? 0), 0)
+  const grandTotal = getRowTotal(totalRow)
 
   return (
     <div className="overflow-x-auto rounded-md border">
@@ -474,10 +474,7 @@ function RegionalStatsTable<T extends string>({
         <TableBody>
           {rows.map((row) => {
             const isTotal = row.region === "전체"
-            const rowTotal = columns.reduce(
-              (sum, column) => sum + (row[column.key] ?? 0),
-              0
-            )
+            const rowTotal = getRowTotal(row)
             return (
               <TableRow key={row.region} className={isTotal ? "bg-muted/40" : undefined}>
                 <TableCell className={isTotal ? "font-bold" : "font-medium"}>

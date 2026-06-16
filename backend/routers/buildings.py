@@ -318,6 +318,7 @@ FLOOR_STAT_KEYS = (
     "floors_16_over",
 )
 RISK_STAT_KEYS = (
+    "total",
     "special",
     "multi_use",
     "high_rise",
@@ -705,6 +706,7 @@ def get_stats(
             db.query(
                 Building.sido.label("sido"),
                 Building.sigungu.label("sigungu"),
+                sa_func.count(Building.id).label("total"),
                 sa_func.count(Building.id).filter(
                     Building.is_special_structure.is_(True)
                 ).label("special"),
