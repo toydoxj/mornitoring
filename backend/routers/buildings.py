@@ -295,6 +295,11 @@ def _stats_cache_set(db: Session, key: tuple[str, str], payload: dict[str, objec
     _STATS_CACHE[key] = (monotonic(), payload)
 
 
+def _release_read_connection(db: Session) -> None:
+    """읽기 전용 후처리 동안 DB 커넥션을 오래 점유하지 않도록 반환한다."""
+    db.rollback()
+
+
 class BuildingListResponse(BaseModel):
     items: list[BuildingResponse]
     total: int
@@ -332,6 +337,7 @@ def get_stats(
     cache_key = _stats_cache_key(current_user)
     cached_stats = _stats_cache_get(db, cache_key)
     if cached_stats is not None:
+        _release_read_connection(db)
         return cached_stats
 
     # 가시성 필터: 간사가 자기 조 데이터만 보도록.
@@ -677,6 +683,7 @@ def get_stats(
         )
         .all()
     )
+    _release_read_connection(db)
     detail_counts = {"preliminary": 0, "supplement": 0}
     keyword_map: dict[str, dict[str, int | str]] = {}
     for phase_group, severity, content in keyword_detail_rows:
@@ -1143,6 +1150,7 @@ def my_stats(
         )
         .all()
     )
+    _release_read_connection(db)
     for (doc_received_at,) in elapsed_rows:
         days = (today - doc_received_at).days
         if days < 1:
@@ -1175,6 +1183,7 @@ def my_stats(
         )
         .all()
     )
+    _release_read_connection(db)
     for (report_due_date,) in unsubmitted_rows:
         schedule_counts["in_progress"] += 1
         delta = (report_due_date - today).days
@@ -1200,6 +1209,7 @@ def my_stats(
         .group_by(Building.final_result)
         .all()
     )
+    _release_read_connection(db)
     for final_result, count in final_rows:
         if final_result in final_counts:
             final_counts[final_result] = int(count or 0)

@@ -62,11 +62,12 @@ class Settings(BaseSettings):
     # 여러 관리자가 같은 대시보드를 동시에 열 때 반복 집계 쿼리를 줄인다.
     stats_cache_ttl_seconds: int = 5
 
-    # SQLAlchemy DB 커넥션 풀. Supabase pooler 한도가 낮으므로 프로세스당
-    # 커넥션 수를 작게 유지하고, 대기는 짧게 끝낸다.
-    db_pool_size: int = 2
-    db_max_overflow: int = 1
-    db_pool_timeout_seconds: int = 3
+    # SQLAlchemy DB 커넥션 풀. 대시보드가 여러 API를 병렬 호출하므로
+    # 기본값은 소규모 운영 동시 접속을 버틸 정도로 두고, Supabase/Render 한도에
+    # 맞춰 환경변수(DB_POOL_SIZE 등)로 더 낮추거나 높일 수 있게 한다.
+    db_pool_size: int = 5
+    db_max_overflow: int = 10
+    db_pool_timeout_seconds: int = 10
 
     @property
     def sqlalchemy_database_url(self) -> str:
