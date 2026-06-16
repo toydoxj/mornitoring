@@ -193,6 +193,7 @@ def import_ledger_selection(file_path: str | Path, db: Session) -> dict:
             building_data[field_name] = val
 
         db.add(Building(**building_data))
+        db.flush()
         result["imported"] += 1
 
     db.commit()
