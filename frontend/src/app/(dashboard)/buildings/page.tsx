@@ -36,6 +36,13 @@ const RESULT_VARIANT: Record<string, "default" | "secondary" | "destructive" | "
   recalculate: "destructive",
 }
 
+type LedgerUploadResult = {
+  imported: number
+  skipped: number
+  errors?: string[]
+  error?: string
+}
+
 export default function BuildingsPage() {
   const router = useRouter()
   const user = useAuthStore((s) => s.user)
@@ -52,7 +59,7 @@ export default function BuildingsPage() {
   const [isLoading, setIsLoading] = useState(true)
   const [uploadOpen, setUploadOpen] = useState(false)
   const [uploading, setUploading] = useState(false)
-  const [uploadResult, setUploadResult] = useState<{ imported: number; skipped: number } | null>(null)
+  const [uploadResult, setUploadResult] = useState<LedgerUploadResult | null>(null)
   // 검토위원 배정
   const [assignOpen, setAssignOpen] = useState(false)
   const [assignFile, setAssignFile] = useState<File | null>(null)
@@ -129,8 +136,19 @@ export default function BuildingsPage() {
       })
       setUploadResult(result)
       fetchBuildings()
-    } catch {
-      setUploadResult({ imported: 0, skipped: 0 })
+    } catch (err) {
+      const axiosErr = err as {
+        response?: { data?: { detail?: unknown } }
+        message?: string
+      }
+      const detail = axiosErr.response?.data?.detail
+      const message =
+        typeof detail === "string"
+          ? detail
+          : Array.isArray(detail)
+            ? detail.map((item) => String(item)).join(", ")
+            : axiosErr.message || "업로드 실패"
+      setUploadResult({ imported: 0, skipped: 0, error: message })
     } finally {
       setUploading(false)
       e.target.value = ""
@@ -331,6 +349,12 @@ export default function BuildingsPage() {
                     <div className="rounded-md bg-muted p-3 text-sm">
                       <p>신규 등록: <strong>{uploadResult.imported}건</strong></p>
                       <p>중복 스킵: {uploadResult.skipped}건</p>
+                      {uploadResult.error && (
+                        <p className="mt-2 text-destructive">{uploadResult.error}</p>
+                      )}
+                      {uploadResult.errors && uploadResult.errors.length > 0 && (
+                        <p className="mt-2 text-destructive">{uploadResult.errors.join(", ")}</p>
+                      )}
                     </div>
                   )}
                 </div>
