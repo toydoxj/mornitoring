@@ -123,13 +123,89 @@ def test_secretary_stats_total_excludes_other_group(
     sec, sec_h = make_user(UserRole.SECRETARY)
     sec.group_no = 1
     db_session.commit()
-    _make_two_groups(make_user, make_reviewer, make_building, db_session)
+    _, _, b1, _, _, b2 = _make_two_groups(
+        make_user, make_reviewer, make_building, db_session
+    )
+    b1.sido = "서울특별시"
+    b1.sigungu = "강남구"
+    b1.gross_area = 100
+    b2.sido = "부산광역시"
+    b2.sigungu = "해운대구"
+    b2.gross_area = 5000
+    db_session.commit()
 
     res = client.get("/api/buildings/stats", headers=sec_h)
     assert res.status_code == 200
     body = res.json()
     # 같은 조 1건만 노출되어야 한다.
     assert body["total"] == 1
+    area_total = body["regional_stats"]["area"][0]
+    assert area_total["area_0_300"] == 1
+    assert area_total["area_5000_over"] == 0
+
+
+def test_stats_returns_regional_building_stats_with_total_row(
+    client, db_session, make_user, make_building
+):
+    _, headers = make_user(UserRole.CHIEF_SECRETARY)
+    b1 = make_building(mgmt_no="REG-STATS-001")
+    b1.sido = "서울특별시"
+    b1.sigungu = "강남구"
+    b1.gross_area = 299
+    b1.floors_above = 5
+    b1.is_special_structure = True
+    b1.struct_eng_name = "홍길동"
+
+    b2 = make_building(mgmt_no="REG-STATS-002")
+    b2.sido = "서울특별시"
+    b2.sigungu = "강남구"
+    b2.gross_area = 300
+    b2.floors_above = 6
+    b2.is_multi_use = True
+
+    b3 = make_building(mgmt_no="REG-STATS-003")
+    b3.sido = "부산광역시"
+    b3.sigungu = "해운대구"
+    b3.gross_area = 5000
+    b3.floors_above = 16
+    b3.is_high_rise = True
+    b3.is_quasi_multi_use = True
+    b3.struct_eng_firm = "협력사"
+
+    b4 = make_building(mgmt_no="REG-STATS-004")
+    b4.gross_area = 800
+    b4.floors_above = 3
+    b4.detail_category9 = "필로티"
+    db_session.commit()
+
+    res = client.get("/api/buildings/stats", headers=headers)
+    assert res.status_code == 200
+    regional_stats = res.json()["regional_stats"]
+
+    area_total = regional_stats["area"][0]
+    assert area_total["region"] == "전체"
+    assert area_total["area_0_300"] == 1
+    assert area_total["area_300_600"] == 1
+    assert area_total["area_600_1000"] == 1
+    assert area_total["area_1000_5000"] == 0
+    assert area_total["area_5000_over"] == 1
+
+    floor_total = regional_stats["floors"][0]
+    assert floor_total["floors_under_6"] == 2
+    assert floor_total["floors_6_under_16"] == 1
+    assert floor_total["floors_16_over"] == 1
+
+    risk_total = regional_stats["risk"][0]
+    assert risk_total["special"] == 1
+    assert risk_total["multi_use"] == 1
+    assert risk_total["high_rise"] == 1
+    assert risk_total["quasi_multi_use"] == 1
+    assert risk_total["related_tech_coop_target"] == 4
+    assert risk_total["related_tech_coop"] == 1
+
+    seoul = next(row for row in regional_stats["risk"] if row["region"] == "서울특별시 강남구")
+    assert seoul["related_tech_coop_target"] == 2
+    assert seoul["related_tech_coop"] == 1
 
 
 def test_stats_returns_severity_summary_by_category_and_phase(

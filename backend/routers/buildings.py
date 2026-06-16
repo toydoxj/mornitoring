@@ -278,6 +278,28 @@ def _to_response(building: Building, registered_names: set[str]) -> dict:
 
 SEVERITY_LABELS = ("L0", "L1", "L2", "L3", "L4")
 REPORT_MAX_LABELS = ("pass", *SEVERITY_LABELS)
+REGION_TOTAL_LABEL = "전체"
+UNKNOWN_REGION_LABEL = "지역 미상"
+AREA_STAT_KEYS = (
+    "area_0_300",
+    "area_300_600",
+    "area_600_1000",
+    "area_1000_5000",
+    "area_5000_over",
+)
+FLOOR_STAT_KEYS = (
+    "floors_under_6",
+    "floors_6_under_16",
+    "floors_16_over",
+)
+RISK_STAT_KEYS = (
+    "special",
+    "multi_use",
+    "high_rise",
+    "quasi_multi_use",
+    "related_tech_coop_target",
+    "related_tech_coop",
+)
 
 
 def _empty_severity_counts() -> dict[str, int]:
@@ -286,6 +308,40 @@ def _empty_severity_counts() -> dict[str, int]:
 
 def _empty_report_max_counts() -> dict[str, int]:
     return {label: 0 for label in REPORT_MAX_LABELS}
+
+
+def _region_label(sido: str | None, sigungu: str | None) -> str:
+    parts = [part.strip() for part in (sido, sigungu) if part and part.strip()]
+    return " ".join(parts) if parts else UNKNOWN_REGION_LABEL
+
+
+def _merge_regional_rows(raw_rows, count_keys: tuple[str, ...]) -> list[dict[str, int | str]]:
+    by_region: dict[str, dict[str, int | str]] = {}
+    for row in raw_rows:
+        region = _region_label(row.sido, row.sigungu)
+        item = by_region.setdefault(
+            region,
+            {"region": region, **{key: 0 for key in count_keys}},
+        )
+        for key in count_keys:
+            item[key] = int(item.get(key, 0)) + int(getattr(row, key) or 0)
+
+    total_row: dict[str, int | str] = {
+        "region": REGION_TOTAL_LABEL,
+        **{key: 0 for key in count_keys},
+    }
+    for item in by_region.values():
+        for key in count_keys:
+            total_row[key] = int(total_row.get(key, 0)) + int(item.get(key, 0))
+
+    region_rows = sorted(
+        by_region.values(),
+        key=lambda item: (
+            item["region"] == UNKNOWN_REGION_LABEL,
+            str(item["region"]),
+        ),
+    )
+    return [total_row, *region_rows]
 
 
 def _stats_cache_key(current_user: User) -> tuple[str, str]:
@@ -560,6 +616,96 @@ def get_stats(
             "completed": comp_count,
         })
 
+    related_tech_coop_target_filter = or_(
+        Building.floors_above >= 6,
+        Building.is_special_structure.is_(True),
+        Building.is_multi_use.is_(True),
+        Building.is_quasi_multi_use.is_(True),
+        and_(
+            Building.floors_above >= 3,
+            Building.detail_category9.ilike("%필로티%"),
+        ),
+    )
+    related_tech_coop_filter = sa_func.length(sa_func.trim(Building.struct_eng_name)) > 0
+
+    area_stats_raw = (
+        _scoped(
+            db.query(
+                Building.sido.label("sido"),
+                Building.sigungu.label("sigungu"),
+                sa_func.count(Building.id).filter(
+                    and_(Building.gross_area >= 0, Building.gross_area < 300)
+                ).label("area_0_300"),
+                sa_func.count(Building.id).filter(
+                    and_(Building.gross_area >= 300, Building.gross_area < 600)
+                ).label("area_300_600"),
+                sa_func.count(Building.id).filter(
+                    and_(Building.gross_area >= 600, Building.gross_area < 1000)
+                ).label("area_600_1000"),
+                sa_func.count(Building.id).filter(
+                    and_(Building.gross_area >= 1000, Building.gross_area < 5000)
+                ).label("area_1000_5000"),
+                sa_func.count(Building.id).filter(
+                    Building.gross_area >= 5000
+                ).label("area_5000_over"),
+            )
+        )
+        .group_by(Building.sido, Building.sigungu)
+        .all()
+    )
+    floor_stats_raw = (
+        _scoped(
+            db.query(
+                Building.sido.label("sido"),
+                Building.sigungu.label("sigungu"),
+                sa_func.count(Building.id).filter(
+                    Building.floors_above < 6
+                ).label("floors_under_6"),
+                sa_func.count(Building.id).filter(
+                    and_(Building.floors_above >= 6, Building.floors_above < 16)
+                ).label("floors_6_under_16"),
+                sa_func.count(Building.id).filter(
+                    Building.floors_above >= 16
+                ).label("floors_16_over"),
+            )
+        )
+        .group_by(Building.sido, Building.sigungu)
+        .all()
+    )
+    risk_stats_raw = (
+        _scoped(
+            db.query(
+                Building.sido.label("sido"),
+                Building.sigungu.label("sigungu"),
+                sa_func.count(Building.id).filter(
+                    Building.is_special_structure.is_(True)
+                ).label("special"),
+                sa_func.count(Building.id).filter(
+                    Building.is_multi_use.is_(True)
+                ).label("multi_use"),
+                sa_func.count(Building.id).filter(
+                    Building.is_high_rise.is_(True)
+                ).label("high_rise"),
+                sa_func.count(Building.id).filter(
+                    Building.is_quasi_multi_use.is_(True)
+                ).label("quasi_multi_use"),
+                sa_func.count(Building.id).filter(
+                    related_tech_coop_target_filter
+                ).label("related_tech_coop_target"),
+                sa_func.count(Building.id).filter(
+                    related_tech_coop_filter
+                ).label("related_tech_coop"),
+            )
+        )
+        .group_by(Building.sido, Building.sigungu)
+        .all()
+    )
+    regional_stats = {
+        "area": _merge_regional_rows(area_stats_raw, AREA_STAT_KEYS),
+        "floors": _merge_regional_rows(floor_stats_raw, FLOOR_STAT_KEYS),
+        "risk": _merge_regional_rows(risk_stats_raw, RISK_STAT_KEYS),
+    }
+
     # 5) 심각도 통계 — 상세의견 분류별 집계 테이블을 기준으로 전체/분류/단계별 피벗 생성
     severity_total_rows = (
         _scoped_by_building_id(
@@ -759,6 +905,7 @@ def get_stats(
         "supplement": supplement,
         "phase_counts": phase_counts,
         "reviewer_stats": reviewer_stats,
+        "regional_stats": regional_stats,
         "severity_stats": {
             "total": sum(severity_totals.values()),
             "totals": severity_totals,

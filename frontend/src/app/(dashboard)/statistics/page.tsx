@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useState, type ReactNode } from "react"
 import { useRouter } from "next/navigation"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -14,11 +14,29 @@ import {
 } from "@/components/ui/table"
 import apiClient from "@/lib/api/client"
 import { useAuthStore } from "@/stores/authStore"
-import { PHASE_LABELS, type PhaseType } from "@/types"
+import type { PhaseType } from "@/types"
 
-type ActiveTab = "reviewer" | "severity" | "keyword"
+type ActiveTab = "reviewer" | "regional" | "severity" | "keyword"
+type RegionalTab = "area" | "floors" | "risk"
 type SeverityLabel = "L0" | "L1" | "L2" | "L3" | "L4"
 type ReportMaxLabel = "pass" | SeverityLabel
+type AreaStatKey =
+  | "area_0_300"
+  | "area_300_600"
+  | "area_600_1000"
+  | "area_1000_5000"
+  | "area_5000_over"
+type FloorStatKey =
+  | "floors_under_6"
+  | "floors_6_under_16"
+  | "floors_16_over"
+type RiskStatKey =
+  | "special"
+  | "multi_use"
+  | "high_rise"
+  | "quasi_multi_use"
+  | "related_tech_coop_target"
+  | "related_tech_coop"
 
 interface ReviewerStat {
   name: string
@@ -30,6 +48,16 @@ interface ReviewerStat {
   submitted: number
   not_submitted: number
   completed: number
+}
+
+type RegionalStatRow<T extends string> = {
+  region: string
+} & Record<T, number>
+
+interface RegionalStats {
+  area: RegionalStatRow<AreaStatKey>[]
+  floors: RegionalStatRow<FloorStatKey>[]
+  risk: RegionalStatRow<RiskStatKey>[]
 }
 
 interface SeverityPivotRow {
@@ -45,6 +73,12 @@ interface SeverityPhaseStat extends SeverityPivotRow {
   phase: PhaseType
 }
 
+interface SeverityReportMaxPhaseStat {
+  phase: PhaseType
+  counts: Record<ReportMaxLabel, number>
+  total: number
+}
+
 interface SeverityReportMaxStats {
   total: number
   totals: Record<ReportMaxLabel, number>
@@ -57,12 +91,6 @@ interface SeverityStats {
   by_category: SeverityCategoryStat[]
   by_phase: SeverityPhaseStat[]
   by_report_max: SeverityReportMaxStats
-}
-
-interface SeverityReportMaxPhaseStat {
-  phase: PhaseType
-  counts: Record<ReportMaxLabel, number>
-  total: number
 }
 
 interface KeywordStat {
@@ -88,8 +116,14 @@ interface KeywordStats {
 
 interface StatsResponse {
   reviewer_stats: ReviewerStat[]
+  regional_stats: RegionalStats
   severity_stats: SeverityStats
   keyword_stats: KeywordStats
+}
+
+interface RegionalColumn<T extends string> {
+  key: T
+  label: string
 }
 
 const SEVERITY_LABELS: SeverityLabel[] = ["L0", "L1", "L2", "L3", "L4"]
@@ -102,6 +136,15 @@ const REPORT_MAX_LABEL_TEXT: Record<ReportMaxLabel, string> = {
   L2: "L2",
   L3: "L3",
   L4: "L4",
+}
+
+const PHASE_LABEL_TEXT: Record<PhaseType, string> = {
+  preliminary: "예비검토",
+  supplement_1: "1차 보완",
+  supplement_2: "2차 보완",
+  supplement_3: "3차 보완",
+  supplement_4: "4차 보완",
+  supplement_5: "5차 보완",
 }
 
 const SEVERITY_STYLE: Record<SeverityLabel, string> = {
@@ -121,6 +164,36 @@ const REPORT_MAX_STYLE: Record<ReportMaxLabel, string> = {
   L4: SEVERITY_STYLE.L4,
 }
 
+const AREA_COLUMNS: RegionalColumn<AreaStatKey>[] = [
+  { key: "area_0_300", label: "0~300" },
+  { key: "area_300_600", label: "300~600" },
+  { key: "area_600_1000", label: "600~1000" },
+  { key: "area_1000_5000", label: "1000~5000" },
+  { key: "area_5000_over", label: "5000 이상" },
+]
+
+const FLOOR_COLUMNS: RegionalColumn<FloorStatKey>[] = [
+  { key: "floors_under_6", label: "6층 미만" },
+  { key: "floors_6_under_16", label: "6층~16층 미만" },
+  { key: "floors_16_over", label: "16층 이상" },
+]
+
+const RISK_COLUMNS: RegionalColumn<RiskStatKey>[] = [
+  { key: "special", label: "특수" },
+  { key: "multi_use", label: "다중" },
+  { key: "high_rise", label: "고층" },
+  { key: "quasi_multi_use", label: "준다중" },
+  { key: "related_tech_coop_target", label: "관계기술자 협력 대상" },
+  { key: "related_tech_coop", label: "관계기술자 협력" },
+]
+
+const TAB_TITLES: Record<ActiveTab, string> = {
+  reviewer: "검토위원별 현황",
+  regional: "지역별 통계",
+  severity: "심각도 통계",
+  keyword: "키워드 분석",
+}
+
 export default function StatisticsPage() {
   const router = useRouter()
   const user = useAuthStore((s) => s.user)
@@ -132,7 +205,6 @@ export default function StatisticsPage() {
   const isAdmin =
     !!user && ["team_leader", "chief_secretary", "secretary", "manager"].includes(user.role)
 
-  // 검토위원은 접근 불가 — 사용자 정보 로드 후 비인가 접근 시 대시보드로 이동
   useEffect(() => {
     if (!isUserLoading && user && !isAdmin) {
       router.replace("/dashboard")
@@ -159,90 +231,99 @@ export default function StatisticsPage() {
     return <div className="flex justify-center py-20 text-muted-foreground">로딩 중...</div>
   }
   if (!isAdmin) {
-    // 리다이렉트 대기 중 빈 상태
     return null
   }
-
-  const reviewerRows = stats?.reviewer_stats || []
-  const severityStats = stats?.severity_stats || null
-  const keywordStats = stats?.keyword_stats || null
 
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold">통계자료</h1>
-        <p className="text-sm text-muted-foreground">검토위원별 현황, 심각도, 키워드 분석</p>
+        <p className="text-sm text-muted-foreground">
+          검토위원별 현황, 지역별 통계, 심각도, 키워드 분석
+        </p>
       </div>
 
       <div
         role="tablist"
         aria-label="통계 자료 구분"
-        className="inline-flex rounded-md border bg-muted/30 p-1"
+        className="inline-flex flex-wrap gap-1 rounded-md border bg-muted/30 p-1"
       >
-        <button
-          type="button"
-          role="tab"
-          aria-selected={activeTab === "reviewer"}
-          className={`rounded px-4 py-2 text-sm font-medium transition-colors ${
-            activeTab === "reviewer"
-              ? "bg-background text-foreground shadow-sm"
-              : "text-muted-foreground hover:text-foreground"
-          }`}
-          onClick={() => setActiveTab("reviewer")}
-        >
+        <TabButton value="reviewer" activeValue={activeTab} onSelect={setActiveTab}>
           검토위원별 현황
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={activeTab === "severity"}
-          className={`rounded px-4 py-2 text-sm font-medium transition-colors ${
-            activeTab === "severity"
-              ? "bg-background text-foreground shadow-sm"
-              : "text-muted-foreground hover:text-foreground"
-          }`}
-          onClick={() => setActiveTab("severity")}
-        >
+        </TabButton>
+        <TabButton value="regional" activeValue={activeTab} onSelect={setActiveTab}>
+          지역별 통계
+        </TabButton>
+        <TabButton value="severity" activeValue={activeTab} onSelect={setActiveTab}>
           심각도 통계
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={activeTab === "keyword"}
-          className={`rounded px-4 py-2 text-sm font-medium transition-colors ${
-            activeTab === "keyword"
-              ? "bg-background text-foreground shadow-sm"
-              : "text-muted-foreground hover:text-foreground"
-          }`}
-          onClick={() => setActiveTab("keyword")}
-        >
+        </TabButton>
+        <TabButton value="keyword" activeValue={activeTab} onSelect={setActiveTab}>
           키워드 분석
-        </button>
+        </TabButton>
       </div>
 
       <Card>
         <CardHeader>
-          <CardTitle>
-            {activeTab === "reviewer"
-              ? "검토위원별 현황"
-              : activeTab === "severity"
-                ? "심각도 통계"
-                : "키워드 분석"}
-          </CardTitle>
+          <CardTitle>{TAB_TITLES[activeTab]}</CardTitle>
         </CardHeader>
         <CardContent>
           {activeTab === "reviewer" && (
-            <ReviewerStatsTable isLoading={isLoading} rows={reviewerRows} />
+            <ReviewerStatsTable
+              isLoading={isLoading}
+              rows={stats?.reviewer_stats || []}
+            />
+          )}
+          {activeTab === "regional" && (
+            <RegionalStatsView
+              isLoading={isLoading}
+              stats={stats?.regional_stats || null}
+            />
           )}
           {activeTab === "severity" && (
-            <SeverityStatsView isLoading={isLoading} stats={severityStats} />
+            <SeverityStatsView
+              isLoading={isLoading}
+              stats={stats?.severity_stats || null}
+            />
           )}
           {activeTab === "keyword" && (
-            <KeywordStatsView isLoading={isLoading} stats={keywordStats} />
+            <KeywordStatsView
+              isLoading={isLoading}
+              stats={stats?.keyword_stats || null}
+            />
           )}
         </CardContent>
       </Card>
     </div>
+  )
+}
+
+function TabButton<T extends string>({
+  value,
+  activeValue,
+  onSelect,
+  children,
+}: {
+  value: T
+  activeValue: T
+  onSelect: (value: T) => void
+  children: ReactNode
+}) {
+  const isActive = value === activeValue
+
+  return (
+    <button
+      type="button"
+      role="tab"
+      aria-selected={isActive}
+      className={`rounded px-4 py-2 text-sm font-medium transition-colors ${
+        isActive
+          ? "bg-background text-foreground shadow-sm"
+          : "text-muted-foreground hover:text-foreground"
+      }`}
+      onClick={() => onSelect(value)}
+    >
+      {children}
+    </button>
   )
 }
 
@@ -254,28 +335,21 @@ function ReviewerStatsTable({
   rows: ReviewerStat[]
 }) {
   if (isLoading) {
-    return (
-      <div className="flex justify-center py-10 text-muted-foreground">
-        불러오는 중...
-      </div>
-    )
+    return <LoadingMessage />
   }
   if (rows.length === 0) {
-    return (
-      <div className="flex justify-center py-10 text-muted-foreground">
-        배정된 검토위원이 없습니다.
-      </div>
-    )
+    return <EmptyMessage>배정된 검토위원이 없습니다.</EmptyMessage>
   }
+
   return (
-    <div className="rounded-md border max-h-[70vh] overflow-y-auto">
+    <div className="max-h-[70vh] overflow-y-auto rounded-md border">
       <Table>
         <TableHeader>
           <TableRow>
             <TableHead>검토위원</TableHead>
             <TableHead className="w-[70px] text-center">배정</TableHead>
-            <TableHead className="w-[100px] text-right">연면적합</TableHead>
-            <TableHead className="w-[70px] text-center">1000↑</TableHead>
+            <TableHead className="w-[100px] text-right">연면적 합</TableHead>
+            <TableHead className="w-[80px] text-center">1000㎡ 이상</TableHead>
             <TableHead className="w-[70px] text-center">고위험</TableHead>
             <TableHead className="w-[70px] text-center">배포</TableHead>
             <TableHead className="w-[70px] text-center">제출</TableHead>
@@ -284,41 +358,131 @@ function ReviewerStatsTable({
           </TableRow>
         </TableHeader>
         <TableBody>
-          {rows.map((r) => (
-            <TableRow key={r.name}>
-              <TableCell className="font-medium">{r.name}</TableCell>
-              <TableCell className="text-center">{r.total}</TableCell>
+          {rows.map((row) => (
+            <TableRow key={row.name}>
+              <TableCell className="font-medium">{row.name}</TableCell>
+              <TableCell className="text-center">{row.total}</TableCell>
               <TableCell className="text-right font-mono text-sm">
-                {r.total_area.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                {row.total_area.toLocaleString(undefined, { maximumFractionDigits: 0 })}
               </TableCell>
               <TableCell className="text-center">
-                {r.area_over_1000 > 0 ? (
-                  <Badge variant="secondary">{r.area_over_1000}</Badge>
+                {row.area_over_1000 > 0 ? (
+                  <Badge variant="secondary">{row.area_over_1000}</Badge>
                 ) : "0"}
               </TableCell>
               <TableCell className="text-center">
-                {r.high_risk > 0 ? (
-                  <Badge variant="destructive">{r.high_risk}</Badge>
+                {row.high_risk > 0 ? (
+                  <Badge variant="destructive">{row.high_risk}</Badge>
                 ) : "0"}
               </TableCell>
-              <TableCell className="text-center">{r.doc_received}</TableCell>
+              <TableCell className="text-center">{row.doc_received}</TableCell>
               <TableCell className="text-center">
-                {r.submitted > 0 ? (
-                  <Badge variant="default">{r.submitted}</Badge>
-                ) : (
-                  "0"
-                )}
+                {row.submitted > 0 ? <Badge>{row.submitted}</Badge> : "0"}
               </TableCell>
               <TableCell className="text-center">
-                {r.not_submitted > 0 ? (
-                  <Badge variant="destructive">{r.not_submitted}</Badge>
-                ) : (
-                  "0"
-                )}
+                {row.not_submitted > 0 ? (
+                  <Badge variant="destructive">{row.not_submitted}</Badge>
+                ) : "0"}
               </TableCell>
-              <TableCell className="text-center">{r.completed}</TableCell>
+              <TableCell className="text-center">{row.completed}</TableCell>
             </TableRow>
           ))}
+        </TableBody>
+      </Table>
+    </div>
+  )
+}
+
+function RegionalStatsView({
+  isLoading,
+  stats,
+}: {
+  isLoading: boolean
+  stats: RegionalStats | null
+}) {
+  const [activeRegionalTab, setActiveRegionalTab] = useState<RegionalTab>("area")
+
+  if (isLoading) {
+    return <LoadingMessage />
+  }
+  if (!stats) {
+    return <EmptyMessage>지역별 통계가 없습니다.</EmptyMessage>
+  }
+
+  return (
+    <div className="space-y-4">
+      <div
+        role="tablist"
+        aria-label="지역별 통계 구분"
+        className="inline-flex flex-wrap gap-1 rounded-md border bg-muted/30 p-1"
+      >
+        <TabButton value="area" activeValue={activeRegionalTab} onSelect={setActiveRegionalTab}>
+          연면적
+        </TabButton>
+        <TabButton value="floors" activeValue={activeRegionalTab} onSelect={setActiveRegionalTab}>
+          층수
+        </TabButton>
+        <TabButton value="risk" activeValue={activeRegionalTab} onSelect={setActiveRegionalTab}>
+          고위험군 및 관계기술자
+        </TabButton>
+      </div>
+
+      {activeRegionalTab === "area" && (
+        <RegionalStatsTable rows={stats.area} columns={AREA_COLUMNS} />
+      )}
+      {activeRegionalTab === "floors" && (
+        <RegionalStatsTable rows={stats.floors} columns={FLOOR_COLUMNS} />
+      )}
+      {activeRegionalTab === "risk" && (
+        <RegionalStatsTable rows={stats.risk} columns={RISK_COLUMNS} />
+      )}
+    </div>
+  )
+}
+
+function RegionalStatsTable<T extends string>({
+  rows,
+  columns,
+}: {
+  rows: RegionalStatRow<T>[]
+  columns: RegionalColumn<T>[]
+}) {
+  if (rows.length === 0) {
+    return <EmptyMessage>집계된 지역이 없습니다.</EmptyMessage>
+  }
+
+  return (
+    <div className="overflow-x-auto rounded-md border">
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead className="min-w-[180px]">지역</TableHead>
+            {columns.map((column) => (
+              <TableHead key={column.key} className="min-w-[92px] text-center">
+                {column.label}
+              </TableHead>
+            ))}
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {rows.map((row) => {
+            const isTotal = row.region === "전체"
+            return (
+              <TableRow key={row.region} className={isTotal ? "bg-muted/40" : undefined}>
+                <TableCell className={isTotal ? "font-bold" : "font-medium"}>
+                  {row.region}
+                </TableCell>
+                {columns.map((column) => (
+                  <TableCell
+                    key={column.key}
+                    className={`text-center ${isTotal ? "font-bold" : ""}`}
+                  >
+                    {row[column.key].toLocaleString()}
+                  </TableCell>
+                ))}
+              </TableRow>
+            )
+          })}
         </TableBody>
       </Table>
     </div>
@@ -333,29 +497,16 @@ function SeverityStatsView({
   stats: SeverityStats | null
 }) {
   if (isLoading) {
-    return (
-      <div className="flex justify-center py-10 text-muted-foreground">
-        불러오는 중...
-      </div>
-    )
+    return <LoadingMessage />
   }
   if (!stats || stats.total === 0) {
-    return (
-      <div className="flex justify-center py-10 text-muted-foreground">
-        심각도 집계가 없습니다.
-      </div>
-    )
+    return <EmptyMessage>심각도 집계가 없습니다.</EmptyMessage>
   }
 
   return (
     <div className="space-y-5">
       <section className="space-y-2">
-        <div>
-          <h2 className="text-sm font-semibold">상세의견 건수 기준</h2>
-          <p className="text-xs text-muted-foreground">
-            상세검토 내용 1줄을 1건으로 집계합니다.
-          </p>
-        </div>
+        <h2 className="text-sm font-semibold">상세의견 건수 기준</h2>
         <SeveritySummaryCards
           labels={SEVERITY_LABELS}
           counts={stats.totals}
@@ -365,12 +516,7 @@ function SeverityStatsView({
       </section>
 
       <section className="space-y-2">
-        <div>
-          <h2 className="text-sm font-semibold">검토서 최고Lv 기준</h2>
-          <p className="text-xs text-muted-foreground">
-            적합 검토서는 적합 1건, 의견이 있는 검토서는 가장 높은 심각도 1건으로 집계합니다.
-          </p>
-        </div>
+        <h2 className="text-sm font-semibold">검토서 최고 Lv 기준</h2>
         <SeveritySummaryCards
           labels={REPORT_MAX_LABELS}
           counts={stats.by_report_max.totals}
@@ -382,19 +528,14 @@ function SeverityStatsView({
           labelHeader="단계"
           rows={stats.by_report_max.by_phase}
           getColumnLabel={(label) => REPORT_MAX_LABEL_TEXT[label]}
-          getLabel={(row) => PHASE_LABELS[row.phase] || row.phase}
-          emptyText="검토서 최고Lv 집계가 없습니다."
+          getLabel={(row) => PHASE_LABEL_TEXT[row.phase] || row.phase}
+          emptyText="검토서 최고 Lv 집계가 없습니다."
         />
       </section>
 
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_420px]">
         <section className="space-y-2">
-          <div>
-            <h2 className="text-sm font-semibold">분류별 심각도</h2>
-            <p className="text-xs text-muted-foreground">
-              상세의견 분류 기준 집계
-            </p>
-          </div>
+          <h2 className="text-sm font-semibold">분류별 심각도</h2>
           <SeverityTable
             labels={SEVERITY_LABELS}
             labelHeader="분류"
@@ -406,18 +547,13 @@ function SeverityStatsView({
         </section>
 
         <section className="space-y-2">
-          <div>
-            <h2 className="text-sm font-semibold">단계별 심각도</h2>
-            <p className="text-xs text-muted-foreground">
-              검토서 제출 단계 기준 집계
-            </p>
-          </div>
+          <h2 className="text-sm font-semibold">단계별 심각도</h2>
           <SeverityTable
             labels={SEVERITY_LABELS}
             labelHeader="단계"
             rows={stats.by_phase}
             getColumnLabel={(label) => label}
-            getLabel={(row) => PHASE_LABELS[row.phase] || row.phase}
+            getLabel={(row) => PHASE_LABEL_TEXT[row.phase] || row.phase}
             emptyText="단계별 심각도 집계가 없습니다."
           />
         </section>
@@ -463,7 +599,10 @@ function SeveritySummaryCards<TLabel extends string>({
   )
 }
 
-function SeverityTable<TLabel extends string, T extends { counts: Record<TLabel, number>; total: number }>({
+function SeverityTable<
+  TLabel extends string,
+  TRow extends { counts: Record<TLabel, number>; total: number },
+>({
   labels,
   labelHeader,
   rows,
@@ -473,21 +612,17 @@ function SeverityTable<TLabel extends string, T extends { counts: Record<TLabel,
 }: {
   labels: TLabel[]
   labelHeader: string
-  rows: T[]
+  rows: TRow[]
   getColumnLabel: (label: TLabel) => string
-  getLabel: (row: T) => string
+  getLabel: (row: TRow) => string
   emptyText: string
 }) {
   if (rows.length === 0) {
-    return (
-      <div className="rounded-md border py-10 text-center text-sm text-muted-foreground">
-        {emptyText}
-      </div>
-    )
+    return <EmptyMessage>{emptyText}</EmptyMessage>
   }
 
   return (
-    <div className="rounded-md border overflow-x-auto">
+    <div className="overflow-x-auto rounded-md border">
       <Table>
         <TableHeader>
           <TableRow>
@@ -545,18 +680,10 @@ function KeywordStatsView({
   stats: KeywordStats | null
 }) {
   if (isLoading) {
-    return (
-      <div className="flex justify-center py-10 text-muted-foreground">
-        불러오는 중...
-      </div>
-    )
+    return <LoadingMessage />
   }
   if (!stats || stats.total_details === 0) {
-    return (
-      <div className="flex justify-center py-10 text-muted-foreground">
-        상세검토 내용 저장 자료가 없습니다.
-      </div>
-    )
+    return <EmptyMessage>상세검토 내용 분석 자료가 없습니다.</EmptyMessage>
   }
 
   return (
@@ -580,18 +707,11 @@ function KeywordStatsView({
       </div>
 
       <section className="space-y-2">
-        <div>
-          <h2 className="text-sm font-semibold">키워드별 발생 현황</h2>
-          <p className="text-xs text-muted-foreground">
-            저장된 상세검토 내용 원문에서 사전 기반 키워드를 집계합니다.
-          </p>
-        </div>
+        <h2 className="text-sm font-semibold">키워드별 발생 현황</h2>
         {stats.by_keyword.length === 0 ? (
-          <div className="rounded-md border py-10 text-center text-sm text-muted-foreground">
-            매칭된 키워드가 없습니다.
-          </div>
+          <EmptyMessage>매칭된 키워드가 없습니다.</EmptyMessage>
         ) : (
-          <div className="rounded-md border overflow-x-auto">
+          <div className="overflow-x-auto rounded-md border">
             <Table>
               <TableHeader>
                 <TableRow>
@@ -668,6 +788,22 @@ function KeywordSummaryCard({
         {value.toLocaleString()}
         <span className="ml-1 text-sm font-normal">건</span>
       </p>
+    </div>
+  )
+}
+
+function LoadingMessage() {
+  return (
+    <div className="flex justify-center py-10 text-muted-foreground">
+      불러오는 중...
+    </div>
+  )
+}
+
+function EmptyMessage({ children }: { children: ReactNode }) {
+  return (
+    <div className="rounded-md border py-10 text-center text-sm text-muted-foreground">
+      {children}
     </div>
   )
 }
