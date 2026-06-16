@@ -1,5 +1,6 @@
 """통합관리대장 엑셀 Import/Export 라우터"""
 
+import logging
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException
@@ -20,6 +21,7 @@ from engines.ledger_import_selection import import_ledger_selection
 from engines.ledger_export import export_ledger
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 def _detect_format(file_path: Path) -> str:
@@ -92,6 +94,13 @@ async def import_excel(
         # 500 이 나가는 것을 막기 위한 방어선.
         db.rollback()
         raise HTTPException(status_code=400, detail=f"단계 전환 규칙 위반: {exc}")
+    except Exception as exc:
+        db.rollback()
+        logger.exception("관리대장 업로드 실패")
+        raise HTTPException(
+            status_code=500,
+            detail=f"관리대장 업로드 실패: {type(exc).__name__}: {exc}",
+        )
     finally:
         tmp_path.unlink(missing_ok=True)
 
