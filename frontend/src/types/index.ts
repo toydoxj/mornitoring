@@ -101,6 +101,7 @@ export interface Building {
   is_special_structure?: boolean | null
   is_high_rise?: boolean | null
   is_multi_use?: boolean | null
+  is_quasi_multi_use?: boolean | null
   architect_firm?: string | null
   architect_name?: string | null
   struct_eng_firm?: string | null

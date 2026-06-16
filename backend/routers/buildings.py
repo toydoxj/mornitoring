@@ -65,6 +65,7 @@ class BuildingCreate(BaseModel):
     is_special_structure: bool | None = None
     is_high_rise: bool | None = None
     is_multi_use: bool | None = None
+    is_quasi_multi_use: bool | None = None
     remarks: str | None = None
     architect_firm: str | None = None
     architect_name: str | None = None
@@ -119,6 +120,7 @@ class BuildingResponse(BaseModel):
     is_special_structure: bool | None = None
     is_high_rise: bool | None = None
     is_multi_use: bool | None = None
+    is_quasi_multi_use: bool | None = None
     architect_firm: str | None = None
     architect_name: str | None = None
     struct_eng_firm: str | None = None
@@ -206,6 +208,7 @@ def _to_my_review_response(
         "is_special_structure": building.is_special_structure,
         "is_high_rise": building.is_high_rise,
         "is_multi_use": building.is_multi_use,
+        "is_quasi_multi_use": building.is_quasi_multi_use,
         "current_phase": building.current_phase,
         "final_result": building.final_result,
         "reviewer_id": building.reviewer_id,
@@ -470,7 +473,8 @@ def get_stats(
                 sa_func.count(Building.id).filter(
                     (Building.is_special_structure == True) |
                     (Building.is_high_rise == True) |
-                    (Building.is_multi_use == True)
+                    (Building.is_multi_use == True) |
+                    (Building.is_quasi_multi_use == True)
                 ).label("high_risk"),
             )
             .filter(Building.assigned_reviewer_name.isnot(None))
@@ -1082,6 +1086,7 @@ def my_stats(
                 (Building.is_special_structure == True)
                 | (Building.is_high_rise == True)
                 | (Building.is_multi_use == True)
+                | (Building.is_quasi_multi_use == True)
             ).label("high_risk"),
             sa_func.count(Building.id).filter(
                 Building.current_phase.in_(list(RECEIVED_PHASES))
@@ -1298,6 +1303,7 @@ def my_review_buildings(
                 Building.is_special_structure,
                 Building.is_high_rise,
                 Building.is_multi_use,
+                Building.is_quasi_multi_use,
                 Building.current_phase,
                 Building.final_result,
                 Building.reviewer_id,

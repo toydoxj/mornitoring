@@ -3,6 +3,7 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 .venv/
+backend/.venv-win/
 *.env
 
 # Node

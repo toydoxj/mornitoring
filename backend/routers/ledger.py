@@ -16,6 +16,7 @@ from services.phase_transition import InvalidPhaseTransition
 from engines.ledger_import import import_ledger
 from engines.ledger_import_2025 import import_ledger_2025
 from engines.ledger_import_unified import import_ledger_unified
+from engines.ledger_import_selection import import_ledger_selection
 from engines.ledger_export import export_ledger
 
 router = APIRouter()
@@ -26,13 +27,22 @@ def _detect_format(file_path: Path) -> str:
     wb = load_workbook(str(file_path), data_only=True, read_only=True)
     sheet_names = wb.sheetnames
 
-    has_unified = False
     has_2025 = False
     for sn in sheet_names:
+        ws = wb[sn]
+        row1_values = [
+            str(cell.value).replace("\n", "").replace(" ", "")
+            for cell in next(ws.iter_rows(min_row=1, max_row=1), ())
+            if cell.value is not None
+        ]
+        if "대상선정" in sn or (
+            "관리번호" in row1_values and "건축구분" in row1_values
+        ):
+            wb.close()
+            return "selection"
+
         if "통합 관리대장" in sn:
-            has_unified = True
             # 통합 관리대장 시트의 Row 4 A열 확인하여 신형/구형 구분
-            ws = wb[sn]
             row4_a = ws.cell(row=4, column=1).value
             wb.close()
             if row4_a and "관리번호" in str(row4_a):
@@ -61,7 +71,9 @@ async def import_excel(
 
     try:
         fmt = _detect_format(tmp_path)
-        if fmt == "unified_new":
+        if fmt == "selection":
+            result = import_ledger_selection(tmp_path, db)
+        elif fmt == "unified_new":
             result = import_ledger_unified(tmp_path, db, actor_user_id=current_user.id)
         elif fmt == "2025":
             result = import_ledger_2025(tmp_path, db, actor_user_id=current_user.id)

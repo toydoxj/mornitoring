@@ -398,6 +398,10 @@ export default function BuildingDetailPage() {
             <InfoItem label="지상층수" value={building.floors_above?.toString()} />
             <InfoItem label="지하층수" value={building.floors_below?.toString()} />
             <InfoItem label="고위험유형" value={building.high_risk_type} />
+            <InfoItem
+              label="준다중이용"
+              value={building.is_quasi_multi_use == null ? null : building.is_quasi_multi_use ? "예" : "아니오"}
+            />
             <InfoItem label="내진등급" value={building.seismic_level} />
           </div>
 

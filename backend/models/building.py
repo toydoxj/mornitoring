@@ -41,6 +41,7 @@ class Building(Base):
     is_special_structure: Mapped[bool | None] = mapped_column(Boolean)  # 특수구조물 여부
     is_high_rise: Mapped[bool | None] = mapped_column(Boolean)          # 고층 여부
     is_multi_use: Mapped[bool | None] = mapped_column(Boolean)          # 다중이용건축물 여부
+    is_quasi_multi_use: Mapped[bool | None] = mapped_column(Boolean)    # 준다중이용건축물 여부
     remarks: Mapped[str | None] = mapped_column(Text)                   # 비고
     architect_firm: Mapped[str | None] = mapped_column(String(100))     # 건축사(소속)
     architect_name: Mapped[str | None] = mapped_column(String(50))      # 건축사(성명)

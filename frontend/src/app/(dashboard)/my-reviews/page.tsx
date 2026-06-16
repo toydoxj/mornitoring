@@ -362,6 +362,7 @@ export default function MyReviewsPage() {
                       if (b.is_special_structure) tags.push("특수")
                       if (b.is_high_rise) tags.push("고층")
                       if (b.is_multi_use) tags.push("다중이용")
+                      if (b.is_quasi_multi_use) tags.push("준다중이용")
                       return tags.length > 0 ? (
                         <div className="flex flex-wrap justify-center gap-1">
                           {tags.map((t) => (
