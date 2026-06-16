@@ -130,6 +130,13 @@ app.add_middleware(RequestLoggingMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
+    allow_origin_regex=(
+        r"https://("
+        r"ksea-m|"
+        r"frontend-[a-z0-9-]+|"
+        r"frontend-git-[a-z0-9-]+"
+        r")\.vercel\.app"
+    ),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
