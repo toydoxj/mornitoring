@@ -142,6 +142,9 @@ def test_secretary_stats_total_excludes_other_group(
     area_total = body["regional_stats"]["area"][0]
     assert area_total["area_0_300"] == 1
     assert area_total["area_5000_over"] == 0
+    area_regions = [row["region"] for row in body["regional_stats"]["area"]]
+    assert "서울특별시" in area_regions
+    assert "부산광역시" not in area_regions
 
 
 def test_stats_returns_regional_building_stats_with_total_row(
@@ -203,9 +206,12 @@ def test_stats_returns_regional_building_stats_with_total_row(
     assert risk_total["related_tech_coop_target"] == 4
     assert risk_total["related_tech_coop"] == 1
 
-    seoul = next(row for row in regional_stats["risk"] if row["region"] == "서울특별시 강남구")
+    seoul = next(row for row in regional_stats["risk"] if row["region"] == "서울특별시")
     assert seoul["related_tech_coop_target"] == 2
     assert seoul["related_tech_coop"] == 1
+
+    risk_regions = [row["region"] for row in regional_stats["risk"]]
+    assert risk_regions[:3] == ["전체", "서울특별시", "부산광역시"]
 
 
 def test_stats_returns_severity_summary_by_category_and_phase(

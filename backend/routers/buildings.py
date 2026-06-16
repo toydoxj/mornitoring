@@ -280,6 +280,31 @@ SEVERITY_LABELS = ("L0", "L1", "L2", "L3", "L4")
 REPORT_MAX_LABELS = ("pass", *SEVERITY_LABELS)
 REGION_TOTAL_LABEL = "전체"
 UNKNOWN_REGION_LABEL = "지역 미상"
+REGION_ORDER = (
+    "경기도",
+    "경상북도",
+    "경상남도",
+    "충청남도",
+    "충청북도",
+    "전북특별자치도",
+    "전라남도",
+    "강원특별자치도",
+    "제주특별자치도",
+    "인천광역시",
+    "서울특별시",
+    "울산광역시",
+    "부산광역시",
+    "대구광역시",
+    "대전광역시",
+    "광주광역시",
+    "세종특별자치시",
+)
+REGION_SORT_ORDER = {region: index for index, region in enumerate(REGION_ORDER)}
+REGION_ALIASES = {
+    "전라북도": "전북특별자치도",
+    "강원도": "강원특별자치도",
+    "제주도": "제주특별자치도",
+}
 AREA_STAT_KEYS = (
     "area_0_300",
     "area_300_600",
@@ -310,15 +335,17 @@ def _empty_report_max_counts() -> dict[str, int]:
     return {label: 0 for label in REPORT_MAX_LABELS}
 
 
-def _region_label(sido: str | None, sigungu: str | None) -> str:
-    parts = [part.strip() for part in (sido, sigungu) if part and part.strip()]
-    return " ".join(parts) if parts else UNKNOWN_REGION_LABEL
+def _region_label(sido: str | None) -> str:
+    if not sido or not sido.strip():
+        return UNKNOWN_REGION_LABEL
+    region = sido.strip()
+    return REGION_ALIASES.get(region, region)
 
 
 def _merge_regional_rows(raw_rows, count_keys: tuple[str, ...]) -> list[dict[str, int | str]]:
     by_region: dict[str, dict[str, int | str]] = {}
     for row in raw_rows:
-        region = _region_label(row.sido, row.sigungu)
+        region = _region_label(row.sido)
         item = by_region.setdefault(
             region,
             {"region": region, **{key: 0 for key in count_keys}},
@@ -337,6 +364,7 @@ def _merge_regional_rows(raw_rows, count_keys: tuple[str, ...]) -> list[dict[str
     region_rows = sorted(
         by_region.values(),
         key=lambda item: (
+            REGION_SORT_ORDER.get(str(item["region"]), len(REGION_ORDER)),
             item["region"] == UNKNOWN_REGION_LABEL,
             str(item["region"]),
         ),
