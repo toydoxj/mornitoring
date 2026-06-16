@@ -101,6 +101,13 @@ class BuildingUpdate(BaseModel):
     remarks: str | None = None
 
 
+class ReviewerDetailResponse(BaseModel):
+    name: str
+    group_no: int | None = None
+    email: str | None = None
+    phone: str | None = None
+
+
 class BuildingResponse(BaseModel):
     id: int
     mgmt_no: str
@@ -135,6 +142,7 @@ class BuildingResponse(BaseModel):
     reviewer_name: str | None = None
     assigned_reviewer_name: str | None = None
     reviewer_registered: bool = False
+    reviewer_detail: ReviewerDetailResponse | None = None
     # 내 검토대상 테이블용 파생 필드
     full_address: str | None = None
     latest_result: str | None = None
@@ -181,6 +189,18 @@ def _build_full_address(b: Building) -> str | None:
     if b.special_lot_no:
         parts.append(str(b.special_lot_no))
     return " ".join(parts) if parts else None
+
+
+def _build_reviewer_detail(building: Building) -> dict[str, str | int | None] | None:
+    if not building.reviewer or not building.reviewer.user:
+        return None
+    user = building.reviewer.user
+    return {
+        "name": user.name,
+        "group_no": building.reviewer.group_no,
+        "email": user.email,
+        "phone": user.phone,
+    }
 
 
 def _to_my_review_response(
@@ -240,9 +260,11 @@ def _to_response(building: Building, registered_names: set[str]) -> dict:
     data = {c.name: getattr(building, c.name) for c in Building.__table__.columns}
     data["reviewer_name"] = None
     data["reviewer_registered"] = False
+    data["reviewer_detail"] = None
     if building.reviewer and building.reviewer.user:
         data["reviewer_name"] = building.reviewer.user.name
         data["reviewer_registered"] = True
+        data["reviewer_detail"] = _build_reviewer_detail(building)
     elif building.assigned_reviewer_name:
         data["reviewer_name"] = building.assigned_reviewer_name
         data["reviewer_registered"] = building.assigned_reviewer_name in registered_names
@@ -295,6 +317,11 @@ def _stats_cache_set(db: Session, key: tuple[str, str], payload: dict[str, objec
     _STATS_CACHE[key] = (monotonic(), payload)
 
 
+def _release_read_connection(db: Session) -> None:
+    """읽기 전용 후처리 동안 DB 커넥션을 오래 점유하지 않도록 반환한다."""
+    db.rollback()
+
+
 class BuildingListResponse(BaseModel):
     items: list[BuildingResponse]
     total: int
@@ -332,6 +359,7 @@ def get_stats(
     cache_key = _stats_cache_key(current_user)
     cached_stats = _stats_cache_get(db, cache_key)
     if cached_stats is not None:
+        _release_read_connection(db)
         return cached_stats
 
     # 가시성 필터: 간사가 자기 조 데이터만 보도록.
@@ -677,6 +705,7 @@ def get_stats(
         )
         .all()
     )
+    _release_read_connection(db)
     detail_counts = {"preliminary": 0, "supplement": 0}
     keyword_map: dict[str, dict[str, int | str]] = {}
     for phase_group, severity, content in keyword_detail_rows:
@@ -865,7 +894,8 @@ def create_building(
                after_data={"mgmt_no": building.mgmt_no})
     db.commit()
     db.refresh(building)
-    return building
+    registered_names = _get_registered_names(db)
+    return _to_response(building, registered_names)
 
 
 @router.get("/reviewer-schedule")
@@ -1143,6 +1173,7 @@ def my_stats(
         )
         .all()
     )
+    _release_read_connection(db)
     for (doc_received_at,) in elapsed_rows:
         days = (today - doc_received_at).days
         if days < 1:
@@ -1175,6 +1206,7 @@ def my_stats(
         )
         .all()
     )
+    _release_read_connection(db)
     for (report_due_date,) in unsubmitted_rows:
         schedule_counts["in_progress"] += 1
         delta = (report_due_date - today).days
@@ -1200,6 +1232,7 @@ def my_stats(
         .group_by(Building.final_result)
         .all()
     )
+    _release_read_connection(db)
     for final_result, count in final_rows:
         if final_result in final_counts:
             final_counts[final_result] = int(count or 0)
@@ -1376,14 +1409,20 @@ def get_building(
     - 팀장/총괄간사/조 미배정 간사: 전체
     가시성 위반 시 존재 자체를 노출하지 않기 위해 404 반환.
     """
-    building = db.query(Building).filter(Building.id == building_id).first()
+    building = (
+        db.query(Building)
+        .options(selectinload(Building.reviewer).selectinload(Reviewer.user))
+        .filter(Building.id == building_id)
+        .first()
+    )
     if not building:
         raise HTTPException(status_code=404, detail="건축물을 찾을 수 없습니다")
 
     if not is_building_visible_to(current_user, building, db):
         raise HTTPException(status_code=404, detail="건축물을 찾을 수 없습니다")
 
-    return building
+    registered_names = _get_registered_names(db)
+    return _to_response(building, registered_names)
 
 
 @router.patch("/{building_id}", response_model=BuildingResponse)
@@ -1406,7 +1445,8 @@ def update_building(
 
     db.commit()
     db.refresh(building)
-    return building
+    registered_names = _get_registered_names(db)
+    return _to_response(building, registered_names)
 
 
 class PhaseChangeRequest(BaseModel):
@@ -1456,7 +1496,8 @@ def change_building_phase(
     if log is None:
         # from == to 인 경우 — 사용자에게 알리되 200으로 반환 (멱등 처리)
         pass
-    return building
+    registered_names = _get_registered_names(db)
+    return _to_response(building, registered_names)
 
 
 @router.delete("/{building_id}", status_code=204)

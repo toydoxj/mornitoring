@@ -81,6 +81,13 @@ export const SETUP_STATUS_LABELS: Record<SetupStatus, string> = {
   not_invited: "미발송",
 }
 
+export interface ReviewerDetail {
+  name: string
+  group_no: number | null
+  email: string | null
+  phone: string | null
+}
+
 // 건축물 (통합관리대장)
 export interface Building {
   id: number
@@ -116,6 +123,7 @@ export interface Building {
   reviewer_name: string | null
   assigned_reviewer_name: string | null
   reviewer_registered: boolean
+  reviewer_detail: ReviewerDetail | null
   // 내 검토대상 파생 필드
   full_address?: string | null
   latest_result?: string | null

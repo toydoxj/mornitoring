@@ -20,7 +20,7 @@ import { useAuthStore } from "@/stores/authStore"
 import type { Building, ReviewStage, PhaseType, ResultType, InappropriateDecisionType } from "@/types"
 import { PHASE_LABELS, RESULT_LABELS } from "@/types"
 import { AttachmentItem, type AttachmentDisplay } from "@/components/AttachmentItem"
-import { Paperclip, X } from "lucide-react"
+import { Paperclip, UserRound, X } from "lucide-react"
 import { getAdjacentManualPhases } from "@/lib/phases"
 
 interface InquiryAttachmentData extends AttachmentDisplay {
@@ -71,6 +71,7 @@ export default function BuildingDetailPage() {
   const [phaseEditOpen, setPhaseEditOpen] = useState(false)
   const [phaseDraft, setPhaseDraft] = useState<string>("")
   const [savingPhase, setSavingPhase] = useState(false)
+  const [reviewerDialogOpen, setReviewerDialogOpen] = useState(false)
 
   const canManage = user && ["team_leader", "chief_secretary", "secretary"].includes(user.role)
   const canChangePhase = user && ["team_leader", "chief_secretary"].includes(user.role)
@@ -340,6 +341,8 @@ export default function BuildingDetailPage() {
   if (!building) return null
 
   const phaseOptions = getAdjacentManualPhases(building.current_phase)
+  const reviewerDetail = building.reviewer_detail
+  const reviewerDisplayName = building.reviewer_name ?? building.assigned_reviewer_name
 
   return (
     <div className="space-y-6">
@@ -403,6 +406,25 @@ export default function BuildingDetailPage() {
               value={building.is_quasi_multi_use == null ? null : building.is_quasi_multi_use ? "예" : "아니오"}
             />
             <InfoItem label="내진등급" value={building.seismic_level} />
+            <InfoItem
+              label="검토자"
+              value={reviewerDisplayName ? (
+                reviewerDetail ? (
+                  <Button
+                    type="button"
+                    variant="link"
+                    className="h-auto gap-1 p-0 text-sm font-medium"
+                    onClick={() => setReviewerDialogOpen(true)}
+                    aria-label={`${reviewerDisplayName} 검토자 정보 보기`}
+                  >
+                    <UserRound className="h-3.5 w-3.5" />
+                    <span>{reviewerDisplayName}</span>
+                  </Button>
+                ) : (
+                  reviewerDisplayName
+                )
+              ) : null}
+            />
           </div>
 
           <Separator />
@@ -846,6 +868,29 @@ export default function BuildingDetailPage() {
         </DialogContent>
       </Dialog>
 
+      {/* 검토자 정보 */}
+      <Dialog open={reviewerDialogOpen} onOpenChange={setReviewerDialogOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>검토자 정보</DialogTitle>
+          </DialogHeader>
+          {reviewerDetail && (
+            <div className="grid grid-cols-[84px_1fr] gap-x-3 gap-y-2 text-sm">
+              <span className="text-muted-foreground">이름</span>
+              <span className="font-medium">{reviewerDetail.name}</span>
+              <span className="text-muted-foreground">조</span>
+              <span className="font-medium">
+                {reviewerDetail.group_no ? `${reviewerDetail.group_no}조` : "-"}
+              </span>
+              <span className="text-muted-foreground">이메일주소</span>
+              <span className="break-all font-medium">{reviewerDetail.email || "-"}</span>
+              <span className="text-muted-foreground">전화번호</span>
+              <span className="font-medium">{reviewerDetail.phone || "-"}</span>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
       {/* 현재 단계 수정 다이얼로그 (간사 이상) */}
       <Dialog open={phaseEditOpen} onOpenChange={setPhaseEditOpen}>
         <DialogContent className="max-w-md">
@@ -900,7 +945,13 @@ export default function BuildingDetailPage() {
   )
 }
 
-function InfoItem({ label, value }: { label: string; value: string | null | undefined }) {
+function InfoItem({
+  label,
+  value,
+}: {
+  label: string
+  value: React.ReactNode | null | undefined
+}) {
   return (
     <div>
       <dt className="text-muted-foreground">{label}</dt>
