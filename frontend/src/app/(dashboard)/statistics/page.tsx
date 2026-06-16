@@ -451,6 +451,12 @@ function RegionalStatsTable<T extends string>({
     return <EmptyMessage>집계된 지역이 없습니다.</EmptyMessage>
   }
 
+  const totalRow = rows.find((row) => row.region === "전체") ?? rows[0]
+  const grandTotal = columns.reduce(
+    (sum, column) => sum + (totalRow[column.key] ?? 0),
+    0
+  )
+
   return (
     <div className="overflow-x-auto rounded-md border">
       <Table>
@@ -477,16 +483,19 @@ function RegionalStatsTable<T extends string>({
                 <TableCell className={isTotal ? "font-bold" : "font-medium"}>
                   {row.region}
                 </TableCell>
-                {columns.map((column) => (
-                  <TableCell
-                    key={column.key}
-                    className={`text-center ${isTotal ? "font-bold" : ""}`}
-                  >
-                    {row[column.key].toLocaleString()}
-                  </TableCell>
-                ))}
+                {columns.map((column) => {
+                  const value = row[column.key] ?? 0
+                  return (
+                    <TableCell
+                      key={column.key}
+                      className={`text-center ${isTotal ? "font-bold" : ""}`}
+                    >
+                      <CountWithPercent value={value} denominator={rowTotal} />
+                    </TableCell>
+                  )
+                })}
                 <TableCell className={`text-center ${isTotal ? "font-bold" : "font-semibold"}`}>
-                  {rowTotal.toLocaleString()}
+                  <CountWithPercent value={rowTotal} denominator={grandTotal} />
                 </TableCell>
               </TableRow>
             )
@@ -495,6 +504,30 @@ function RegionalStatsTable<T extends string>({
       </Table>
     </div>
   )
+}
+
+function CountWithPercent({
+  value,
+  denominator,
+}: {
+  value: number
+  denominator: number
+}) {
+  return (
+    <span className="inline-flex items-baseline justify-center gap-1 whitespace-nowrap">
+      <span>{value.toLocaleString()}</span>
+      <span className="text-xs font-normal text-muted-foreground">
+        ({formatPercent(value, denominator)})
+      </span>
+    </span>
+  )
+}
+
+function formatPercent(value: number, denominator: number) {
+  if (denominator <= 0) return "0%"
+  const percent = (value / denominator) * 100
+  const maximumFractionDigits = percent > 0 && percent < 10 ? 1 : 0
+  return `${percent.toLocaleString(undefined, { maximumFractionDigits })}%`
 }
 
 function SeverityStatsView({
