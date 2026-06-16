@@ -348,11 +348,15 @@ export default function MyReviewsPage() {
                   >
                     {b.mgmt_no}
                   </TableCell>
-                  <TableCell
-                    className="text-sm max-w-[220px] truncate"
-                    title={b.building_name ?? undefined}
-                  >
-                    {b.full_address || "-"}
+                  <TableCell className="max-w-[260px] text-sm">
+                    <div className="space-y-0.5 whitespace-normal break-words leading-5">
+                      <div>{b.full_address || "-"}</div>
+                      {b.building_name && (
+                        <div className="text-xs font-medium text-muted-foreground">
+                          {b.building_name}
+                        </div>
+                      )}
+                    </div>
                   </TableCell>
                   <TableCell className="text-center">{b.gross_area?.toLocaleString() ?? "-"}</TableCell>
                   <TableCell className="text-center">{b.floors_above ?? "-"}</TableCell>

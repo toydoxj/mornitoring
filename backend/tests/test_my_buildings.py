@@ -26,6 +26,27 @@ def test_my_reviews_returns_only_own_buildings(
     assert payload["items"][0]["mgmt_no"] == own.mgmt_no
 
 
+def test_get_building_includes_reviewer_detail(
+    client, db_session, make_reviewer, make_building
+):
+    reviewer_user, reviewer, headers = make_reviewer(group_no=3)
+    reviewer_user.phone = "010-1234-5678"
+    building = make_building(reviewer_id=reviewer.id, mgmt_no="DETAIL-001")
+    db_session.commit()
+
+    res = client.get(f"/api/buildings/{building.id}", headers=headers)
+
+    assert res.status_code == 200
+    payload = res.json()
+    assert payload["reviewer_name"] == reviewer_user.name
+    assert payload["reviewer_detail"] == {
+        "name": reviewer_user.name,
+        "group_no": 3,
+        "email": reviewer_user.email,
+        "phone": "010-1234-5678",
+    }
+
+
 def test_my_reviews_supports_server_sorting(
     client, db_session, make_reviewer, make_building
 ):
