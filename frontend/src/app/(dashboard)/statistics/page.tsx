@@ -462,11 +462,16 @@ function RegionalStatsTable<T extends string>({
                 {column.label}
               </TableHead>
             ))}
+            <TableHead className="min-w-[80px] text-center">합계</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
           {rows.map((row) => {
             const isTotal = row.region === "전체"
+            const rowTotal = columns.reduce(
+              (sum, column) => sum + (row[column.key] ?? 0),
+              0
+            )
             return (
               <TableRow key={row.region} className={isTotal ? "bg-muted/40" : undefined}>
                 <TableCell className={isTotal ? "font-bold" : "font-medium"}>
@@ -480,6 +485,9 @@ function RegionalStatsTable<T extends string>({
                     {row[column.key].toLocaleString()}
                   </TableCell>
                 ))}
+                <TableCell className={`text-center ${isTotal ? "font-bold" : "font-semibold"}`}>
+                  {rowTotal.toLocaleString()}
+                </TableCell>
               </TableRow>
             )
           })}
