@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Sequence
@@ -22,12 +23,24 @@ REQUIRED_KAKAO_SCOPES = ("profile_nickname", "friends", "talk_message")
 logger = logging.getLogger(__name__)
 
 
+def _redact_kakao_error_body(value: object) -> object:
+    """카카오 오류 본문에서 인가 코드처럼 재사용 가능한 조각을 마스킹한다."""
+    if isinstance(value, str):
+        return re.sub(r"code=[^\s,'\"}]+", "code=<redacted>", value)
+    if isinstance(value, dict):
+        return {key: _redact_kakao_error_body(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_redact_kakao_error_body(item) for item in value]
+    return value
+
+
 def _log_kakao_token_error(response: httpx.Response, grant_type: str) -> None:
     """카카오 토큰 API 오류 본문을 민감정보 없이 남긴다."""
     try:
         response_body: object = response.json()
     except ValueError:
         response_body = response.text[:1000]
+    response_body = _redact_kakao_error_body(response_body)
 
     logger.error(
         "카카오 토큰 API 오류 grant_type=%s status_code=%s redirect_uri=%s "
