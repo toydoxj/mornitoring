@@ -1,6 +1,7 @@
 """카카오 API 서비스 (로그인 + 친구에게 보내기)"""
 
 import json
+import logging
 import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Sequence
@@ -18,6 +19,25 @@ KAKAO_AUTH_URL = "https://kauth.kakao.com"
 KAKAO_API_URL = "https://kapi.kakao.com"
 TOKEN_REFRESH_MARGIN = timedelta(minutes=5)
 REQUIRED_KAKAO_SCOPES = ("profile_nickname", "friends", "talk_message")
+logger = logging.getLogger(__name__)
+
+
+def _log_kakao_token_error(response: httpx.Response, grant_type: str) -> None:
+    """카카오 토큰 API 오류 본문을 민감정보 없이 남긴다."""
+    try:
+        response_body: object = response.json()
+    except ValueError:
+        response_body = response.text[:1000]
+
+    logger.error(
+        "카카오 토큰 API 오류 grant_type=%s status_code=%s redirect_uri=%s "
+        "has_client_secret=%s response=%s",
+        grant_type,
+        response.status_code,
+        settings.kakao_redirect_uri,
+        bool(settings.kakao_client_secret),
+        response_body,
+    )
 
 
 def generate_oauth_state(*, setup_user_id: int | None = None) -> str:
@@ -254,6 +274,8 @@ async def exchange_code(code: str) -> dict:
 
     async with httpx.AsyncClient() as client:
         response = await client.post(f"{KAKAO_AUTH_URL}/oauth/token", data=data)
+        if response.is_error:
+            _log_kakao_token_error(response, "authorization_code")
         response.raise_for_status()
         return response.json()
 
@@ -320,6 +342,8 @@ async def refresh_token(refresh_token_str: str) -> dict:
             f"{KAKAO_AUTH_URL}/oauth/token",
             data=data,
         )
+        if response.is_error:
+            _log_kakao_token_error(response, "refresh_token")
         response.raise_for_status()
         return response.json()
 

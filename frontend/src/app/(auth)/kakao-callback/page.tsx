@@ -1,6 +1,6 @@
 "use client"
 
-import { Suspense, useEffect, useState } from "react"
+import { Suspense, useEffect, useRef, useState } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import apiClient from "@/lib/api/client"
@@ -19,6 +19,7 @@ function KakaoCallbackContent() {
   const searchParams = useSearchParams()
   const code = searchParams.get("code")
   const state = searchParams.get("state")
+  const callbackStarted = useRef(false)
   const [status, setStatus] = useState(
     code ? "카카오 로그인 처리 중..." : "인가 코드가 없습니다"
   )
@@ -26,6 +27,8 @@ function KakaoCallbackContent() {
 
   useEffect(() => {
     if (!code) return
+    if (callbackStarted.current) return
+    callbackStarted.current = true
 
     const handleCallback = async () => {
       try {
