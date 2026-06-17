@@ -36,6 +36,53 @@ def _ensure_reviewer_can_access_building(
     if reviewer is None or building.reviewer_id != reviewer.id:
         raise HTTPException(status_code=404, detail="건축물을 찾을 수 없습니다")
 
+
+def _ensure_user_assigned_as_reviewer(
+    building: Building, current_user: User, db: Session
+) -> None:
+    """Reviewer 행이 있는 사용자에게 본인 담당 건물만 허용."""
+    reviewer = db.query(Reviewer).filter(Reviewer.user_id == current_user.id).first()
+    if reviewer is None or building.reviewer_id != reviewer.id:
+        raise HTTPException(status_code=404, detail="건축물을 찾을 수 없습니다")
+
+
+def _ensure_review_upload_permission(
+    building: Building, current_user: User, db: Session
+) -> None:
+    """검토서 업로드 권한 확인.
+
+    - REVIEWER: 본인 담당 건물만 업로드
+    - CHIEF_SECRETARY: 검토위원 제출이 어려운 경우 대리 업로드
+    """
+    if current_user.role == UserRole.CHIEF_SECRETARY:
+        return
+    if current_user.role in (UserRole.REVIEWER, UserRole.SECRETARY):
+        _ensure_user_assigned_as_reviewer(building, current_user, db)
+        return
+    raise HTTPException(status_code=403, detail="검토서 업로드 권한이 없습니다")
+
+
+def _assigned_reviewer_name_for_upload(building: Building) -> str | None:
+    """대리 업로드 검증에 사용할 배정 검토위원명."""
+    if building.reviewer and building.reviewer.user:
+        return building.reviewer.user.name
+    return building.assigned_reviewer_name
+
+
+def _expected_reviewer_for_upload(
+    building: Building, current_user: User
+) -> tuple[str | None, str]:
+    """검토서 F4와 대조할 이름과 라벨."""
+    if current_user.role == UserRole.CHIEF_SECRETARY:
+        reviewer_name = _assigned_reviewer_name_for_upload(building)
+        if not reviewer_name:
+            raise HTTPException(
+                status_code=400,
+                detail="검토위원이 배정되지 않아 대리 업로드할 수 없습니다",
+            )
+        return reviewer_name, "배정 검토위원"
+    return current_user.name, "로그인 사용자"
+
 # 판정결과 한글 라벨
 _RESULT_KOREAN = {
     "pass": "적합",
@@ -206,7 +253,10 @@ async def preview_upload(
     if not building:
         raise HTTPException(status_code=404, detail=f"관리번호 {mgmt_no}을 찾을 수 없습니다")
     # 비용 큰 파일 파싱 전에 fail-fast로 권한 검증
-    _ensure_reviewer_can_access_building(building, current_user, db)
+    _ensure_review_upload_permission(building, current_user, db)
+    expected_reviewer_name, reviewer_label = _expected_reviewer_for_upload(
+        building, current_user
+    )
 
     target_phase, phase_errors = _resolve_upload_phase(building, phase)
     if phase_errors:
@@ -219,8 +269,10 @@ async def preview_upload(
     try:
         validation = validate_review_file(
             file_path=tmp_path, filename=file.filename,
-            expected_mgmt_no=mgmt_no, submitter_name=current_user.name,
+            expected_mgmt_no=mgmt_no,
+            submitter_name=expected_reviewer_name,
             expected_phase=target_phase,
+            submitter_label=reviewer_label,
         )
 
         if not validation.is_valid:
@@ -540,7 +592,10 @@ async def upload_review(
     if not building:
         raise HTTPException(status_code=404, detail=f"관리번호 {mgmt_no}을 찾을 수 없습니다")
     # 비용 큰 파일 파싱·DB 쓰기 전에 fail-fast로 권한 검증
-    _ensure_reviewer_can_access_building(building, current_user, db)
+    _ensure_review_upload_permission(building, current_user, db)
+    expected_reviewer_name, reviewer_label = _expected_reviewer_for_upload(
+        building, current_user
+    )
 
     actual_phase, phase_errors = _resolve_upload_phase(building, phase)
     if phase_errors:
@@ -557,8 +612,9 @@ async def upload_review(
             file_path=tmp_path,
             filename=file.filename,
             expected_mgmt_no=mgmt_no,
-            submitter_name=current_user.name,
+            submitter_name=expected_reviewer_name,
             expected_phase=actual_phase,
+            submitter_label=reviewer_label,
         )
 
         if not validation.is_valid:
@@ -570,6 +626,7 @@ async def upload_review(
 
         # 3. 검토서 내용 추출
         extracted = extract_review_data(tmp_path)
+        submitted_reviewer_name = validation.reviewer_name or expected_reviewer_name
         try:
             phase_type = PhaseType(actual_phase)
         except ValueError:
@@ -592,7 +649,7 @@ async def upload_review(
             # 새 파일 업로드 전에 기존 S3 파일 삭제 (날짜 경로가 다르면 orphan 방지)
             old_s3_key = stage.s3_file_key
             stage.report_submitted_at = date.today()
-            stage.reviewer_name = current_user.name
+            stage.reviewer_name = submitted_reviewer_name
             if extracted["result"]:
                 stage.result = extracted["result"]
             if extracted["defect_type_1"]:
@@ -623,7 +680,7 @@ async def upload_review(
                 phase=phase_type,
                 phase_order=phase_order,
                 report_submitted_at=date.today(),
-                reviewer_name=current_user.name,
+                reviewer_name=submitted_reviewer_name,
                 result=extracted["result"],
                 defect_type_1=extracted["defect_type_1"],
                 defect_type_2=extracted["defect_type_2"],
@@ -655,8 +712,19 @@ async def upload_review(
         changes = _detect_changes(building, validation.extracted_data)
         _apply_changes(building, validation.extracted_data)
 
-        log_action(db, current_user.id, "upload", "review_stage", stage.id,
-                   after_data={"mgmt_no": mgmt_no, "phase": phase})
+        log_action(
+            db,
+            current_user.id,
+            "upload",
+            "review_stage",
+            stage.id,
+            after_data={
+                "mgmt_no": mgmt_no,
+                "phase": phase,
+                "reviewer_name": submitted_reviewer_name,
+                "proxy_upload": current_user.role == UserRole.CHIEF_SECRETARY,
+            },
+        )
         db.commit()
         db.refresh(stage)
 

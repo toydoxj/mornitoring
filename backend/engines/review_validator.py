@@ -134,15 +134,16 @@ def validate_review_file(
     file_path: str | Path,
     filename: str,
     expected_mgmt_no: str | None,
-    submitter_name: str,
+    submitter_name: str | None,
     expected_phase: str | None = None,
+    submitter_label: str = "로그인 사용자",
 ) -> ValidationResult:
     """검토서 파일 유효성 검증
 
     검증 항목:
     1. 파일명 = 관리번호.xlsm
     2. 관리번호 일치 (파일명 vs 내부 C4)
-    3. 검토위원 일치 (로그인 사용자 vs F4)
+    3. 검토위원 일치 (기대 검토위원 vs F4)
     4. 적정성 검토 결과가 "적합"이면 부적합유형1은 "적합", 나머지 빈칸
     5. 적정성 검토 결과에 내용이 있는데 부적합유형이 "적합" 또는 비어있는 경우
     6. 차수 라벨 검증 (시트명 + 절차 C5)
@@ -207,10 +208,10 @@ def validate_review_file(
     # 3. 검토위원 (F4) 확인
     internal_reviewer = _cell_str(ws, "F4")
     result.reviewer_name = internal_reviewer
-    if internal_reviewer and internal_reviewer != submitter_name:
+    if submitter_name and internal_reviewer and internal_reviewer != submitter_name:
         result.add_error(
             f"검토서 내부 검토위원({internal_reviewer})이 "
-            f"로그인 사용자({submitter_name})와 일치하지 않습니다."
+            f"{submitter_label}({submitter_name})와 일치하지 않습니다."
         )
 
     # 6. 절차 (C5) 및 시트명 검증 — expected_phase에 맞춰 차수 검증

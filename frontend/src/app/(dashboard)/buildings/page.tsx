@@ -1,7 +1,8 @@
 "use client"
 
-import { useEffect, useState, useMemo } from "react"
+import { useCallback, useEffect, useState, useMemo } from "react"
 import { useRouter } from "next/navigation"
+import { FileSpreadsheet, Upload, X } from "lucide-react"
 import {
   useReactTable,
   getCoreRowModel,
@@ -22,6 +23,7 @@ import {
 import {
   Dialog,
   DialogContent,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
@@ -36,11 +38,36 @@ const RESULT_VARIANT: Record<string, "default" | "secondary" | "destructive" | "
   recalculate: "destructive",
 }
 
+const SUBMITTED_PHASES = new Set([
+  "preliminary",
+  "supplement_1",
+  "supplement_2",
+  "supplement_3",
+  "supplement_4",
+  "supplement_5",
+])
+
 type LedgerUploadResult = {
   imported: number
   skipped: number
   errors?: string[]
   error?: string
+}
+
+type FieldChange = {
+  field: string
+  label: string
+  old_value: string | null
+  new_value: string | null
+  scope?: "building" | "review_stage" | "reference"
+}
+
+type ReviewUploadResult = {
+  success: boolean
+  message: string
+  errors: string[]
+  warnings: string[]
+  changes: FieldChange[]
 }
 
 export default function BuildingsPage() {
@@ -69,11 +96,20 @@ export default function BuildingsPage() {
   } | null>(null)
   const [assigning, setAssigning] = useState(false)
   const [assignResult, setAssignResult] = useState<{ applied: number; skipped: number } | null>(null)
+  // 총괄간사 검토서 대리 업로드
+  const [reviewUploadTarget, setReviewUploadTarget] = useState<Building | null>(null)
+  const [reviewUploadFile, setReviewUploadFile] = useState<File | null>(null)
+  const [reviewUploading, setReviewUploading] = useState(false)
+  const [reviewUploadResult, setReviewUploadResult] = useState<ReviewUploadResult | null>(null)
+  const [reviewPreviewDone, setReviewPreviewDone] = useState(false)
+  const [reviewReuploadConfirmOpen, setReviewReuploadConfirmOpen] = useState(false)
+  const [reviewInappropriateNeeded, setReviewInappropriateNeeded] = useState(false)
   const pageSize = 50
 
   const canManage = user && ["team_leader", "chief_secretary", "secretary"].includes(user.role)
   // 통합관리대장 업로드는 총괄간사에게만 허용
   const canUploadLedger = user?.role === "chief_secretary"
+  const canProxyReviewUpload = user?.role === "chief_secretary"
 
   const handleExport = async () => {
     try {
@@ -91,7 +127,7 @@ export default function BuildingsPage() {
     }
   }
 
-  const fetchBuildings = async () => {
+  const fetchBuildings = useCallback(async () => {
     setIsLoading(true)
     try {
       const params: Record<string, string | number> = { page, size: pageSize }
@@ -110,11 +146,11 @@ export default function BuildingsPage() {
     } finally {
       setIsLoading(false)
     }
-  }
+  }, [filterPhase, filterReviewer, page, search, sortBy, sortOrder])
 
   useEffect(() => {
     fetchBuildings()
-  }, [page, search, filterPhase, filterReviewer, sortBy, sortOrder])
+  }, [fetchBuildings])
 
   useEffect(() => {
     apiClient.get<string[]>("/api/buildings/reviewer-names")
@@ -194,6 +230,146 @@ export default function BuildingsPage() {
       // 에러 처리
     } finally {
       setAssigning(false)
+    }
+  }
+
+  const resetReviewUpload = () => {
+    setReviewUploadFile(null)
+    setReviewUploadResult(null)
+    setReviewPreviewDone(false)
+    setReviewReuploadConfirmOpen(false)
+    setReviewInappropriateNeeded(false)
+  }
+
+  const openReviewUpload = useCallback((building: Building) => {
+    setReviewUploadTarget(building)
+    setReviewUploadFile(null)
+    setReviewUploadResult(null)
+    setReviewPreviewDone(false)
+    setReviewReuploadConfirmOpen(false)
+    setReviewInappropriateNeeded(Boolean(building.latest_inappropriate))
+  }, [])
+
+  const validateReviewFile = (file: File): boolean => {
+    if (!file.name.toLowerCase().endsWith(".xlsm")) {
+      alert(".xlsm 파일만 업로드할 수 있습니다.")
+      return false
+    }
+    return true
+  }
+
+  const previewReviewUpload = async (file: File) => {
+    if (!reviewUploadTarget) return
+    setReviewUploadFile(file)
+    setReviewUploading(true)
+    setReviewUploadResult(null)
+    setReviewPreviewDone(false)
+
+    try {
+      const formData = new FormData()
+      formData.append("file", file)
+      const phase = reviewUploadTarget.current_phase || "preliminary"
+      const { data: result } = await apiClient.post<ReviewUploadResult>(
+        "/api/reviews/upload/preview",
+        formData,
+        {
+          params: { mgmt_no: reviewUploadTarget.mgmt_no, phase },
+          headers: { "Content-Type": "multipart/form-data" },
+        }
+      )
+      setReviewUploadResult(result)
+      setReviewPreviewDone(result.success)
+    } catch {
+      setReviewUploadResult({
+        success: false,
+        message: "검증 중 오류가 발생했습니다",
+        errors: ["서버 연결을 확인해주세요"],
+        warnings: [],
+        changes: [],
+      })
+    } finally {
+      setReviewUploading(false)
+    }
+  }
+
+  const handleReviewFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (file && validateReviewFile(file)) {
+      previewReviewUpload(file)
+    }
+    e.target.value = ""
+  }
+
+  const clearReviewUploadFile = () => {
+    setReviewUploadFile(null)
+    setReviewUploadResult(null)
+    setReviewPreviewDone(false)
+    setReviewInappropriateNeeded(Boolean(reviewUploadTarget?.latest_inappropriate))
+  }
+
+  const handleReviewUploadClick = () => {
+    if (!reviewUploadTarget) return
+    const isReupload =
+      reviewUploadTarget.current_phase && SUBMITTED_PHASES.has(reviewUploadTarget.current_phase)
+    if (isReupload) {
+      setReviewReuploadConfirmOpen(true)
+      return
+    }
+    confirmReviewUpload()
+  }
+
+  const confirmReviewUpload = async () => {
+    if (!reviewUploadTarget || !reviewUploadFile) return
+    const hasBuildingChanges = reviewUploadResult?.changes.some(
+      (change) =>
+        (!change.scope || change.scope === "building") &&
+        !change.label.includes("신규")
+    )
+    if (hasBuildingChanges && !confirm("기존 건축물 정보가 변경됩니다. 계속하시겠습니까?")) {
+      return
+    }
+
+    setReviewUploading(true)
+    try {
+      const formData = new FormData()
+      formData.append("file", reviewUploadFile)
+      const phase = reviewUploadTarget.current_phase || "preliminary"
+      const effectiveInappropriateNeeded = Boolean(
+        reviewUploadTarget.latest_inappropriate || reviewInappropriateNeeded
+      )
+      const { data: result } = await apiClient.post<ReviewUploadResult>(
+        "/api/reviews/upload",
+        formData,
+        {
+          params: {
+            mgmt_no: reviewUploadTarget.mgmt_no,
+            phase,
+            inappropriate_review_needed: effectiveInappropriateNeeded,
+          },
+          headers: { "Content-Type": "multipart/form-data" },
+        }
+      )
+      setReviewUploadResult(result)
+      setReviewPreviewDone(false)
+      setReviewUploadFile(null)
+      setReviewInappropriateNeeded(effectiveInappropriateNeeded)
+      if (result.success) {
+        fetchBuildings()
+        setTimeout(() => {
+          setReviewUploadTarget(null)
+          resetReviewUpload()
+        }, 1000)
+      }
+    } catch {
+      setReviewUploadResult({
+        success: false,
+        message: "업로드 중 오류가 발생했습니다",
+        errors: ["서버 연결을 확인해주세요"],
+        warnings: [],
+        changes: [],
+      })
+    } finally {
+      setReviewUploading(false)
     }
   }
 
@@ -282,8 +458,30 @@ export default function BuildingsPage() {
           return <Badge variant={variant}>{label}</Badge>
         },
       },
+      ...(canProxyReviewUpload
+        ? [
+            {
+              id: "review_upload",
+              header: "검토서",
+              size: 110,
+              cell: ({ row }) => (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    openReviewUpload(row.original)
+                  }}
+                >
+                  <Upload />
+                  대리 업로드
+                </Button>
+              ),
+            } satisfies ColumnDef<Building>,
+          ]
+        : []),
     ],
-    []
+    [canProxyReviewUpload, openReviewUpload]
   )
 
   const table = useReactTable({
@@ -499,6 +697,199 @@ export default function BuildingsPage() {
           </Button>
         </div>
       )}
+
+      {/* 총괄간사 검토서 대리 업로드 다이얼로그 */}
+      <Dialog open={!!reviewUploadTarget} onOpenChange={(open) => {
+        if (!open) {
+          setReviewUploadTarget(null)
+          resetReviewUpload()
+        }
+      }}>
+        <DialogContent className="max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>검토서 대리 업로드</DialogTitle>
+          </DialogHeader>
+          {reviewUploadTarget && (
+            <div className="space-y-4">
+              <div className="rounded-md bg-muted p-3 text-sm space-y-1">
+                <p>관리번호: <strong>{reviewUploadTarget.mgmt_no}</strong></p>
+                <p>건물명: {reviewUploadTarget.building_name || "-"}</p>
+                <p>검토위원: {reviewUploadTarget.reviewer_name || reviewUploadTarget.assigned_reviewer_name || "-"}</p>
+                <p>현재 단계: {reviewUploadTarget.current_phase
+                  ? PHASE_LABELS[reviewUploadTarget.current_phase as PhaseType] || reviewUploadTarget.current_phase
+                  : "-"}</p>
+              </div>
+
+              <div className="space-y-2">
+                <p className="text-sm text-muted-foreground">
+                  검토위원에게 받은 .xlsm 검토서를 선택하세요. 검토서 내부 검토위원은 배정 검토위원과 일치해야 합니다.
+                </p>
+                <Input
+                  type="file"
+                  accept=".xlsm"
+                  onChange={handleReviewFileChange}
+                  disabled={reviewUploading || reviewPreviewDone}
+                />
+                {reviewUploadFile && (
+                  <div className="flex items-center gap-3 rounded-md border border-primary/30 bg-primary/5 p-3">
+                    <FileSpreadsheet className="h-8 w-8 shrink-0 text-primary" />
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-medium">{reviewUploadFile.name}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {reviewUploading
+                          ? "검증 중..."
+                          : `${(reviewUploadFile.size / 1024).toLocaleString(undefined, { maximumFractionDigits: 1 })} KB`}
+                      </p>
+                    </div>
+                    {!reviewUploading && (
+                      <Button
+                        size="icon-sm"
+                        variant="ghost"
+                        onClick={clearReviewUploadFile}
+                        aria-label="파일 제거"
+                      >
+                        <X />
+                      </Button>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {reviewUploadResult && (
+                <div className="space-y-2">
+                  <div className={`rounded-md p-3 text-sm ${
+                    reviewUploadResult.success ? "bg-green-50 text-green-800" : "bg-red-50 text-red-800"
+                  }`}>
+                    <p className="font-medium">{reviewUploadResult.message}</p>
+                    {reviewUploadResult.errors.length > 0 && (
+                      <ul className="mt-2 list-disc pl-4 space-y-1">
+                        {reviewUploadResult.errors.map((err, index) => (
+                          <li key={index}>{err}</li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+
+                  {reviewUploadResult.warnings.length > 0 && (
+                    <div className="rounded-md bg-yellow-50 p-3 text-sm text-yellow-800">
+                      <p className="font-medium">확인 사항</p>
+                      <ul className="mt-1 list-disc pl-4 space-y-1">
+                        {reviewUploadResult.warnings.map((warning, index) => (
+                          <li key={index}>{warning}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  {reviewUploadResult.changes.length > 0 && (() => {
+                    const reviewChanges = reviewUploadResult.changes.filter((change) => change.scope === "review_stage")
+                    const buildingChanges = reviewUploadResult.changes.filter((change) => !change.scope || change.scope === "building")
+                    const referenceChanges = reviewUploadResult.changes.filter((change) => change.scope === "reference")
+                    return (
+                      <div className="space-y-2">
+                        {reviewChanges.length > 0 && (
+                          <div className="rounded-md bg-green-50 p-3 text-sm text-green-900">
+                            <p className="font-medium">검토서 단계 변경</p>
+                            <ul className="mt-1 list-disc pl-4 space-y-1">
+                              {reviewChanges.map((change, index) => (
+                                <li key={index}>{change.label}: {change.old_value} → {change.new_value}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+                        {buildingChanges.length > 0 && (
+                          <div className="rounded-md bg-blue-50 p-3 text-sm text-blue-800">
+                            <p className="font-medium">건축물 정보 변경 내역</p>
+                            <ul className="mt-1 list-disc pl-4 space-y-1">
+                              {buildingChanges.map((change, index) => (
+                                <li key={index}>{change.label}: {change.old_value} → {change.new_value}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+                        {referenceChanges.length > 0 && (
+                          <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+                            <p className="font-medium">주요 구조 형식 검토</p>
+                            <ul className="mt-1 list-disc pl-4 space-y-1">
+                              {referenceChanges.map((change, index) => (
+                                <li key={index}>{change.label}: {change.old_value} → {change.new_value}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })()}
+
+                  {reviewPreviewDone && (
+                    <label className="flex cursor-pointer items-start gap-2 rounded-md border border-orange-200 bg-orange-50 p-3 text-sm hover:bg-orange-100">
+                      <input
+                        type="checkbox"
+                        className="mt-0.5 h-4 w-4 cursor-pointer"
+                        checked={reviewInappropriateNeeded}
+                        onChange={(event) => setReviewInappropriateNeeded(event.target.checked)}
+                      />
+                      <span className="flex-1">
+                        <span className="font-medium text-orange-900">부적정 사례 검토 필요</span>
+                        <span className="mt-0.5 block text-xs text-orange-800">
+                          본 검토 건이 부적정 사례로 별도 검토가 필요한 경우 체크해주세요.
+                        </span>
+                      </span>
+                    </label>
+                  )}
+
+                  {reviewPreviewDone && (
+                    <div className="flex gap-2">
+                      <Button
+                        onClick={handleReviewUploadClick}
+                        loading={reviewUploading}
+                        loadingText="업로드 중..."
+                        className="flex-1"
+                      >
+                        업로드
+                      </Button>
+                      <Button
+                        variant="outline"
+                        onClick={clearReviewUploadFile}
+                        disabled={reviewUploading}
+                        className="flex-1"
+                      >
+                        취소
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={reviewReuploadConfirmOpen} onOpenChange={setReviewReuploadConfirmOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>재업로드 확인</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-2 text-sm">
+            <p>현재 <strong>제출된 상태</strong>입니다. 다시 검토서를 업로드하시겠습니까?</p>
+            <p className="text-red-600">기존 검토서는 삭제됩니다.</p>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setReviewReuploadConfirmOpen(false)}>
+              아니오
+            </Button>
+            <Button
+              onClick={() => {
+                setReviewReuploadConfirmOpen(false)
+                confirmReviewUpload()
+              }}
+            >
+              예
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* 검토위원 배정 다이얼로그 */}
       <Dialog open={assignOpen} onOpenChange={(open) => {
         setAssignOpen(open)

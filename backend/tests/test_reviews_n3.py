@@ -7,10 +7,12 @@
 
 import io
 
+from engines.review_validator import ValidationResult
 from models.inquiry import Inquiry, InquiryStatus
 from models.notification_log import NotificationLog
-from models.review_stage import PhaseType, ReviewStage
+from models.review_stage import PhaseType, ResultType, ReviewStage
 from models.user import UserRole
+from routers import reviews as reviews_router
 from routers.reviews import _resolve_inappropriate_review_needed
 from services import inquiry_notify
 
@@ -118,6 +120,91 @@ def test_upload_allows_reupload_for_current_submitted_phase(
     assert payload["success"] is False
     assert payload["message"] == "유효성 검증 실패"
     assert "업로드 불가" not in payload["message"]
+
+
+def test_chief_secretary_upload_uses_assigned_reviewer_name(
+    client, db_session, make_user, make_reviewer, make_building, monkeypatch
+):
+    """총괄간사 대리 업로드는 검토자명을 배정 검토위원으로 검증/저장한다."""
+    _, chief_headers = make_user(
+        UserRole.CHIEF_SECRETARY,
+        name="총괄간사",
+        email="chief-upload@example.com",
+    )
+    reviewer_user, reviewer, _ = make_reviewer()
+    building = make_building(reviewer_id=reviewer.id, mgmt_no="2025-9001")
+    building.current_phase = "doc_received"
+    db_session.commit()
+
+    captured: dict[str, str | None] = {}
+
+    def fake_validate_review_file(**kwargs):
+        captured["submitter_name"] = kwargs["submitter_name"]
+        captured["submitter_label"] = kwargs["submitter_label"]
+        return ValidationResult(
+            is_valid=True,
+            reviewer_name=kwargs["submitter_name"],
+            extracted_data={},
+        )
+
+    def fake_extract_review_data(_tmp_path):
+        return {
+            "result": ResultType.PASS,
+            "defect_type_1": "적합",
+            "defect_type_2": "",
+            "defect_type_3": "",
+            "review_opinion": "",
+            "severity_counts": {},
+            "category_severity_counts": [],
+            "opinion_entries": [],
+        }
+
+    monkeypatch.setattr(
+        reviews_router,
+        "validate_review_file",
+        fake_validate_review_file,
+    )
+    monkeypatch.setattr(
+        reviews_router,
+        "extract_review_data",
+        fake_extract_review_data,
+    )
+    monkeypatch.setattr(
+        reviews_router,
+        "upload_review_file",
+        lambda *_args, **_kwargs: "reviews/preliminary/2025-9001.xlsm",
+    )
+
+    files = {
+        "file": (
+            "2025-9001.xlsm",
+            io.BytesIO(b"proxy upload"),
+            "application/vnd.ms-excel.sheet.macroEnabled.12",
+        )
+    }
+    res = client.post(
+        "/api/reviews/upload?mgmt_no=2025-9001&phase=doc_received",
+        headers=chief_headers,
+        files=files,
+    )
+
+    assert res.status_code == 200, res.text
+    assert res.json()["success"] is True
+    assert captured == {
+        "submitter_name": reviewer_user.name,
+        "submitter_label": "배정 검토위원",
+    }
+
+    db_session.expire_all()
+    saved = (
+        db_session.query(ReviewStage)
+        .filter(
+            ReviewStage.building_id == building.id,
+            ReviewStage.phase == PhaseType.PRELIMINARY,
+        )
+        .one()
+    )
+    assert saved.reviewer_name == reviewer_user.name
 
 
 def test_reupload_cannot_uncheck_inappropriate_review_needed(make_building):
