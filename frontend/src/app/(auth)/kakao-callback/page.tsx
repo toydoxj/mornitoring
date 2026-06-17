@@ -30,6 +30,20 @@ function KakaoCallbackContent() {
     if (callbackStarted.current) return
     callbackStarted.current = true
 
+    const processedKey = `kakao_callback_processed:${state || code}`
+    if (sessionStorage.getItem(processedKey)) {
+      if (localStorage.getItem("access_token")) {
+        router.replace("/dashboard")
+        return
+      }
+      if (sessionStorage.getItem("kakao_link_session_id")) {
+        router.replace("/link-account")
+        return
+      }
+      router.replace("/login")
+      return
+    }
+
     const handleCallback = async () => {
       try {
         const params = new URLSearchParams({ code })
@@ -43,12 +57,13 @@ function KakaoCallbackContent() {
         if (data.need_link && data.link_session_id) {
           sessionStorage.setItem("kakao_link_session_id", data.link_session_id)
           sessionStorage.setItem("kakao_link_name", data.kakao_name || "")
+          sessionStorage.setItem(processedKey, "1")
           if (data.setup_context) {
             sessionStorage.setItem("pending_link_context", data.setup_context)
           } else {
             sessionStorage.removeItem("pending_link_context")
           }
-          router.push("/link-account")
+          router.replace("/link-account")
           return
         }
 
@@ -56,8 +71,9 @@ function KakaoCallbackContent() {
         sessionStorage.removeItem("pending_link_context")
         sessionStorage.removeItem("pending_link_email")
         localStorage.setItem("access_token", data.access_token)
+        sessionStorage.setItem(processedKey, "1")
         await fetchMe()
-        router.push("/dashboard")
+        router.replace("/dashboard")
       } catch (err: unknown) {
         const axiosErr = err as { response?: { data?: { detail?: string } } }
         const detail = axiosErr.response?.data?.detail || "알 수 없는 오류"
