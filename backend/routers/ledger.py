@@ -17,11 +17,48 @@ from services.phase_transition import InvalidPhaseTransition
 from engines.ledger_import import import_ledger
 from engines.ledger_import_2025 import import_ledger_2025
 from engines.ledger_import_unified import import_ledger_unified
+from engines.ledger_import_technical import import_ledger_technical
 from engines.ledger_import_selection import import_ledger_selection
 from engines.ledger_export import export_ledger
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+def _normalize_excel_text(value) -> str:
+    if value is None:
+        return ""
+    return (
+        str(value)
+        .replace("\n", "")
+        .replace(" ", "")
+        .replace("(", "")
+        .replace(")", "")
+        .strip()
+    )
+
+
+def _normalized_row_values(ws, row_no: int) -> list[str]:
+    return [
+        _normalize_excel_text(cell.value)
+        for cell in next(ws.iter_rows(min_row=row_no, max_row=row_no), ())
+        if _normalize_excel_text(cell.value)
+    ]
+
+
+def _is_technical_ledger_sheet(sheet_name: str, row3_values: list[str], row4_values: list[str]) -> bool:
+    normalized_sheet_name = _normalize_excel_text(sheet_name)
+    if "관리대장" not in normalized_sheet_name:
+        return False
+
+    row3_set = set(row3_values)
+    row4_set = set(row4_values)
+    return (
+        ("모니터링관리번호" in row4_set or "관리번호" in row4_set)
+        and "건축구분" in row4_set
+        and "예비판정" in row3_set
+        and "예비판정결과관리원입력" in row4_set
+    )
 
 
 def _detect_format(file_path: Path) -> str:
@@ -32,26 +69,32 @@ def _detect_format(file_path: Path) -> str:
     has_2025 = False
     for sn in sheet_names:
         ws = wb[sn]
-        row1_values = [
-            str(cell.value).replace("\n", "").replace(" ", "")
-            for cell in next(ws.iter_rows(min_row=1, max_row=1), ())
-            if cell.value is not None
-        ]
+        normalized_sheet_name = _normalize_excel_text(sn)
+        row1_values = _normalized_row_values(ws, 1)
+        row3_values = _normalized_row_values(ws, 3)
+        row4_values = _normalized_row_values(ws, 4)
+
         if "대상선정" in sn or (
             "관리번호" in row1_values and "건축구분" in row1_values
         ):
             wb.close()
             return "selection"
 
-        if "통합 관리대장" in sn:
-            # 통합 관리대장 시트의 Row 4 A열 확인하여 신형/구형 구분
-            row4_a = ws.cell(row=4, column=1).value
+        if "관리대장" in sn and ("1차수" in sn or "1443" in sn or "2025" in sn):
+            has_2025 = True
+            continue
+
+        if _is_technical_ledger_sheet(sn, row3_values, row4_values):
             wb.close()
-            if row4_a and "관리번호" in str(row4_a):
+            return "technical"
+
+        if "통합관리대장" in normalized_sheet_name:
+            # 통합 관리대장 시트의 Row 4 A열 확인하여 신형/구형 구분
+            row4_a = _normalize_excel_text(ws.cell(row=4, column=1).value)
+            wb.close()
+            if row4_a and "관리번호" in row4_a:
                 return "unified_new"  # 3차수 통합본 (Row4 헤더, Row5 데이터)
             return "unified_old"      # 기존 형식 (Row2 헤더, Row3 데이터)
-        if "관리대장" in sn and ("1차수" in sn or "1443" in sn):
-            has_2025 = True
 
     wb.close()
     if has_2025:
@@ -75,6 +118,8 @@ async def import_excel(
         fmt = _detect_format(tmp_path)
         if fmt == "selection":
             result = import_ledger_selection(tmp_path, db)
+        elif fmt == "technical":
+            result = import_ledger_technical(tmp_path, db, actor_user_id=current_user.id)
         elif fmt == "unified_new":
             result = import_ledger_unified(tmp_path, db, actor_user_id=current_user.id)
         elif fmt == "2025":
