@@ -16,7 +16,7 @@ import {
 } from "@/components/ui/table"
 import apiClient from "@/lib/api/client"
 import { useAuthStore } from "@/stores/authStore"
-import type { PhaseType } from "@/types"
+import { RESULT_LABELS, type PhaseType } from "@/types"
 
 type ActiveTab = "reviewer" | "regional" | "severity" | "keyword" | "opinion"
 type RegionalTab = "area" | "floors" | "risk"
@@ -196,6 +196,13 @@ const OPINION_SEVERITY_STYLE: Record<OpinionSeverity, string> = {
   L2: SEVERITY_STYLE.L2,
   L3: SEVERITY_STYLE.L3,
   L4: SEVERITY_STYLE.L4,
+}
+
+const RESULT_BADGE_VARIANT: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
+  pass: "default",
+  pass_supplement: "default",
+  simple_error: "secondary",
+  recalculate: "destructive",
 }
 
 const REPORT_MAX_STYLE: Record<ReportMaxLabel, string> = {
@@ -992,6 +999,7 @@ function OpinionSeverityManager({ onChanged }: { onChanged: () => Promise<void> 
               <TableRow>
                 <TableHead className="min-w-[140px]">관리번호</TableHead>
                 <TableHead className="min-w-[110px]">단계</TableHead>
+                <TableHead className="w-[110px] text-center">판정결과</TableHead>
                 <TableHead className="min-w-[140px]">분류</TableHead>
                 <TableHead className="min-w-[360px]">의견</TableHead>
                 <TableHead className="w-[130px] text-center">심각도</TableHead>
@@ -1012,6 +1020,15 @@ function OpinionSeverityManager({ onChanged }: { onChanged: () => Promise<void> 
                     <Badge variant="outline">
                       {PHASE_LABEL_TEXT[item.phase] || item.phase}
                     </Badge>
+                  </TableCell>
+                  <TableCell className="text-center">
+                    {item.result ? (
+                      <Badge variant={RESULT_BADGE_VARIANT[item.result] || "outline"}>
+                        {RESULT_LABELS[item.result] || item.result}
+                      </Badge>
+                    ) : (
+                      <span className="text-muted-foreground">-</span>
+                    )}
                   </TableCell>
                   <TableCell className="font-medium">{item.category}</TableCell>
                   <TableCell>
