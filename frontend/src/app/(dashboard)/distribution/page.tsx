@@ -104,8 +104,14 @@ interface FolderDistributionResult {
   details: FolderDistributionDetail[]
 }
 
+interface FolderAssignmentItem {
+  reviewer_name: string
+  group_no: number | null
+  folder_name: string
+}
+
 interface FolderAssignmentMap {
-  assignment: Record<string, string>
+  assignment: Record<string, FolderAssignmentItem>
   assignment_count: number
   unassigned_building_count: number
 }
@@ -119,6 +125,25 @@ function extractMgmtNo(name: string): string | null {
 
 function safeDirName(name: string): string {
   return name.replace(INVALID_DIR_CHARS, "_").trim().replace(/[.]+$/g, "") || "미지정"
+}
+
+function buildFolderLogLines(details: FolderDistributionDetail[]): {
+  success: string[]
+  failed: string[]
+  all: string[]
+} {
+  const success = details
+    .filter((item) => item.status !== "skipped")
+    .map((item) => {
+      const action = getFolderStatusLabel(item.status)
+      return `[성공] ${action} | ${item.mgmt_no ?? "-"} | ${item.item_name} -> ${item.destination ?? "-"}`
+    })
+  const failed = details
+    .filter((item) => item.status === "skipped")
+    .map((item) => (
+      `[실패] ${item.mgmt_no ?? "-"} | ${item.item_name} | ${item.reason ?? "사유 없음"}`
+    ))
+  return { success, failed, all: [...success, ...failed] }
 }
 
 function getErrorMessage(error: unknown): string {
@@ -211,7 +236,7 @@ async function distributeLocalFolders({
 }: {
   sourceHandle: LocalDirectoryHandle
   targetHandle: LocalDirectoryHandle
-  assignment: Record<string, string>
+  assignment: Record<string, FolderAssignmentItem>
   dryRun: boolean
   operation: FolderOperation
   overwrite: boolean
@@ -264,8 +289,8 @@ async function distributeLocalFolders({
         continue
       }
 
-      const reviewerName = assignment[mgmtNo]
-      if (!reviewerName) {
+      const assignmentItem = assignment[mgmtNo]
+      if (!assignmentItem) {
         skipped += 1
         details.push({
           status: "skipped",
@@ -279,7 +304,8 @@ async function distributeLocalFolders({
         continue
       }
 
-      const reviewerDirName = safeDirName(reviewerName)
+      const reviewerName = assignmentItem.reviewer_name
+      const reviewerDirName = safeDirName(assignmentItem.folder_name)
       const existingReviewerDir = await getDirectoryIfExists(targetHandle, reviewerDirName)
       const reviewerDir = dryRun
         ? existingReviewerDir
@@ -311,7 +337,7 @@ async function distributeLocalFolders({
       }
 
       classified += 1
-      reviewerCounts[reviewerName] = (reviewerCounts[reviewerName] ?? 0) + 1
+      reviewerCounts[reviewerDirName] = (reviewerCounts[reviewerDirName] ?? 0) + 1
       if (!classifiedMgmtNos.includes(mgmtNo)) {
         classifiedMgmtNos.push(mgmtNo)
       }
@@ -407,6 +433,15 @@ export default function DistributionPage() {
 
   const applyFolderMgmtNos = (nos: string[]) => {
     setMgmtNosInput(nos.join("\n"))
+  }
+
+  const copyFolderLogs = async (lines: string[]) => {
+    if (lines.length === 0) return
+    try {
+      await navigator.clipboard.writeText(lines.join("\n"))
+    } catch (error) {
+      setFolderError(`로그 복사 실패: ${getErrorMessage(error)}`)
+    }
   }
 
   const pickFolder = async (kind: "source" | "target") => {
@@ -538,6 +573,10 @@ export default function DistributionPage() {
       setNotifSending(false)
     }
   }
+
+  const folderLogs = folderResult
+    ? buildFolderLogLines(folderResult.details)
+    : null
 
   return (
     <div className="space-y-6">
@@ -675,8 +714,74 @@ export default function DistributionPage() {
                   onClick={() => applyFolderMgmtNos(folderResult.classified_mgmt_nos)}
                 >
                   <ClipboardList />
-                  접수 목록에 반영
+                  분배된 관리번호 일괄 입력
                 </Button>
+              )}
+
+              {folderLogs && (
+                <div className="grid gap-3 lg:grid-cols-2">
+                  <div className="rounded-md border">
+                    <div className="flex items-center justify-between border-b px-3 py-2">
+                      <div className="flex items-center gap-2">
+                        <Badge variant="outline">성공 {folderLogs.success.length}건</Badge>
+                      </div>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => copyFolderLogs(folderLogs.success)}
+                        disabled={folderLogs.success.length === 0}
+                      >
+                        <Copy />
+                        복사
+                      </Button>
+                    </div>
+                    <div className="max-h-36 overflow-y-auto p-3 text-xs text-muted-foreground">
+                      {folderLogs.success.length > 0 ? (
+                        <pre className="whitespace-pre-wrap font-mono">
+                          {folderLogs.success.join("\n")}
+                        </pre>
+                      ) : (
+                        <p>성공 로그가 없습니다.</p>
+                      )}
+                    </div>
+                  </div>
+                  <div className="rounded-md border">
+                    <div className="flex items-center justify-between border-b px-3 py-2">
+                      <div className="flex items-center gap-2">
+                        <Badge variant={folderLogs.failed.length > 0 ? "destructive" : "outline"}>
+                          실패 {folderLogs.failed.length}건
+                        </Badge>
+                      </div>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => copyFolderLogs(folderLogs.failed)}
+                        disabled={folderLogs.failed.length === 0}
+                      >
+                        <Copy />
+                        복사
+                      </Button>
+                    </div>
+                    <div className="max-h-36 overflow-y-auto p-3 text-xs text-muted-foreground">
+                      {folderLogs.failed.length > 0 ? (
+                        <pre className="whitespace-pre-wrap font-mono">
+                          {folderLogs.failed.join("\n")}
+                        </pre>
+                      ) : (
+                        <p>실패 로그가 없습니다.</p>
+                      )}
+                    </div>
+                  </div>
+                  <Button
+                    variant="outline"
+                    onClick={() => copyFolderLogs(folderLogs.all)}
+                    disabled={folderLogs.all.length === 0}
+                    className="lg:col-span-2 w-fit"
+                  >
+                    <Copy />
+                    전체 로그 복사
+                  </Button>
+                </div>
               )}
 
               <div className="max-h-80 overflow-y-auto rounded-md border">

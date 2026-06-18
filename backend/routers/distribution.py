@@ -197,27 +197,60 @@ class FolderDistributionResponse(BaseModel):
     details: list[FolderDistributionDetail]
 
 
+class FolderAssignmentItem(BaseModel):
+    reviewer_name: str
+    group_no: int | None
+    folder_name: str
+
+
 class FolderAssignmentMapResponse(BaseModel):
-    assignment: dict[str, str]
+    assignment: dict[str, FolderAssignmentItem]
     assignment_count: int
     unassigned_building_count: int
 
 
-def _build_folder_distribution_assignment(db: Session) -> tuple[dict[str, str], int]:
-    """DB에 등록된 관리번호 -> 검토위원명 매핑을 만든다."""
+def _folder_name_for_reviewer(reviewer_name: str, group_no: int | None) -> str:
+    group_label = f"{group_no}조" if group_no is not None else "조미정"
+    return f"{group_label}-{reviewer_name}"
+
+
+def _build_folder_distribution_assignment(
+    db: Session,
+) -> tuple[dict[str, FolderAssignmentItem], int]:
+    """DB에 등록된 관리번호 -> 검토위원 분배 정보 매핑을 만든다."""
     buildings = (
         db.query(Building)
         .options(joinedload(Building.reviewer).joinedload(Reviewer.user))
         .all()
     )
-    assignment: dict[str, str] = {}
+    reviewers = (
+        db.query(Reviewer)
+        .options(joinedload(Reviewer.user))
+        .all()
+    )
+    group_by_name = {
+        r.user.name.strip(): r.group_no
+        for r in reviewers
+        if r.user and r.user.name and r.user.name.strip()
+    }
+    assignment: dict[str, FolderAssignmentItem] = {}
     unassigned = 0
     for building in buildings:
         reviewer_name = building.assigned_reviewer_name
+        group_no = None
         if not reviewer_name and building.reviewer and building.reviewer.user:
             reviewer_name = building.reviewer.user.name
+        if building.reviewer:
+            group_no = building.reviewer.group_no
         if building.mgmt_no and reviewer_name and reviewer_name.strip():
-            assignment[building.mgmt_no] = reviewer_name.strip()
+            reviewer_name = reviewer_name.strip()
+            if group_no is None:
+                group_no = group_by_name.get(reviewer_name)
+            assignment[building.mgmt_no] = FolderAssignmentItem(
+                reviewer_name=reviewer_name,
+                group_no=group_no,
+                folder_name=_folder_name_for_reviewer(reviewer_name, group_no),
+            )
         else:
             unassigned += 1
     return assignment, unassigned
@@ -298,12 +331,16 @@ def distribute_folders(
     ),
 ):
     """로컬 폴더 항목을 DB의 관리번호/검토위원 매핑으로 검토위원별 분배한다."""
-    assignment, unassigned = _build_folder_distribution_assignment(db)
-    if not assignment:
+    assignment_items, unassigned = _build_folder_distribution_assignment(db)
+    if not assignment_items:
         raise HTTPException(
             status_code=400,
             detail="DB에 검토위원이 배정된 관리번호가 없습니다",
         )
+    assignment = {
+        mgmt_no: item.folder_name
+        for mgmt_no, item in assignment_items.items()
+    }
 
     try:
         result = distribute_by_folder_name(

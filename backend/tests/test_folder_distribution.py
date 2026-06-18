@@ -12,7 +12,7 @@ def test_folder_distribution_preview_uses_db_assignments(
     client, db_session, make_user, make_reviewer, make_building, tmp_path
 ):
     headers = _admin_headers(make_user)
-    _, reviewer, _ = make_reviewer()
+    _, reviewer, _ = make_reviewer(group_no=3)
 
     b1 = make_building(mgmt_no="2026-0001")
     b1.assigned_reviewer_name = "김검토"
@@ -44,8 +44,8 @@ def test_folder_distribution_preview_uses_db_assignments(
     assert body["skipped"] == 1
     assert body["assignment_count"] == 2
     assert body["classified_mgmt_nos"] == ["2026-0001", "2026-0002"]
-    assert body["reviewer_counts"]["김검토"] == 1
-    assert body["reviewer_counts"]["검토위원1"] == 1
+    assert body["reviewer_counts"]["조미정-김검토"] == 1
+    assert body["reviewer_counts"]["3조-검토위원1"] == 1
     assert not target.exists()
     assert (source / "2026-0001_구조도서").exists()
 
@@ -54,7 +54,7 @@ def test_folder_assignment_map_returns_db_assignments(
     client, db_session, make_user, make_reviewer, make_building
 ):
     headers = _admin_headers(make_user)
-    _, reviewer, _ = make_reviewer()
+    _, reviewer, _ = make_reviewer(group_no=4)
 
     b1 = make_building(mgmt_no="2026-0003")
     b1.assigned_reviewer_name = "이검토"
@@ -68,8 +68,12 @@ def test_folder_assignment_map_returns_db_assignments(
     body = res.json()
     assert body["assignment_count"] == 2
     assert body["unassigned_building_count"] == 1
-    assert body["assignment"]["2026-0003"] == "이검토"
-    assert body["assignment"]["2026-0004"] == "검토위원1"
+    assert body["assignment"]["2026-0003"]["reviewer_name"] == "이검토"
+    assert body["assignment"]["2026-0003"]["group_no"] is None
+    assert body["assignment"]["2026-0003"]["folder_name"] == "조미정-이검토"
+    assert body["assignment"]["2026-0004"]["reviewer_name"] == "검토위원1"
+    assert body["assignment"]["2026-0004"]["group_no"] == 4
+    assert body["assignment"]["2026-0004"]["folder_name"] == "4조-검토위원1"
 
 
 def test_folder_distribution_execute_moves_items_by_reviewer(
@@ -105,4 +109,4 @@ def test_folder_distribution_execute_moves_items_by_reviewer(
     assert body["skipped"] == 0
     assert body["classified_mgmt_nos"] == ["2026-0101"]
     assert not item.exists()
-    assert (target / "박검토" / "2026-0101_예비검토도서" / "도면.pdf").exists()
+    assert (target / "조미정-박검토" / "2026-0101_예비검토도서" / "도면.pdf").exists()
