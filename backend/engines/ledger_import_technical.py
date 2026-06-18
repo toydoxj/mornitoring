@@ -6,18 +6,38 @@ Row 4: 상세 컬럼명
 Row 5~: 데이터
 """
 
+import re
 from pathlib import Path
 
 from openpyxl import load_workbook
 from sqlalchemy.orm import Session
 
 from models.building import Building
+from models.review_opinion_detail import ReviewOpinionDetail
+from models.review_severity_summary import ReviewSeveritySummary
 from models.review_stage import ReviewStage, PhaseType, ResultType
 from services.phase_transition import transition_phase
 from engines.column_mapping import col_letter_to_index
 
 DATA_START_ROW = 5
 SHEET_NAME = "관리대장"
+SEVERITY_LABELS = ("L0", "L1", "L2", "L3", "L4")
+PHASE_INDEX = {
+    None: -1,
+    "assigned": 0,
+    "doc_received": 1,
+    "preliminary": 2,
+    "supplement_1_received": 3,
+    "supplement_1": 4,
+    "supplement_2_received": 5,
+    "supplement_2": 6,
+    "supplement_3_received": 7,
+    "supplement_3": 8,
+    "supplement_4_received": 9,
+    "supplement_4": 10,
+    "supplement_5_received": 11,
+    "supplement_5": 12,
+}
 
 # 2026년 기술사회 배포용 관리대장 열 매핑 (Row 4 기준)
 BUILDING_COLUMN_MAP_TECHNICAL = {
@@ -49,12 +69,10 @@ BUILDING_COLUMN_MAP_TECHNICAL = {
 
 PRELIMINARY_MAP_TECHNICAL = {
     "AT": "reviewer_name",       # 검토자
-    "AU": "review_opinion",      # 1차검토의견(기술사회)
     "AV": "defect_type_1",       # 부적합유형-1
     "AW": "defect_type_2",       # 부적합유형-2
     "AX": "defect_type_3",       # 부적합유형-3
-    "AY": "result",              # 예비판정 결과
-    "AZ": "stage_remarks",       # 예비 검토의견
+    "AZ": "review_opinion",      # 예비 검토의견
 }
 
 SUPPLEMENT_1_MAP_TECHNICAL = {
@@ -69,6 +87,8 @@ SUPPLEMENT_1_MAP_TECHNICAL = {
 
 ASSIGNED_REVIEWER_COLUMNS = ("AT", "BG", "B")
 HIGH_RISK_COLUMN = "AR"
+PRELIMINARY_DECISION_COLUMN = "AU"
+PRELIMINARY_ADMIN_RESULT_COLUMN = "AY"
 
 
 def _cell_value(row: tuple, col_letter: str):
@@ -81,6 +101,12 @@ def _cell_value(row: tuple, col_letter: str):
         if val == "":
             return None
     return val
+
+
+def _text_cell_value(row: tuple, col_letter: str) -> str | None:
+    val = _cell_value(row, col_letter)
+    text = _clean_text(val)
+    return text or None
 
 
 def _to_float(val) -> float | None:
@@ -121,6 +147,19 @@ def _to_high_risk_type(val) -> str | None:
     return str(val).strip()
 
 
+def _clean_text(val) -> str:
+    if val is None:
+        return ""
+    text = str(val).strip()
+    text = re.sub(r"_?x000D_", "\n", text, flags=re.IGNORECASE)
+    text = text.replace("\r", "\n")
+    text = re.sub(r"\n\s*/\s*", "\n", text)
+    text = re.sub(r"[ \t]+\n", "\n", text)
+    text = re.sub(r"\n[ \t]+", "\n", text)
+    text = re.sub(r"\n{2,}", "\n", text)
+    return text.strip()
+
+
 def _parse_result(val) -> ResultType | None:
     if val is None:
         return None
@@ -136,6 +175,15 @@ def _parse_result(val) -> ResultType | None:
     return mapping.get(s)
 
 
+def _severity_for_ledger_result(result: ResultType | None) -> str | None:
+    """관리대장에는 세부 L값이 없으므로 판정의견 기준의 보수적 버킷을 사용한다."""
+    if result == ResultType.PASS:
+        return None
+    if result == ResultType.RECALCULATE:
+        return "L3"
+    return "L0"
+
+
 def _is_mgmt_no(value) -> bool:
     if value is None:
         return False
@@ -145,10 +193,112 @@ def _is_mgmt_no(value) -> bool:
 
 def _first_present(row: tuple, col_letters: tuple[str, ...]) -> str | None:
     for col_letter in col_letters:
-        value = _cell_value(row, col_letter)
+        value = _text_cell_value(row, col_letter)
         if value:
-            return str(value).strip()
+            return value
     return None
+
+
+def _split_numbered_opinions(body: str) -> list[str]:
+    body = body.strip()
+    if not body:
+        return []
+
+    parts = re.split(r"(?m)(?=^\s*\d+\s*[.)．]\s*)", body)
+    items = []
+    for part in parts:
+        item = re.sub(r"^\s*\d+\s*[.)．]\s*", "", part).strip()
+        if item:
+            items.append(re.sub(r"\s+", " ", item))
+    if items:
+        return items
+
+    return [
+        re.sub(r"\s+", " ", line).strip()
+        for line in body.splitlines()
+        if line.strip()
+    ]
+
+
+def _parse_ledger_opinion_entries(text: str) -> list[dict[str, str | int | None]]:
+    text = _clean_text(text)
+    if not text:
+        return []
+
+    matches = list(re.finditer(r"\[([^\]]+)\]", text))
+    if not matches:
+        return [
+            {"row": None, "category": "기타의견", "content": item}
+            for item in _split_numbered_opinions(text)
+        ]
+
+    entries: list[dict[str, str | int | None]] = []
+    for idx, match in enumerate(matches):
+        category = re.sub(r"\s+", " ", match.group(1)).strip()
+        start = match.end()
+        end = matches[idx + 1].start() if idx + 1 < len(matches) else len(text)
+        body = text[start:end].strip()
+        for item in _split_numbered_opinions(body):
+            entries.append({"row": None, "category": category, "content": item})
+    return entries
+
+
+def _apply_ledger_opinion_stats(
+    db: Session,
+    stage: ReviewStage,
+    *,
+    phase: PhaseType,
+    opinion_text: str | None,
+    result: ResultType | None,
+) -> None:
+    if stage.id is None:
+        db.add(stage)
+        db.flush()
+
+    db.query(ReviewSeveritySummary).filter(
+        ReviewSeveritySummary.stage_id == stage.id
+    ).delete(synchronize_session="fetch")
+    db.query(ReviewOpinionDetail).filter(
+        ReviewOpinionDetail.stage_id == stage.id
+    ).delete(synchronize_session="fetch")
+
+    for label in SEVERITY_LABELS:
+        setattr(stage, f"severity_{label.lower()}_count", 0)
+
+    severity = _severity_for_ledger_result(result)
+    entries = _parse_ledger_opinion_entries(opinion_text or "")
+    if severity is None or not entries:
+        return
+
+    counts_by_category: dict[str, int] = {}
+    phase_value = phase.value if hasattr(phase, "value") else str(phase)
+    phase_group = "preliminary" if phase == PhaseType.PRELIMINARY else "supplement"
+
+    for index, entry in enumerate(entries, start=1):
+        category = str(entry.get("category") or "").strip()
+        content = str(entry.get("content") or "").strip()
+        if not category or not content:
+            continue
+        counts_by_category[category] = counts_by_category.get(category, 0) + 1
+        db.add(ReviewOpinionDetail(
+            stage_id=stage.id,
+            phase=phase_value,
+            phase_group=phase_group,
+            row_number=index,
+            category=category,
+            severity=severity,
+            content=content,
+        ))
+
+    for category, count in counts_by_category.items():
+        db.add(ReviewSeveritySummary(
+            stage_id=stage.id,
+            category=category,
+            severity=severity,
+            count=count,
+        ))
+
+    setattr(stage, f"severity_{severity.lower()}_count", sum(counts_by_category.values()))
 
 
 def _find_sheet(wb) -> str | None:
@@ -158,6 +308,44 @@ def _find_sheet(wb) -> str | None:
         if "관리대장" in sheet_name:
             return sheet_name
     return None
+
+
+def _find_stage(building: Building, phase: PhaseType) -> ReviewStage | None:
+    for stage in building.stages:
+        if stage.phase == phase:
+            return stage
+    return None
+
+
+def _apply_building_data(building: Building, building_data: dict) -> None:
+    for field_name, value in building_data.items():
+        setattr(building, field_name, value)
+
+
+def _apply_stage_data(stage: ReviewStage, stage_data: dict) -> None:
+    for field_name, value in stage_data.items():
+        setattr(stage, field_name, value)
+
+
+def _transition_import_forward(
+    db: Session,
+    building: Building,
+    *,
+    to_phase: str,
+    actor_user_id: int | None,
+) -> None:
+    current_rank = PHASE_INDEX.get(building.current_phase, -1)
+    target_rank = PHASE_INDEX.get(to_phase, -1)
+    if target_rank <= current_rank:
+        return
+    transition_phase(
+        db,
+        building,
+        to_phase=to_phase,
+        trigger="import",
+        actor_user_id=actor_user_id,
+        reason="ledger_import_technical",
+    )
 
 
 def import_ledger_technical(
@@ -171,7 +359,7 @@ def import_ledger_technical(
 
     if matched_sheet is None:
         wb.close()
-        return {"imported": 0, "skipped": 0, "errors": ["관리대장 시트를 찾을 수 없습니다"]}
+        return {"imported": 0, "updated": 0, "skipped": 0, "errors": ["관리대장 시트를 찾을 수 없습니다"]}
 
     ws = wb[matched_sheet]
     rows_parsed = []
@@ -183,32 +371,28 @@ def import_ledger_technical(
     wb.close()
 
     if not rows_parsed:
-        return {"imported": 0, "skipped": 0, "errors": [], "sheet": matched_sheet}
+        return {"imported": 0, "updated": 0, "skipped": 0, "errors": [], "sheet": matched_sheet}
 
     all_mgmt_nos = [mgmt_no for mgmt_no, _ in rows_parsed]
-    existing_set: set[str] = set()
+    existing_map: dict[str, Building] = {}
     for i in range(0, len(all_mgmt_nos), 1000):
         chunk = all_mgmt_nos[i:i + 1000]
-        existing = db.query(Building.mgmt_no).filter(Building.mgmt_no.in_(chunk)).all()
-        existing_set.update(r[0] for r in existing)
+        existing = db.query(Building).filter(Building.mgmt_no.in_(chunk)).all()
+        existing_map.update((building.mgmt_no, building) for building in existing)
 
-    result = {"imported": 0, "skipped": 0, "errors": [], "sheet": matched_sheet}
+    result = {"imported": 0, "updated": 0, "skipped": 0, "errors": [], "sheet": matched_sheet}
     batch_count = 0
 
     for mgmt_no, row in rows_parsed:
-        if mgmt_no in existing_set:
-            result["skipped"] += 1
-            continue
-
         building_data = {}
         for col_letter, field_name in BUILDING_COLUMN_MAP_TECHNICAL.items():
-            val = _cell_value(row, col_letter)
+            val = _text_cell_value(row, col_letter)
             if field_name in ("gross_area", "height"):
-                val = _to_float(val)
+                val = _to_float(_cell_value(row, col_letter))
             elif field_name in ("floors_above", "floors_below"):
-                val = _to_int(val)
+                val = _to_int(_cell_value(row, col_letter))
             elif field_name in ("is_special_structure", "is_high_rise", "is_multi_use"):
-                val = _to_bool(val)
+                val = _to_bool(_cell_value(row, col_letter))
             building_data[field_name] = val
 
         assigned_reviewer_name = _first_present(row, ASSIGNED_REVIEWER_COLUMNS)
@@ -216,65 +400,99 @@ def import_ledger_technical(
             building_data["assigned_reviewer_name"] = assigned_reviewer_name
 
         high_risk_type = _to_high_risk_type(_cell_value(row, HIGH_RISK_COLUMN))
-        if high_risk_type:
-            building_data["high_risk_type"] = high_risk_type
+        building_data["high_risk_type"] = high_risk_type
 
-        building = Building(**building_data)
-        db.add(building)
-        db.flush()
-        existing_set.add(mgmt_no)
+        building = existing_map.get(mgmt_no)
+        is_new = building is None
+        if building is None:
+            building = Building(**building_data)
+            db.add(building)
+            db.flush()
+            existing_map[mgmt_no] = building
+        else:
+            _apply_building_data(building, building_data)
 
         prelim_data = {}
         for col_letter, field_name in PRELIMINARY_MAP_TECHNICAL.items():
-            val = _cell_value(row, col_letter)
-            if field_name == "result":
-                val = _parse_result(val)
+            val = _text_cell_value(row, col_letter)
             prelim_data[field_name] = val
 
+        preliminary_decision = _text_cell_value(row, PRELIMINARY_DECISION_COLUMN)
+        preliminary_admin_result = _text_cell_value(row, PRELIMINARY_ADMIN_RESULT_COLUMN)
+        prelim_result = _parse_result(preliminary_decision) or _parse_result(preliminary_admin_result)
+        prelim_data["result"] = prelim_result
+        remarks = []
+        if preliminary_decision:
+            remarks.append(f"판정의견: {preliminary_decision}")
+        if preliminary_admin_result:
+            remarks.append(f"관리원 입력 예비판정 결과: {preliminary_admin_result}")
+        prelim_data["stage_remarks"] = "\n".join(remarks) if remarks else None
+
         if any(v is not None for v in prelim_data.values()):
-            db.add(
-                ReviewStage(
+            stage = _find_stage(building, PhaseType.PRELIMINARY)
+            if stage is None:
+                stage = ReviewStage(
                     building_id=building.id,
                     phase=PhaseType.PRELIMINARY,
                     phase_order=0,
                     **prelim_data,
                 )
+                db.add(stage)
+            else:
+                _apply_stage_data(stage, prelim_data)
+            db.flush()
+            _apply_ledger_opinion_stats(
+                db,
+                stage,
+                phase=PhaseType.PRELIMINARY,
+                opinion_text=prelim_data.get("review_opinion"),
+                result=prelim_result,
             )
-            transition_phase(
+            _transition_import_forward(
                 db,
                 building,
                 to_phase="preliminary",
-                trigger="import",
                 actor_user_id=actor_user_id,
-                reason="ledger_import_technical",
             )
 
         supp1_data = {}
         for col_letter, field_name in SUPPLEMENT_1_MAP_TECHNICAL.items():
-            val = _cell_value(row, col_letter)
+            val = _text_cell_value(row, col_letter)
             if field_name == "result":
-                val = _parse_result(val)
+                val = _parse_result(_cell_value(row, col_letter))
             supp1_data[field_name] = val
 
         if any(v is not None for v in supp1_data.values()):
-            db.add(
-                ReviewStage(
+            stage = _find_stage(building, PhaseType.SUPPLEMENT_1)
+            if stage is None:
+                stage = ReviewStage(
                     building_id=building.id,
                     phase=PhaseType.SUPPLEMENT_1,
                     phase_order=1,
                     **supp1_data,
                 )
+                db.add(stage)
+            else:
+                _apply_stage_data(stage, supp1_data)
+            db.flush()
+            _apply_ledger_opinion_stats(
+                db,
+                stage,
+                phase=PhaseType.SUPPLEMENT_1,
+                opinion_text=supp1_data.get("review_opinion"),
+                result=supp1_data.get("result"),
             )
-            transition_phase(
+            _transition_import_forward(
                 db,
                 building,
                 to_phase="supplement_1",
-                trigger="import",
                 actor_user_id=actor_user_id,
-                reason="ledger_import_technical",
             )
 
-        result["imported"] += 1
+        if is_new:
+            result["imported"] += 1
+        else:
+            result["updated"] += 1
         batch_count += 1
 
         if batch_count % 500 == 0:

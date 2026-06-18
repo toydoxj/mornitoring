@@ -975,6 +975,8 @@ def list_buildings(
     검토위원(REVIEWER)은 본인이 배정된 건물만 조회 가능. `?reviewer=` 파라미터는
     REVIEWER가 보내도 무시되어 다른 위원 데이터에 접근할 수 없다.
     """
+    from models.review_stage import ReviewStage
+
     query = db.query(Building)
 
     # 가시성 필터: REVIEWER → 본인 reviewer_id, SECRETARY(조 배정) → 같은 조 검토위원,
@@ -1018,7 +1020,30 @@ def list_buildings(
         .all()
     )
     registered_names = _get_registered_names(db)
-    items = [_to_response(b, registered_names) for b in buildings]
+    building_ids = [building.id for building in buildings]
+    latest_by_building: dict[int, ReviewStage] = {}
+    if building_ids:
+        latest_stages = (
+            db.query(ReviewStage)
+            .filter(
+                ReviewStage.building_id.in_(building_ids),
+                ReviewStage.result.isnot(None),
+            )
+            .order_by(ReviewStage.building_id, ReviewStage.phase_order.desc())
+            .all()
+        )
+        for stage in latest_stages:
+            if stage.building_id not in latest_by_building:
+                latest_by_building[stage.building_id] = stage
+
+    items = []
+    for building in buildings:
+        item = _to_response(building, registered_names)
+        latest_stage = latest_by_building.get(building.id)
+        if latest_stage and latest_stage.result:
+            item["latest_result"] = latest_stage.result.value
+            item["latest_inappropriate"] = bool(latest_stage.inappropriate_review_needed)
+        items.append(item)
     return BuildingListResponse(items=items, total=total)
 
 

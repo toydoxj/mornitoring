@@ -49,6 +49,7 @@ const SUBMITTED_PHASES = new Set([
 
 type LedgerUploadResult = {
   imported: number
+  updated?: number
   skipped: number
   errors?: string[]
   error?: string
@@ -447,6 +448,18 @@ export default function BuildingsPage() {
         },
       },
       {
+        accessorKey: "latest_result",
+        header: "최근판정",
+        size: 90,
+        cell: ({ getValue }) => {
+          const v = getValue<string>()
+          if (!v) return "-"
+          const variant = RESULT_VARIANT[v] || "outline"
+          const label = RESULT_LABELS[v as ResultType] || v
+          return <Badge variant={variant}>{label}</Badge>
+        },
+      },
+      {
         accessorKey: "final_result",
         header: "최종완료",
         size: 90,
@@ -531,8 +544,8 @@ export default function BuildingsPage() {
                 </DialogHeader>
                 <div className="space-y-4">
                   <p className="text-sm text-muted-foreground">
-                    통합관리대장 엑셀 파일(.xlsx)을 선택하여 데이터를 일괄 등록합니다.
-                    이미 등록된 관리번호는 건너뜁니다.
+                    통합관리대장 엑셀 파일(.xlsx)을 선택하여 데이터를 일괄 등록/갱신합니다.
+                    이미 등록된 관리번호는 최신 엑셀 내용으로 갱신됩니다.
                   </p>
                   <Input
                     type="file"
@@ -546,6 +559,7 @@ export default function BuildingsPage() {
                   {uploadResult && (
                     <div className="rounded-md bg-muted p-3 text-sm">
                       <p>신규 등록: <strong>{uploadResult.imported}건</strong></p>
+                      <p>기존 갱신: <strong>{uploadResult.updated ?? 0}건</strong></p>
                       <p>중복 스킵: {uploadResult.skipped}건</p>
                       {uploadResult.error && (
                         <p className="mt-2 text-destructive">{uploadResult.error}</p>

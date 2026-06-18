@@ -70,6 +70,35 @@ def test_chief_secretary_sees_all_buildings(
     assert {"VIS-G1", "VIS-G2"}.issubset(set(mgmt_nos))
 
 
+def test_building_list_returns_latest_result(
+    client, db_session, make_user, make_building
+):
+    _, headers = make_user(UserRole.CHIEF_SECRETARY)
+    building = make_building(mgmt_no="LATEST-RESULT-001")
+    db_session.add_all([
+        ReviewStage(
+            building_id=building.id,
+            phase=PhaseType.PRELIMINARY,
+            phase_order=0,
+            result=ResultType.SIMPLE_ERROR,
+        ),
+        ReviewStage(
+            building_id=building.id,
+            phase=PhaseType.SUPPLEMENT_1,
+            phase_order=1,
+            result=ResultType.RECALCULATE,
+        ),
+    ])
+    db_session.commit()
+
+    res = client.get("/api/buildings", headers=headers)
+    assert res.status_code == 200
+    item = next(
+        b for b in res.json()["items"] if b["mgmt_no"] == "LATEST-RESULT-001"
+    )
+    assert item["latest_result"] == "recalculate"
+
+
 def test_secretary_other_group_building_get_returns_404(
     client, db_session, make_user, make_reviewer, make_building
 ):
