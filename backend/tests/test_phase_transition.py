@@ -357,6 +357,22 @@ def test_transition_phase_import_rejects_backward(db_session, make_building):
     assert b.current_phase == "supplement_1"
 
 
+def test_transition_phase_import_keeps_completed(db_session, make_building):
+    """최종완료 건은 관리대장 재업로드 시 데이터만 갱신하고 단계는 유지."""
+    b = make_building(mgmt_no="PT-IMP-COMPLETE")
+    b.current_phase = "completed"
+    b.final_result = "pass"
+    db_session.commit()
+
+    log = transition_phase(db_session, b, to_phase="preliminary", trigger="import")
+    db_session.commit()
+
+    assert log is None
+    assert b.current_phase == "completed"
+    assert b.final_result == "pass"
+    assert db_session.query(PhaseTransitionLog).filter_by(mgmt_no=b.mgmt_no).count() == 0
+
+
 def test_transition_phase_import_rejects_unknown_phase(db_session, make_building):
     """알 수 없는 단계 문자열로의 import 는 거부 (엑셀 오염 방어)."""
     b = make_building(mgmt_no="PT-IMP-UNKNOWN")

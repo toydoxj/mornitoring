@@ -198,6 +198,7 @@ def transition_phase(
     """`building.current_phase` 를 `to_phase` 로 전환하고 로그를 add 한다.
 
     - to_phase 가 None 이거나 building.current_phase 와 같으면 no-op (로그 미생성).
+    - import 트리거에서 이미 completed 인 건은 엑셀 데이터만 갱신하고 phase 는 유지한다.
     - 매트릭스 위반 시 InvalidPhaseTransition raise (호출자가 400/500 매핑).
     - commit 은 호출자 책임 (배치 호출에서 트랜잭션을 묶기 위함).
     """
@@ -205,6 +206,8 @@ def transition_phase(
         return None
     from_phase = building.current_phase
     if from_phase == to_phase:
+        return None
+    if trigger == "import" and from_phase == "completed":
         return None
 
     _validate_transition(trigger, from_phase, to_phase)
