@@ -1008,17 +1008,66 @@ def list_buildings(
 
     total = query.count()
 
-    # 정렬
-    sort_col = getattr(Building, sort_by, None) if sort_by else Building.mgmt_no
-    if sort_col is None:
-        sort_col = Building.mgmt_no
-    if sort_order == "desc":
-        sort_col = sort_col.desc()
+    # 정렬: 통합관리대장 헤더 클릭에서 사용하는 조합 컬럼도 서버에서 정렬한다.
+    sort_key = sort_by or "mgmt_no"
+    sort_desc = sort_order == "desc"
+    if sort_key == "latest_result":
+        latest_phase_subq = (
+            db.query(
+                ReviewStage.building_id.label("building_id"),
+                func.max(ReviewStage.phase_order).label("latest_phase_order"),
+            )
+            .filter(ReviewStage.result.isnot(None))
+            .group_by(ReviewStage.building_id)
+            .subquery()
+        )
+        latest_result_subq = (
+            db.query(
+                ReviewStage.building_id.label("building_id"),
+                ReviewStage.result.label("latest_result"),
+            )
+            .join(
+                latest_phase_subq,
+                (latest_phase_subq.c.building_id == ReviewStage.building_id)
+                & (latest_phase_subq.c.latest_phase_order == ReviewStage.phase_order),
+            )
+            .subquery()
+        )
+        query = query.outerjoin(
+            latest_result_subq,
+            latest_result_subq.c.building_id == Building.id,
+        )
+        order_cols = [latest_result_subq.c.latest_result]
+    else:
+        sort_map = {
+            "mgmt_no": [Building.mgmt_no],
+            "assigned_reviewer_name": [Building.assigned_reviewer_name],
+            "reviewer_name": [Building.assigned_reviewer_name],
+            "address": [
+                Building.sido,
+                Building.sigungu,
+                Building.beopjeongdong,
+                Building.main_lot_no,
+                Building.sub_lot_no,
+            ],
+            "building_name": [Building.building_name],
+            "main_structure": [Building.main_structure],
+            "high_risk_type": [Building.high_risk_type],
+            "current_phase": [Building.current_phase],
+            "final_result": [Building.final_result],
+        }
+        order_cols = sort_map.get(sort_key, [Building.mgmt_no])
+    order_by = [
+        col.desc() if sort_desc else col.asc()
+        for col in order_cols
+    ]
+    if sort_key != "mgmt_no":
+        order_by.append(Building.mgmt_no.asc())
 
     # N+1 제거: building.reviewer.user를 한 번에 eager load
     buildings = (
         query.options(selectinload(Building.reviewer).selectinload(Reviewer.user))
-        .order_by(sort_col)
+        .order_by(*order_by)
         .offset((page - 1) * size)
         .limit(size)
         .all()

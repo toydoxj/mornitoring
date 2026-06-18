@@ -1,8 +1,8 @@
 "use client"
 
 import { useCallback, useEffect, useState, useMemo } from "react"
-import { useRouter } from "next/navigation"
-import { FileSpreadsheet, Upload, X } from "lucide-react"
+import { useRouter, useSearchParams } from "next/navigation"
+import { ArrowDown, ArrowUp, ArrowUpDown, FileSpreadsheet, Upload, X } from "lucide-react"
 import {
   useReactTable,
   getCoreRowModel,
@@ -72,18 +72,56 @@ type ReviewUploadResult = {
   changes: FieldChange[]
 }
 
+type SortOrder = "asc" | "desc"
+
+const SORTABLE_FIELDS = new Set([
+  "mgmt_no",
+  "assigned_reviewer_name",
+  "address",
+  "building_name",
+  "main_structure",
+  "high_risk_type",
+  "current_phase",
+  "latest_result",
+  "final_result",
+])
+
+function parsePositivePage(value: string | null) {
+  const parsed = Number(value)
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 1
+}
+
+function parseSortOrder(value: string | null): SortOrder {
+  return value === "desc" ? "desc" : "asc"
+}
+
+function parseSortValue(value: string) {
+  if (!value) return { field: "", order: "asc" as SortOrder }
+  const separatorIndex = value.lastIndexOf("_")
+  if (separatorIndex <= 0) return { field: "", order: "asc" as SortOrder }
+  const field = value.slice(0, separatorIndex)
+  const order = parseSortOrder(value.slice(separatorIndex + 1))
+  return { field, order }
+}
+
 export default function BuildingsPage() {
   const router = useRouter()
+  const searchParams = useSearchParams()
   const user = useAuthStore((s) => s.user)
   const [data, setData] = useState<Building[]>([])
   const [total, setTotal] = useState(0)
-  const [page, setPage] = useState(1)
-  const [search, setSearch] = useState("")
-  const [searchInput, setSearchInput] = useState("")
-  const [filterPhase, setFilterPhase] = useState("")
-  const [filterReviewer, setFilterReviewer] = useState("")
-  const [sortBy, setSortBy] = useState("")
-  const [sortOrder, setSortOrder] = useState("asc")
+  const [page, setPage] = useState(() => parsePositivePage(searchParams.get("page")))
+  const [search, setSearch] = useState(() => searchParams.get("search") ?? "")
+  const [searchInput, setSearchInput] = useState(() => searchParams.get("search") ?? "")
+  const [filterPhase, setFilterPhase] = useState(() => searchParams.get("phase") ?? "")
+  const [filterReviewer, setFilterReviewer] = useState(() => searchParams.get("reviewer") ?? "")
+  const [sortBy, setSortBy] = useState(() => {
+    const value = searchParams.get("sort_by") ?? ""
+    return SORTABLE_FIELDS.has(value) ? value : ""
+  })
+  const [sortOrder, setSortOrder] = useState<SortOrder>(() =>
+    parseSortOrder(searchParams.get("sort_order"))
+  )
   const [reviewerNames, setReviewerNames] = useState<string[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [uploadOpen, setUploadOpen] = useState(false)
@@ -112,6 +150,25 @@ export default function BuildingsPage() {
   // 통합관리대장 업로드는 총괄간사에게만 허용
   const canUploadLedger = user?.role === "chief_secretary"
   const canProxyReviewUpload = user?.role === "chief_secretary"
+
+  const listQueryString = useMemo(() => {
+    const params = new URLSearchParams()
+    if (page > 1) params.set("page", String(page))
+    if (search) params.set("search", search)
+    if (filterPhase) params.set("phase", filterPhase)
+    if (filterReviewer) params.set("reviewer", filterReviewer)
+    if (sortBy) {
+      params.set("sort_by", sortBy)
+      params.set("sort_order", sortOrder)
+    }
+    return params.toString()
+  }, [filterPhase, filterReviewer, page, search, sortBy, sortOrder])
+
+  const currentListPath = listQueryString ? `/buildings?${listQueryString}` : "/buildings"
+
+  useEffect(() => {
+    router.replace(currentListPath, { scroll: false })
+  }, [currentListPath, router])
 
   const handleExport = async () => {
     try {
@@ -378,14 +435,42 @@ export default function BuildingsPage() {
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault()
     setPage(1)
-    setSearch(searchInput)
+    setSearch(searchInput.trim())
   }
+
+  const handleSort = useCallback((field: string) => {
+    setPage(1)
+    setSortBy((current) => {
+      if (current === field) {
+        setSortOrder((order) => (order === "asc" ? "desc" : "asc"))
+        return current
+      }
+      setSortOrder("asc")
+      return field
+    })
+  }, [])
+
+  const renderSortableHeader = useCallback((field: string, label: string) => {
+    const active = sortBy === field
+    const Icon = active ? (sortOrder === "asc" ? ArrowUp : ArrowDown) : ArrowUpDown
+    return (
+      <button
+        type="button"
+        className="inline-flex h-8 items-center gap-1 text-left font-medium hover:text-foreground"
+        onClick={() => handleSort(field)}
+        aria-label={`${label} 정렬`}
+      >
+        <span>{label}</span>
+        <Icon className={`h-3.5 w-3.5 ${active ? "text-foreground" : "text-muted-foreground"}`} />
+      </button>
+    )
+  }, [handleSort, sortBy, sortOrder])
 
   const columns = useMemo<ColumnDef<Building>[]>(
     () => [
       {
         accessorKey: "mgmt_no",
-        header: "관리번호",
+        header: () => renderSortableHeader("mgmt_no", "관리번호"),
         size: 120,
         cell: ({ getValue }) => (
           <span className="font-mono font-medium">{getValue<string>()}</span>
@@ -393,7 +478,7 @@ export default function BuildingsPage() {
       },
       {
         accessorKey: "reviewer_name",
-        header: "검토자",
+        header: () => renderSortableHeader("assigned_reviewer_name", "검토자"),
         size: 80,
         cell: ({ row }) => {
           const name = row.original.reviewer_name
@@ -406,7 +491,7 @@ export default function BuildingsPage() {
       },
       {
         id: "address",
-        header: "주소",
+        header: () => renderSortableHeader("address", "주소"),
         size: 350,
         cell: ({ row }) => {
           const b = row.original
@@ -422,25 +507,25 @@ export default function BuildingsPage() {
       },
       {
         accessorKey: "building_name",
-        header: "건물명",
+        header: () => renderSortableHeader("building_name", "건물명"),
         size: 200,
         cell: ({ getValue }) => getValue<string>() || "-",
       },
       {
         accessorKey: "main_structure",
-        header: "주구조",
+        header: () => renderSortableHeader("main_structure", "주구조"),
         size: 120,
         cell: ({ getValue }) => getValue<string>() || "-",
       },
       {
         accessorKey: "high_risk_type",
-        header: "고위험유형",
+        header: () => renderSortableHeader("high_risk_type", "고위험유형"),
         size: 100,
         cell: ({ getValue }) => getValue<string>() || "-",
       },
       {
         accessorKey: "current_phase",
-        header: "현재 단계",
+        header: () => renderSortableHeader("current_phase", "현재 단계"),
         size: 100,
         cell: ({ getValue }) => {
           const v = getValue<string>()
@@ -450,7 +535,7 @@ export default function BuildingsPage() {
       },
       {
         accessorKey: "latest_result",
-        header: "최근판정",
+        header: () => renderSortableHeader("latest_result", "최근판정"),
         size: 90,
         cell: ({ getValue }) => {
           const v = getValue<string>()
@@ -462,7 +547,7 @@ export default function BuildingsPage() {
       },
       {
         accessorKey: "final_result",
-        header: "최종완료",
+        header: () => renderSortableHeader("final_result", "최종완료"),
         size: 90,
         cell: ({ getValue }) => {
           const v = getValue<string>()
@@ -495,7 +580,7 @@ export default function BuildingsPage() {
           ]
         : []),
     ],
-    [canProxyReviewUpload, openReviewUpload]
+    [canProxyReviewUpload, openReviewUpload, renderSortableHeader]
   )
 
   const table = useReactTable({
@@ -612,13 +697,9 @@ export default function BuildingsPage() {
           className="rounded-md border px-3 py-2 text-sm"
           value={sortBy ? `${sortBy}_${sortOrder}` : ""}
           onChange={(e) => {
-            const val = e.target.value
-            if (!val) { setSortBy(""); setSortOrder("asc") }
-            else {
-              const [field, order] = val.split("_")
-              setSortBy(field)
-              setSortOrder(order)
-            }
+            const { field, order } = parseSortValue(e.target.value)
+            setSortBy(field)
+            setSortOrder(order)
             setPage(1)
           }}
         >
@@ -627,8 +708,16 @@ export default function BuildingsPage() {
           <option value="mgmt_no_desc">관리번호 ↓</option>
           <option value="assigned_reviewer_name_asc">검토위원 ↑</option>
           <option value="assigned_reviewer_name_desc">검토위원 ↓</option>
+          <option value="address_asc">주소 ↑</option>
+          <option value="address_desc">주소 ↓</option>
+          <option value="building_name_asc">건물명 ↑</option>
+          <option value="building_name_desc">건물명 ↓</option>
           <option value="current_phase_asc">현재단계 ↑</option>
           <option value="current_phase_desc">현재단계 ↓</option>
+          <option value="latest_result_asc">최근판정 ↑</option>
+          <option value="latest_result_desc">최근판정 ↓</option>
+          <option value="final_result_asc">최종완료 ↑</option>
+          <option value="final_result_desc">최종완료 ↓</option>
         </select>
 
         {(filterPhase || filterReviewer || sortBy) && (
@@ -674,7 +763,11 @@ export default function BuildingsPage() {
                 <TableRow
                   key={row.id}
                   className="cursor-pointer hover:bg-muted/50"
-                  onClick={() => router.push(`/buildings/${row.original.id}`)}
+                  onClick={() =>
+                    router.push(
+                      `/buildings/${row.original.id}?returnTo=${encodeURIComponent(currentListPath)}`
+                    )
+                  }
                 >
                   {row.getVisibleCells().map((cell) => (
                     <TableCell key={cell.id}>

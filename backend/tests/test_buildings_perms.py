@@ -55,6 +55,57 @@ def test_secretary_can_access_stats(client, make_user):
     assert res.status_code == 200
 
 
+def test_building_list_supports_header_sort_fields(
+    client, db_session, make_user, make_building
+):
+    _, headers = make_user(UserRole.CHIEF_SECRETARY)
+    b1 = make_building(mgmt_no="HEADER-SORT-001")
+    b2 = make_building(mgmt_no="HEADER-SORT-002")
+    b1.sido = "서울특별시"
+    b1.sigungu = "강남구"
+    b1.beopjeongdong = "대치동"
+    b2.sido = "강원특별자치도"
+    b2.sigungu = "춘천시"
+    b2.beopjeongdong = "퇴계동"
+    db_session.add_all([
+        ReviewStage(
+            building_id=b1.id,
+            phase=PhaseType.PRELIMINARY,
+            phase_order=0,
+            result=ResultType.PASS,
+        ),
+        ReviewStage(
+            building_id=b2.id,
+            phase=PhaseType.SUPPLEMENT_1,
+            phase_order=1,
+            result=ResultType.RECALCULATE,
+        ),
+    ])
+    db_session.commit()
+
+    address_res = client.get(
+        "/api/buildings",
+        headers=headers,
+        params={"sort_by": "address", "sort_order": "asc"},
+    )
+    assert address_res.status_code == 200
+    assert [item["mgmt_no"] for item in address_res.json()["items"][:2]] == [
+        "HEADER-SORT-002",
+        "HEADER-SORT-001",
+    ]
+
+    latest_res = client.get(
+        "/api/buildings",
+        headers=headers,
+        params={"sort_by": "latest_result", "sort_order": "desc"},
+    )
+    assert latest_res.status_code == 200
+    assert [item["mgmt_no"] for item in latest_res.json()["items"][:2]] == [
+        "HEADER-SORT-002",
+        "HEADER-SORT-001",
+    ]
+
+
 def test_chief_secretary_can_finalize_preliminary_pass(
     client, db_session, make_user, make_building
 ):

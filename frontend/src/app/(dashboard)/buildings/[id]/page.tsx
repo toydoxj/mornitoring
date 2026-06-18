@@ -40,11 +40,17 @@ export default function BuildingDetailPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const from = searchParams.get("from")
+  const returnTo = searchParams.get("returnTo")
   const editPhaseParam = searchParams.get("editPhase") === "1"
   const user = useAuthStore((s) => s.user)
+  const safeReturnTo =
+    returnTo && returnTo.startsWith("/buildings") && !returnTo.startsWith("//")
+      ? returnTo
+      : null
   const defaultBackPath = user?.role === "reviewer" ? "/my-reviews" : "/buildings"
   const defaultBackLabel = user?.role === "reviewer" ? "← 내 검토 대상" : "← 목록으로"
   const backPath =
+    safeReturnTo ? safeReturnTo :
     from === "my-reviews" ? "/my-reviews" :
     from === "inquiries" ? "/inquiries" :
     defaultBackPath
@@ -108,13 +114,13 @@ export default function BuildingDetailPage() {
           setInquiries(inqData)
         } catch { /* 문의 없음 */ }
       } catch {
-        router.push("/buildings")
+        router.push(safeReturnTo ?? "/buildings")
       } finally {
         setIsLoading(false)
       }
     }
     fetchData()
-  }, [params.id, router])
+  }, [params.id, router, safeReturnTo])
 
   // 문의사항 등에서 `?editPhase=1` 로 진입하면 로딩 완료 후 단계 변경 다이얼로그 자동 오픈.
   // building 갱신(저장) 시 재오픈되지 않도록 1회성 ref 가드를 쓴다.
