@@ -2,17 +2,20 @@
 
 import logging
 from datetime import date, timedelta
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from database import get_db
+from engines.folder_distribution import distribute_by_folder_name
 from models.building import Building
 from models.inappropriate_note import InappropriateNote
 from models.review_opinion_detail import ReviewOpinionDetail
 from models.review_severity_summary import ReviewSeveritySummary
 from models.review_stage import ReviewStage, PhaseType
+from models.reviewer import Reviewer
 from models.user import User, UserRole
 from routers.auth import require_roles
 from services.audit import log_action
@@ -163,6 +166,57 @@ class DocReceiveResponse(BaseModel):
     notifications: list[dict]
 
 
+class FolderDistributionRequest(BaseModel):
+    source_dir: str
+    target_dir: str
+    dry_run: bool = True
+    operation: Literal["move", "copy"] = "move"
+    overwrite: bool = False
+
+
+class FolderDistributionDetail(BaseModel):
+    status: str
+    item_name: str
+    mgmt_no: str | None
+    reviewer_name: str | None
+    reviewer_dir_name: str | None
+    destination: str | None
+    reason: str | None
+
+
+class FolderDistributionResponse(BaseModel):
+    classified: int
+    skipped: int
+    dry_run: bool
+    operation: str
+    overwrite: bool
+    assignment_count: int
+    unassigned_building_count: int
+    classified_mgmt_nos: list[str]
+    reviewer_counts: dict[str, int]
+    details: list[FolderDistributionDetail]
+
+
+def _build_folder_distribution_assignment(db: Session) -> tuple[dict[str, str], int]:
+    """DB에 등록된 관리번호 -> 검토위원명 매핑을 만든다."""
+    buildings = (
+        db.query(Building)
+        .options(joinedload(Building.reviewer).joinedload(Reviewer.user))
+        .all()
+    )
+    assignment: dict[str, str] = {}
+    unassigned = 0
+    for building in buildings:
+        reviewer_name = building.assigned_reviewer_name
+        if not reviewer_name and building.reviewer and building.reviewer.user:
+            reviewer_name = building.reviewer.user.name
+        if building.mgmt_no and reviewer_name and reviewer_name.strip():
+            assignment[building.mgmt_no] = reviewer_name.strip()
+        else:
+            unassigned += 1
+    return assignment, unassigned
+
+
 # 도서 접수 시 다음 단계를 결정:
 #   key = 현재 current_phase
 #   value = 접수 대상 stage phase (review_stages.phase)
@@ -211,6 +265,46 @@ _ROUND_KOREAN: dict[str, str] = {
     "supplement_4": "4차 보완",
     "supplement_5": "5차 보완",
 }
+
+
+@router.post("/folder-distribution", response_model=FolderDistributionResponse)
+def distribute_folders(
+    body: FolderDistributionRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(
+        require_roles(UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY)
+    ),
+):
+    """로컬 폴더 항목을 DB의 관리번호/검토위원 매핑으로 검토위원별 분배한다."""
+    assignment, unassigned = _build_folder_distribution_assignment(db)
+    if not assignment:
+        raise HTTPException(
+            status_code=400,
+            detail="DB에 검토위원이 배정된 관리번호가 없습니다",
+        )
+
+    try:
+        result = distribute_by_folder_name(
+            body.source_dir,
+            body.target_dir,
+            assignment,
+            dry_run=body.dry_run,
+            operation=body.operation,
+            overwrite=body.overwrite,
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except NotADirectoryError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=f"폴더 접근 권한이 없습니다: {exc}") from exc
+    except OSError as exc:
+        raise HTTPException(status_code=400, detail=f"폴더 처리 중 오류가 발생했습니다: {exc}") from exc
+
+    result["unassigned_building_count"] = unassigned
+    return result
 
 
 @router.post("/receive", response_model=DocReceiveResponse)

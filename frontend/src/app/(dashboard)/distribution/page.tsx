@@ -1,6 +1,7 @@
 "use client"
 
 import { useState } from "react"
+import { ClipboardList, Copy, FolderInput, FolderOutput, MoveRight, Play, Search } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -40,7 +41,55 @@ interface ReceiveResult {
   notifications: NotificationItem[]
 }
 
+type FolderOperation = "move" | "copy"
+
+interface FolderDistributionDetail {
+  status: string
+  item_name: string
+  mgmt_no: string | null
+  reviewer_name: string | null
+  reviewer_dir_name: string | null
+  destination: string | null
+  reason: string | null
+}
+
+interface FolderDistributionResult {
+  classified: number
+  skipped: number
+  dry_run: boolean
+  operation: string
+  overwrite: boolean
+  assignment_count: number
+  unassigned_building_count: number
+  classified_mgmt_nos: string[]
+  reviewer_counts: Record<string, number>
+  details: FolderDistributionDetail[]
+}
+
+function getFolderStatusLabel(status: string) {
+  if (status === "move") return "이동"
+  if (status === "copy") return "복사"
+  if (status === "overwritten") return "덮어쓰기"
+  if (status === "skipped") return "스킵"
+  return status
+}
+
+function getFolderStatusVariant(status: string): "default" | "secondary" | "outline" | "destructive" {
+  if (status === "skipped") return "destructive"
+  if (status === "overwritten") return "secondary"
+  return "outline"
+}
+
 export default function DistributionPage() {
+  const [sourceDir, setSourceDir] = useState("")
+  const [targetDir, setTargetDir] = useState("")
+  const [folderOperation, setFolderOperation] = useState<FolderOperation>("move")
+  const [folderOverwrite, setFolderOverwrite] = useState(false)
+  const [folderResult, setFolderResult] = useState<FolderDistributionResult | null>(null)
+  const [folderError, setFolderError] = useState<string | null>(null)
+  const [isPreviewingFolders, setIsPreviewingFolders] = useState(false)
+  const [isDistributingFolders, setIsDistributingFolders] = useState(false)
+
   const [mgmtNosInput, setMgmtNosInput] = useState("")
   const initialReceived = new Date().toISOString().slice(0, 10)
   const [receivedDate, setReceivedDate] = useState(initialReceived)
@@ -66,20 +115,49 @@ export default function DistributionPage() {
     setDueDateTouched(true)
   }
 
-  // 파일에서 관리번호 추출
-  const handleFileExtract = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (!file) return
+  const applyFolderMgmtNos = (nos: string[]) => {
+    setMgmtNosInput(nos.join("\n"))
+  }
 
-    const text = await file.text()
-    // 폴더명/파일명에서 관리번호 패턴 추출
-    const pattern = /\d{4}-\d{4}/g
-    const matches = text.match(pattern)
-    if (matches) {
-      const unique = [...new Set(matches)]
-      setMgmtNosInput(unique.join("\n"))
+  const runFolderDistribution = async (dryRun: boolean) => {
+    if (!sourceDir.trim()) {
+      alert("접수 폴더 경로를 입력해주세요")
+      return
     }
-    e.target.value = ""
+    if (!targetDir.trim()) {
+      alert("배포 폴더 경로를 입력해주세요")
+      return
+    }
+
+    if (dryRun) {
+      setIsPreviewingFolders(true)
+    } else {
+      setIsDistributingFolders(true)
+    }
+    setFolderError(null)
+
+    try {
+      const { data } = await apiClient.post<FolderDistributionResult>(
+        "/api/distribution/folder-distribution",
+        {
+          source_dir: sourceDir.trim(),
+          target_dir: targetDir.trim(),
+          dry_run: dryRun,
+          operation: folderOperation,
+          overwrite: folderOverwrite,
+        }
+      )
+      setFolderResult(data)
+      if (!dryRun && data.classified_mgmt_nos.length > 0) {
+        applyFolderMgmtNos(data.classified_mgmt_nos)
+      }
+    } catch (err: unknown) {
+      const apiErr = err as { response?: { data?: { detail?: string } } }
+      setFolderError(apiErr.response?.data?.detail || "폴더 분배 처리에 실패했습니다")
+    } finally {
+      setIsPreviewingFolders(false)
+      setIsDistributingFolders(false)
+    }
   }
 
   const handleReceive = async () => {
@@ -143,14 +221,174 @@ export default function DistributionPage() {
       <div>
         <h1 className="text-2xl font-bold">도서 접수/배포</h1>
         <p className="text-sm text-muted-foreground">
-          관리번호를 입력하면 각 건물의 진행 상태에 따라 예비도서 또는 보완도서(1~5차) 접수가 자동으로 구분됩니다
+          폴더명 관리번호를 DB 배정 검토위원과 매칭한 뒤 접수 처리와 알림 발송까지 이어서 진행합니다
         </p>
       </div>
+
+      {/* 폴더 분배 */}
+      <Card>
+        <CardHeader>
+          <CardTitle>1단계: 검토위원별 폴더 분배</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid gap-4 lg:grid-cols-2">
+            <div className="space-y-2">
+              <Label>접수 폴더 경로</Label>
+              <div className="flex items-center gap-2">
+                <FolderInput className="h-4 w-4 text-muted-foreground" />
+                <Input
+                  value={sourceDir}
+                  onChange={(e) => setSourceDir(e.target.value)}
+                  placeholder="D:/2026모니터링/01.접수자료/예비검토"
+                />
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label>배포 폴더 경로</Label>
+              <div className="flex items-center gap-2">
+                <FolderOutput className="h-4 w-4 text-muted-foreground" />
+                <Input
+                  value={targetDir}
+                  onChange={(e) => setTargetDir(e.target.value)}
+                  placeholder="D:/2026모니터링/02.배포자료"
+                />
+              </div>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="flex rounded-md border bg-background p-1">
+              <Button
+                variant={folderOperation === "move" ? "secondary" : "ghost"}
+                size="sm"
+                onClick={() => setFolderOperation("move")}
+              >
+                <MoveRight />
+                이동
+              </Button>
+              <Button
+                variant={folderOperation === "copy" ? "secondary" : "ghost"}
+                size="sm"
+                onClick={() => setFolderOperation("copy")}
+              >
+                <Copy />
+                복사
+              </Button>
+            </div>
+            <label className="flex h-8 items-center gap-2 rounded-md border px-3 text-sm">
+              <input
+                type="checkbox"
+                checked={folderOverwrite}
+                onChange={(e) => setFolderOverwrite(e.target.checked)}
+                className="h-4 w-4"
+              />
+              같은 이름 덮어쓰기
+            </label>
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                onClick={() => runFolderDistribution(true)}
+                loading={isPreviewingFolders}
+                loadingText="확인 중..."
+              >
+                <Search />
+                미리보기
+              </Button>
+              <Button
+                onClick={() => runFolderDistribution(false)}
+                loading={isDistributingFolders}
+                loadingText="분배 중..."
+              >
+                <Play />
+                분배 실행
+              </Button>
+            </div>
+          </div>
+
+          {folderError && (
+            <div className="rounded-md bg-red-50 p-3 text-sm text-red-800">
+              {folderError}
+            </div>
+          )}
+
+          {folderResult && (
+            <div className="space-y-4">
+              <div className="flex flex-wrap gap-2">
+                <Badge variant="default">
+                  {folderResult.dry_run ? "분배 예정" : "분배 완료"} {folderResult.classified}건
+                </Badge>
+                <Badge variant={folderResult.skipped > 0 ? "destructive" : "outline"}>
+                  스킵 {folderResult.skipped}건
+                </Badge>
+                <Badge variant="outline">DB 매핑 {folderResult.assignment_count}건</Badge>
+                {folderResult.unassigned_building_count > 0 && (
+                  <Badge variant="secondary">
+                    미배정 {folderResult.unassigned_building_count}건
+                  </Badge>
+                )}
+              </div>
+
+              {Object.keys(folderResult.reviewer_counts).length > 0 && (
+                <div className="flex flex-wrap gap-2 text-sm">
+                  {Object.entries(folderResult.reviewer_counts).map(([name, count]) => (
+                    <Badge key={name} variant="outline">
+                      {name} {count}건
+                    </Badge>
+                  ))}
+                </div>
+              )}
+
+              {folderResult.classified_mgmt_nos.length > 0 && (
+                <Button
+                  variant="outline"
+                  onClick={() => applyFolderMgmtNos(folderResult.classified_mgmt_nos)}
+                >
+                  <ClipboardList />
+                  접수 목록에 반영
+                </Button>
+              )}
+
+              <div className="max-h-80 overflow-y-auto rounded-md border">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="w-[90px]">상태</TableHead>
+                      <TableHead>폴더/파일명</TableHead>
+                      <TableHead className="w-[110px]">관리번호</TableHead>
+                      <TableHead className="w-[120px]">검토위원</TableHead>
+                      <TableHead>대상 경로</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {folderResult.details.map((item, i) => (
+                      <TableRow key={`${item.item_name}-${i}`}>
+                        <TableCell>
+                          <Badge variant={getFolderStatusVariant(item.status)}>
+                            {getFolderStatusLabel(item.status)}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="font-medium">{item.item_name}</TableCell>
+                        <TableCell className="font-mono text-xs">
+                          {item.mgmt_no ?? "-"}
+                        </TableCell>
+                        <TableCell>{item.reviewer_name ?? "-"}</TableCell>
+                        <TableCell className="text-xs text-muted-foreground">
+                          {item.reason ?? item.destination ?? "-"}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       {/* 접수 입력 */}
       <Card>
         <CardHeader>
-          <CardTitle>1단계: 접수 관리번호 입력</CardTitle>
+          <CardTitle>2단계: 접수 관리번호 입력</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="flex flex-wrap gap-4">
@@ -206,7 +444,7 @@ export default function DistributionPage() {
       {result && (
         <Card>
           <CardHeader>
-            <CardTitle>2단계: 접수 결과 확인</CardTitle>
+            <CardTitle>3단계: 접수 결과 확인</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="flex gap-3">
@@ -232,7 +470,7 @@ export default function DistributionPage() {
       {result && result.notifications.length > 0 && (
         <Card>
           <CardHeader className="flex flex-row items-center justify-between">
-            <CardTitle>3단계: 검토위원 알림 발송</CardTitle>
+            <CardTitle>4단계: 검토위원 알림 발송</CardTitle>
             <Button
               onClick={handleSendNotifications}
               disabled={notifSent}
