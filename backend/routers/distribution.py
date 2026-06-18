@@ -197,6 +197,12 @@ class FolderDistributionResponse(BaseModel):
     details: list[FolderDistributionDetail]
 
 
+class FolderAssignmentMapResponse(BaseModel):
+    assignment: dict[str, str]
+    assignment_count: int
+    unassigned_building_count: int
+
+
 def _build_folder_distribution_assignment(db: Session) -> tuple[dict[str, str], int]:
     """DB에 등록된 관리번호 -> 검토위원명 매핑을 만든다."""
     buildings = (
@@ -265,6 +271,22 @@ _ROUND_KOREAN: dict[str, str] = {
     "supplement_4": "4차 보완",
     "supplement_5": "5차 보완",
 }
+
+
+@router.get("/folder-assignment-map", response_model=FolderAssignmentMapResponse)
+def get_folder_assignment_map(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(
+        require_roles(UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY)
+    ),
+):
+    """브라우저 로컬 폴더 분배용 관리번호 -> 검토위원명 매핑을 반환한다."""
+    assignment, unassigned = _build_folder_distribution_assignment(db)
+    return FolderAssignmentMapResponse(
+        assignment=assignment,
+        assignment_count=len(assignment),
+        unassigned_building_count=unassigned,
+    )
 
 
 @router.post("/folder-distribution", response_model=FolderDistributionResponse)

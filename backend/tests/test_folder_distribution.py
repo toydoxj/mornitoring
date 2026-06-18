@@ -50,6 +50,28 @@ def test_folder_distribution_preview_uses_db_assignments(
     assert (source / "2026-0001_구조도서").exists()
 
 
+def test_folder_assignment_map_returns_db_assignments(
+    client, db_session, make_user, make_reviewer, make_building
+):
+    headers = _admin_headers(make_user)
+    _, reviewer, _ = make_reviewer()
+
+    b1 = make_building(mgmt_no="2026-0003")
+    b1.assigned_reviewer_name = "이검토"
+    make_building(mgmt_no="2026-0004", reviewer_id=reviewer.id)
+    make_building(mgmt_no="2026-0005")
+    db_session.commit()
+
+    res = client.get("/api/distribution/folder-assignment-map", headers=headers)
+
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["assignment_count"] == 2
+    assert body["unassigned_building_count"] == 1
+    assert body["assignment"]["2026-0003"] == "이검토"
+    assert body["assignment"]["2026-0004"] == "검토위원1"
+
+
 def test_folder_distribution_execute_moves_items_by_reviewer(
     client, db_session, make_user, make_building, tmp_path
 ):

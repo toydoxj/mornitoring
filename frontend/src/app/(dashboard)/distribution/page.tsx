@@ -1,7 +1,7 @@
 "use client"
 
 import { useState } from "react"
-import { ClipboardList, Copy, FolderInput, FolderOutput, MoveRight, Play, Search } from "lucide-react"
+import { ClipboardList, Copy, FolderInput, FolderOpen, FolderOutput, MoveRight, Play, Search } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -43,6 +43,44 @@ interface ReceiveResult {
 
 type FolderOperation = "move" | "copy"
 
+interface LocalFileHandle {
+  kind: "file"
+  name: string
+  getFile: () => Promise<File>
+  createWritable: () => Promise<LocalWritableFileStream>
+  isSameEntry?: (other: LocalHandle) => Promise<boolean>
+}
+
+interface LocalDirectoryHandle {
+  kind: "directory"
+  name: string
+  values: () => AsyncIterable<LocalHandle>
+  getDirectoryHandle: (
+    name: string,
+    options?: { create?: boolean }
+  ) => Promise<LocalDirectoryHandle>
+  getFileHandle: (
+    name: string,
+    options?: { create?: boolean }
+  ) => Promise<LocalFileHandle>
+  removeEntry: (name: string, options?: { recursive?: boolean }) => Promise<void>
+  isSameEntry?: (other: LocalHandle) => Promise<boolean>
+}
+
+type LocalHandle = LocalFileHandle | LocalDirectoryHandle
+
+interface LocalWritableFileStream {
+  write: (data: Blob | BufferSource | string) => Promise<void>
+  close: () => Promise<void>
+}
+
+type WindowWithDirectoryPicker = Window & {
+  showDirectoryPicker?: (options?: {
+    id?: string
+    mode?: "read" | "readwrite"
+  }) => Promise<LocalDirectoryHandle>
+}
+
 interface FolderDistributionDetail {
   status: string
   item_name: string
@@ -66,6 +104,256 @@ interface FolderDistributionResult {
   details: FolderDistributionDetail[]
 }
 
+interface FolderAssignmentMap {
+  assignment: Record<string, string>
+  assignment_count: number
+  unassigned_building_count: number
+}
+
+const MGMT_NO_PATTERN = /^(\d{4}-\d{4})/
+const INVALID_DIR_CHARS = /[<>:"/\\|?*\x00-\x1F]/g
+
+function extractMgmtNo(name: string): string | null {
+  return MGMT_NO_PATTERN.exec(name)?.[1] ?? null
+}
+
+function safeDirName(name: string): string {
+  return name.replace(INVALID_DIR_CHARS, "_").trim().replace(/[.]+$/g, "") || "미지정"
+}
+
+function getErrorMessage(error: unknown): string {
+  if (error instanceof Error && error.message) return error.message
+  return String(error)
+}
+
+function isDomExceptionName(error: unknown, name: string): boolean {
+  return error instanceof DOMException && error.name === name
+}
+
+async function isSameEntry(
+  left: LocalDirectoryHandle,
+  right: LocalDirectoryHandle
+): Promise<boolean> {
+  if (!left.isSameEntry) return false
+  return left.isSameEntry(right)
+}
+
+async function getDirectoryIfExists(
+  directory: LocalDirectoryHandle,
+  name: string
+): Promise<LocalDirectoryHandle | null> {
+  try {
+    return await directory.getDirectoryHandle(name)
+  } catch (error) {
+    if (isDomExceptionName(error, "NotFoundError")) return null
+    if (isDomExceptionName(error, "TypeMismatchError")) return null
+    throw error
+  }
+}
+
+async function entryExists(
+  directory: LocalDirectoryHandle,
+  name: string
+): Promise<boolean> {
+  try {
+    await directory.getFileHandle(name)
+    return true
+  } catch (fileError) {
+    if (
+      !isDomExceptionName(fileError, "NotFoundError") &&
+      !isDomExceptionName(fileError, "TypeMismatchError")
+    ) {
+      throw fileError
+    }
+  }
+
+  try {
+    await directory.getDirectoryHandle(name)
+    return true
+  } catch (dirError) {
+    if (isDomExceptionName(dirError, "NotFoundError")) return false
+    if (isDomExceptionName(dirError, "TypeMismatchError")) return true
+    throw dirError
+  }
+}
+
+async function copyEntry(
+  entry: LocalHandle,
+  targetDirectory: LocalDirectoryHandle
+): Promise<void> {
+  if (entry.kind === "file") {
+    const file = await entry.getFile()
+    const targetFile = await targetDirectory.getFileHandle(entry.name, {
+      create: true,
+    })
+    const writable = await targetFile.createWritable()
+    await writable.write(file)
+    await writable.close()
+    return
+  }
+
+  const nextTarget = await targetDirectory.getDirectoryHandle(entry.name, {
+    create: true,
+  })
+  for await (const child of entry.values()) {
+    await copyEntry(child, nextTarget)
+  }
+}
+
+async function distributeLocalFolders({
+  sourceHandle,
+  targetHandle,
+  assignment,
+  dryRun,
+  operation,
+  overwrite,
+  unassignedBuildingCount,
+}: {
+  sourceHandle: LocalDirectoryHandle
+  targetHandle: LocalDirectoryHandle
+  assignment: Record<string, string>
+  dryRun: boolean
+  operation: FolderOperation
+  overwrite: boolean
+  unassignedBuildingCount: number
+}): Promise<FolderDistributionResult> {
+  if (await isSameEntry(sourceHandle, targetHandle)) {
+    throw new Error("접수 폴더와 배포 폴더는 같을 수 없습니다")
+  }
+
+  const details: FolderDistributionDetail[] = []
+  const reviewerCounts: Record<string, number> = {}
+  const classifiedMgmtNos: string[] = []
+  const entries: LocalHandle[] = []
+
+  for await (const entry of sourceHandle.values()) {
+    entries.push(entry)
+  }
+
+  let classified = 0
+  let skipped = 0
+
+  for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+    try {
+      if (entry.kind === "directory" && await isSameEntry(entry, targetHandle)) {
+        skipped += 1
+        details.push({
+          status: "skipped",
+          item_name: entry.name,
+          mgmt_no: null,
+          reviewer_name: null,
+          reviewer_dir_name: null,
+          destination: null,
+          reason: "배포 폴더는 분배 대상에서 제외됩니다",
+        })
+        continue
+      }
+
+      const mgmtNo = extractMgmtNo(entry.name)
+      if (!mgmtNo) {
+        skipped += 1
+        details.push({
+          status: "skipped",
+          item_name: entry.name,
+          mgmt_no: null,
+          reviewer_name: null,
+          reviewer_dir_name: null,
+          destination: null,
+          reason: "관리번호 인식 불가",
+        })
+        continue
+      }
+
+      const reviewerName = assignment[mgmtNo]
+      if (!reviewerName) {
+        skipped += 1
+        details.push({
+          status: "skipped",
+          item_name: entry.name,
+          mgmt_no: mgmtNo,
+          reviewer_name: null,
+          reviewer_dir_name: null,
+          destination: null,
+          reason: "검토위원 미배정",
+        })
+        continue
+      }
+
+      const reviewerDirName = safeDirName(reviewerName)
+      const existingReviewerDir = await getDirectoryIfExists(targetHandle, reviewerDirName)
+      const reviewerDir = dryRun
+        ? existingReviewerDir
+        : await targetHandle.getDirectoryHandle(reviewerDirName, { create: true })
+      const exists = reviewerDir ? await entryExists(reviewerDir, entry.name) : false
+
+      if (exists && !overwrite) {
+        skipped += 1
+        details.push({
+          status: "skipped",
+          item_name: entry.name,
+          mgmt_no: mgmtNo,
+          reviewer_name: reviewerName,
+          reviewer_dir_name: reviewerDirName,
+          destination: `${targetHandle.name}/${reviewerDirName}/${entry.name}`,
+          reason: "대상에 같은 이름이 이미 있습니다",
+        })
+        continue
+      }
+
+      if (!dryRun && reviewerDir) {
+        if (exists) {
+          await reviewerDir.removeEntry(entry.name, { recursive: true })
+        }
+        await copyEntry(entry, reviewerDir)
+        if (operation === "move") {
+          await sourceHandle.removeEntry(entry.name, { recursive: true })
+        }
+      }
+
+      classified += 1
+      reviewerCounts[reviewerName] = (reviewerCounts[reviewerName] ?? 0) + 1
+      if (!classifiedMgmtNos.includes(mgmtNo)) {
+        classifiedMgmtNos.push(mgmtNo)
+      }
+      details.push({
+        status: exists ? "overwritten" : operation,
+        item_name: entry.name,
+        mgmt_no: mgmtNo,
+        reviewer_name: reviewerName,
+        reviewer_dir_name: reviewerDirName,
+        destination: `${targetHandle.name}/${reviewerDirName}/${entry.name}`,
+        reason: null,
+      })
+    } catch (error) {
+      skipped += 1
+      details.push({
+        status: "skipped",
+        item_name: entry.name,
+        mgmt_no: extractMgmtNo(entry.name),
+        reviewer_name: null,
+        reviewer_dir_name: null,
+        destination: null,
+        reason: `처리 오류: ${getErrorMessage(error)}`,
+      })
+    }
+  }
+
+  return {
+    classified,
+    skipped,
+    dry_run: dryRun,
+    operation,
+    overwrite,
+    assignment_count: Object.keys(assignment).length,
+    unassigned_building_count: unassignedBuildingCount,
+    classified_mgmt_nos: classifiedMgmtNos,
+    reviewer_counts: Object.fromEntries(
+      Object.entries(reviewerCounts).sort(([a], [b]) => a.localeCompare(b))
+    ),
+    details,
+  }
+}
+
 function getFolderStatusLabel(status: string) {
   if (status === "move") return "이동"
   if (status === "copy") return "복사"
@@ -83,6 +371,8 @@ function getFolderStatusVariant(status: string): "default" | "secondary" | "outl
 export default function DistributionPage() {
   const [sourceDir, setSourceDir] = useState("")
   const [targetDir, setTargetDir] = useState("")
+  const [sourceHandle, setSourceHandle] = useState<LocalDirectoryHandle | null>(null)
+  const [targetHandle, setTargetHandle] = useState<LocalDirectoryHandle | null>(null)
   const [folderOperation, setFolderOperation] = useState<FolderOperation>("move")
   const [folderOverwrite, setFolderOverwrite] = useState(false)
   const [folderResult, setFolderResult] = useState<FolderDistributionResult | null>(null)
@@ -119,13 +409,39 @@ export default function DistributionPage() {
     setMgmtNosInput(nos.join("\n"))
   }
 
-  const runFolderDistribution = async (dryRun: boolean) => {
-    if (!sourceDir.trim()) {
-      alert("접수 폴더 경로를 입력해주세요")
+  const pickFolder = async (kind: "source" | "target") => {
+    const picker = (window as WindowWithDirectoryPicker).showDirectoryPicker
+    if (!picker) {
+      setFolderError("이 브라우저는 폴더 선택을 지원하지 않습니다. Chrome 또는 Edge에서 열어주세요.")
       return
     }
-    if (!targetDir.trim()) {
-      alert("배포 폴더 경로를 입력해주세요")
+
+    try {
+      const handle = await picker({
+        id: kind === "source" ? "distribution-source" : "distribution-target",
+        mode: "readwrite",
+      })
+      if (kind === "source") {
+        setSourceHandle(handle)
+        setSourceDir(handle.name)
+      } else {
+        setTargetHandle(handle)
+        setTargetDir(handle.name)
+      }
+      setFolderError(null)
+    } catch (error) {
+      if (isDomExceptionName(error, "AbortError")) return
+      setFolderError(`폴더 선택 실패: ${getErrorMessage(error)}`)
+    }
+  }
+
+  const runFolderDistribution = async (dryRun: boolean) => {
+    if (!sourceHandle) {
+      alert("접수 폴더를 선택해주세요")
+      return
+    }
+    if (!targetHandle) {
+      alert("배포 폴더를 선택해주세요")
       return
     }
 
@@ -137,23 +453,30 @@ export default function DistributionPage() {
     setFolderError(null)
 
     try {
-      const { data } = await apiClient.post<FolderDistributionResult>(
-        "/api/distribution/folder-distribution",
-        {
-          source_dir: sourceDir.trim(),
-          target_dir: targetDir.trim(),
-          dry_run: dryRun,
-          operation: folderOperation,
-          overwrite: folderOverwrite,
-        }
+      const { data } = await apiClient.get<FolderAssignmentMap>(
+        "/api/distribution/folder-assignment-map"
       )
-      setFolderResult(data)
-      if (!dryRun && data.classified_mgmt_nos.length > 0) {
-        applyFolderMgmtNos(data.classified_mgmt_nos)
+      if (data.assignment_count === 0) {
+        setFolderError("DB에 검토위원이 배정된 관리번호가 없습니다")
+        return
+      }
+
+      const distributionResult = await distributeLocalFolders({
+        sourceHandle,
+        targetHandle,
+        assignment: data.assignment,
+        dryRun,
+        operation: folderOperation,
+        overwrite: folderOverwrite,
+        unassignedBuildingCount: data.unassigned_building_count,
+      })
+      setFolderResult(distributionResult)
+      if (!dryRun && distributionResult.classified_mgmt_nos.length > 0) {
+        applyFolderMgmtNos(distributionResult.classified_mgmt_nos)
       }
     } catch (err: unknown) {
       const apiErr = err as { response?: { data?: { detail?: string } } }
-      setFolderError(apiErr.response?.data?.detail || "폴더 분배 처리에 실패했습니다")
+      setFolderError(apiErr.response?.data?.detail || getErrorMessage(err) || "폴더 분배 처리에 실패했습니다")
     } finally {
       setIsPreviewingFolders(false)
       setIsDistributingFolders(false)
@@ -233,25 +556,33 @@ export default function DistributionPage() {
         <CardContent className="space-y-4">
           <div className="grid gap-4 lg:grid-cols-2">
             <div className="space-y-2">
-              <Label>접수 폴더 경로</Label>
+              <Label>접수 폴더</Label>
               <div className="flex items-center gap-2">
                 <FolderInput className="h-4 w-4 text-muted-foreground" />
                 <Input
                   value={sourceDir}
-                  onChange={(e) => setSourceDir(e.target.value)}
-                  placeholder="D:/2026모니터링/01.접수자료/예비검토"
+                  readOnly
+                  placeholder="폴더를 선택해주세요"
                 />
+                <Button variant="outline" onClick={() => pickFolder("source")}>
+                  <FolderOpen />
+                  선택
+                </Button>
               </div>
             </div>
             <div className="space-y-2">
-              <Label>배포 폴더 경로</Label>
+              <Label>배포 폴더</Label>
               <div className="flex items-center gap-2">
                 <FolderOutput className="h-4 w-4 text-muted-foreground" />
                 <Input
                   value={targetDir}
-                  onChange={(e) => setTargetDir(e.target.value)}
-                  placeholder="D:/2026모니터링/02.배포자료"
+                  readOnly
+                  placeholder="폴더를 선택해주세요"
                 />
+                <Button variant="outline" onClick={() => pickFolder("target")}>
+                  <FolderOpen />
+                  선택
+                </Button>
               </div>
             </div>
           </div>
