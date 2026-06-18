@@ -30,6 +30,7 @@ interface InquiryAttachmentData extends AttachmentDisplay {
 
 const RESULT_VARIANT: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
   pass: "default",
+  pass_supplement: "default",
   simple_error: "secondary",
   recalculate: "destructive",
 }
@@ -71,6 +72,7 @@ export default function BuildingDetailPage() {
   const [phaseEditOpen, setPhaseEditOpen] = useState(false)
   const [phaseDraft, setPhaseDraft] = useState<string>("")
   const [savingPhase, setSavingPhase] = useState(false)
+  const [finalizingPass, setFinalizingPass] = useState(false)
   const [reviewerDialogOpen, setReviewerDialogOpen] = useState(false)
 
   const canManage = user && ["team_leader", "chief_secretary", "secretary"].includes(user.role)
@@ -203,6 +205,37 @@ export default function BuildingDetailPage() {
       alert(msg)
     } finally {
       setSavingPhase(false)
+    }
+  }
+
+  const handleFinalizePass = async () => {
+    if (!building) return
+    const latestStage = [...stages]
+      .filter((stage) => stage.result)
+      .sort((a, b) => b.phase_order - a.phase_order)[0]
+    if (!latestStage || latestStage.result !== "pass") return
+
+    const finalResult = latestStage.phase === "preliminary" ? "pass" : "pass_supplement"
+    const label = RESULT_LABELS[finalResult] || finalResult
+    if (!confirm(`최근 판정이 적합입니다. 최종완료(${label}) 처리할까요?`)) return
+
+    setFinalizingPass(true)
+    try {
+      const { data } = await apiClient.post<Building>(
+        `/api/buildings/${building.id}/finalize-pass`,
+      )
+      setBuilding(data)
+      const { data: stagesRes } = await apiClient.get<ReviewStage[]>(
+        `/api/reviews/stages/${building.id}`,
+      )
+      setStages(stagesRes)
+    } catch (err) {
+      const msg =
+        (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
+        ?? "최종완료 처리 실패"
+      alert(msg)
+    } finally {
+      setFinalizingPass(false)
     }
   }
 
@@ -343,6 +376,13 @@ export default function BuildingDetailPage() {
   const phaseOptions = getAdjacentManualPhases(building.current_phase)
   const reviewerDetail = building.reviewer_detail
   const reviewerDisplayName = building.reviewer_name ?? building.assigned_reviewer_name
+  const latestResultStage = [...stages]
+    .filter((stage) => stage.result)
+    .sort((a, b) => b.phase_order - a.phase_order)[0]
+  const canFinalizePass =
+    user?.role === "chief_secretary" &&
+    !building.final_result &&
+    latestResultStage?.result === "pass"
 
   return (
     <div className="space-y-6">
@@ -375,6 +415,16 @@ export default function BuildingDetailPage() {
               }}
             >
               단계 수정
+            </Button>
+          )}
+          {canFinalizePass && (
+            <Button
+              size="sm"
+              onClick={handleFinalizePass}
+              loading={finalizingPass}
+              loadingText="처리 중..."
+            >
+              최종완료
             </Button>
           )}
           {building.final_result && (

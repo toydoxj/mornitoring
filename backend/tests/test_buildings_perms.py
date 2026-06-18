@@ -5,6 +5,7 @@
 - GET /{id}: REVIEWER는 본인 담당이 아니면 404
 """
 
+from models.review_stage import PhaseType, ResultType, ReviewStage
 from models.user import UserRole
 
 
@@ -52,3 +53,71 @@ def test_secretary_can_access_stats(client, make_user):
     _, headers = make_user(UserRole.SECRETARY)
     res = client.get("/api/buildings/stats", headers=headers)
     assert res.status_code == 200
+
+
+def test_chief_secretary_can_finalize_preliminary_pass(
+    client, db_session, make_user, make_building
+):
+    _, headers = make_user(UserRole.CHIEF_SECRETARY)
+    building = make_building(mgmt_no="FINAL-PRE-001")
+    building.current_phase = "preliminary"
+    db_session.add(ReviewStage(
+        building_id=building.id,
+        phase=PhaseType.PRELIMINARY,
+        phase_order=0,
+        result=ResultType.PASS,
+    ))
+    db_session.commit()
+
+    res = client.post(f"/api/buildings/{building.id}/finalize-pass", headers=headers)
+    assert res.status_code == 200
+    body = res.json()
+    assert body["final_result"] == "pass"
+    assert body["current_phase"] == "completed"
+
+
+def test_chief_secretary_can_finalize_supplement_pass(
+    client, db_session, make_user, make_building
+):
+    _, headers = make_user(UserRole.CHIEF_SECRETARY)
+    building = make_building(mgmt_no="FINAL-SUP-001")
+    building.current_phase = "supplement_1"
+    db_session.add_all([
+        ReviewStage(
+            building_id=building.id,
+            phase=PhaseType.PRELIMINARY,
+            phase_order=0,
+            result=ResultType.RECALCULATE,
+        ),
+        ReviewStage(
+            building_id=building.id,
+            phase=PhaseType.SUPPLEMENT_1,
+            phase_order=1,
+            result=ResultType.PASS,
+        ),
+    ])
+    db_session.commit()
+
+    res = client.post(f"/api/buildings/{building.id}/finalize-pass", headers=headers)
+    assert res.status_code == 200
+    body = res.json()
+    assert body["final_result"] == "pass_supplement"
+    assert body["current_phase"] == "completed"
+
+
+def test_only_chief_secretary_can_finalize_pass(
+    client, db_session, make_user, make_building
+):
+    _, headers = make_user(UserRole.TEAM_LEADER)
+    building = make_building(mgmt_no="FINAL-FORBIDDEN-001")
+    building.current_phase = "preliminary"
+    db_session.add(ReviewStage(
+        building_id=building.id,
+        phase=PhaseType.PRELIMINARY,
+        phase_order=0,
+        result=ResultType.PASS,
+    ))
+    db_session.commit()
+
+    res = client.post(f"/api/buildings/{building.id}/finalize-pass", headers=headers)
+    assert res.status_code == 403

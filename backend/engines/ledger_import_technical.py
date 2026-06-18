@@ -89,6 +89,7 @@ ASSIGNED_REVIEWER_COLUMNS = ("AT", "BG", "B")
 HIGH_RISK_COLUMN = "AR"
 PRELIMINARY_DECISION_COLUMN = "AU"
 PRELIMINARY_ADMIN_RESULT_COLUMN = "AY"
+UNCLASSIFIED_SEVERITY = "NA"
 
 
 def _cell_value(row: tuple, col_letter: str):
@@ -175,15 +176,6 @@ def _parse_result(val) -> ResultType | None:
     return mapping.get(s)
 
 
-def _severity_for_ledger_result(result: ResultType | None) -> str | None:
-    """관리대장에는 세부 L값이 없으므로 판정의견 기준의 보수적 버킷을 사용한다."""
-    if result == ResultType.PASS:
-        return None
-    if result == ResultType.RECALCULATE:
-        return "L3"
-    return "L0"
-
-
 def _is_mgmt_no(value) -> bool:
     if value is None:
         return False
@@ -243,17 +235,20 @@ def _parse_ledger_opinion_entries(text: str) -> list[dict[str, str | int | None]
     return entries
 
 
-def _apply_ledger_opinion_stats(
+def _replace_ledger_opinion_details(
     db: Session,
     stage: ReviewStage,
     *,
     phase: PhaseType,
     opinion_text: str | None,
-    result: ResultType | None,
 ) -> None:
+    """기술사회 의견은 미분류로 보관하고, 수동 지정 전까지 L0~L4 통계에 넣지 않는다."""
     if stage.id is None:
         db.add(stage)
         db.flush()
+
+    if stage.s3_file_key:
+        return
 
     db.query(ReviewSeveritySummary).filter(
         ReviewSeveritySummary.stage_id == stage.id
@@ -265,40 +260,22 @@ def _apply_ledger_opinion_stats(
     for label in SEVERITY_LABELS:
         setattr(stage, f"severity_{label.lower()}_count", 0)
 
-    severity = _severity_for_ledger_result(result)
-    entries = _parse_ledger_opinion_entries(opinion_text or "")
-    if severity is None or not entries:
-        return
-
-    counts_by_category: dict[str, int] = {}
     phase_value = phase.value if hasattr(phase, "value") else str(phase)
     phase_group = "preliminary" if phase == PhaseType.PRELIMINARY else "supplement"
-
-    for index, entry in enumerate(entries, start=1):
+    for index, entry in enumerate(_parse_ledger_opinion_entries(opinion_text or ""), start=1):
         category = str(entry.get("category") or "").strip()
         content = str(entry.get("content") or "").strip()
         if not category or not content:
             continue
-        counts_by_category[category] = counts_by_category.get(category, 0) + 1
         db.add(ReviewOpinionDetail(
             stage_id=stage.id,
             phase=phase_value,
             phase_group=phase_group,
             row_number=index,
             category=category,
-            severity=severity,
+            severity=UNCLASSIFIED_SEVERITY,
             content=content,
         ))
-
-    for category, count in counts_by_category.items():
-        db.add(ReviewSeveritySummary(
-            stage_id=stage.id,
-            category=category,
-            severity=severity,
-            count=count,
-        ))
-
-    setattr(stage, f"severity_{severity.lower()}_count", sum(counts_by_category.values()))
 
 
 def _find_sheet(wb) -> str | None:
@@ -441,12 +418,11 @@ def import_ledger_technical(
             else:
                 _apply_stage_data(stage, prelim_data)
             db.flush()
-            _apply_ledger_opinion_stats(
+            _replace_ledger_opinion_details(
                 db,
                 stage,
                 phase=PhaseType.PRELIMINARY,
                 opinion_text=prelim_data.get("review_opinion"),
-                result=prelim_result,
             )
             _transition_import_forward(
                 db,
@@ -475,12 +451,11 @@ def import_ledger_technical(
             else:
                 _apply_stage_data(stage, supp1_data)
             db.flush()
-            _apply_ledger_opinion_stats(
+            _replace_ledger_opinion_details(
                 db,
                 stage,
                 phase=PhaseType.SUPPLEMENT_1,
                 opinion_text=supp1_data.get("review_opinion"),
-                result=supp1_data.get("result"),
             )
             _transition_import_forward(
                 db,

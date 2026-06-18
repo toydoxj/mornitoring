@@ -1,9 +1,11 @@
 "use client"
 
-import { useEffect, useState, type ReactNode } from "react"
+import { useCallback, useEffect, useState, type ReactNode } from "react"
 import { useRouter } from "next/navigation"
 import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Input } from "@/components/ui/input"
 import {
   Table,
   TableBody,
@@ -16,9 +18,10 @@ import apiClient from "@/lib/api/client"
 import { useAuthStore } from "@/stores/authStore"
 import type { PhaseType } from "@/types"
 
-type ActiveTab = "reviewer" | "regional" | "severity" | "keyword"
+type ActiveTab = "reviewer" | "regional" | "severity" | "keyword" | "opinion"
 type RegionalTab = "area" | "floors" | "risk"
 type SeverityLabel = "L0" | "L1" | "L2" | "L3" | "L4"
+type OpinionSeverity = "NA" | SeverityLabel
 type ReportMaxLabel = "pass" | SeverityLabel
 type AreaStatKey =
   | "area_0_300"
@@ -115,6 +118,26 @@ interface KeywordStats {
   by_keyword: KeywordStat[]
 }
 
+interface OpinionDetailItem {
+  id: number
+  stage_id: number
+  building_id: number
+  mgmt_no: string
+  building_name: string | null
+  phase: PhaseType
+  phase_group: "preliminary" | "supplement"
+  row_number: number | null
+  category: string
+  severity: OpinionSeverity
+  content: string
+  result: string | null
+}
+
+interface OpinionDetailListResponse {
+  items: OpinionDetailItem[]
+  total: number
+}
+
 interface StatsResponse {
   reviewer_stats: ReviewerStat[]
   regional_stats: RegionalStats
@@ -128,7 +151,17 @@ interface RegionalColumn<T extends string> {
 }
 
 const SEVERITY_LABELS: SeverityLabel[] = ["L0", "L1", "L2", "L3", "L4"]
+const OPINION_SEVERITIES: OpinionSeverity[] = ["NA", ...SEVERITY_LABELS]
 const REPORT_MAX_LABELS: ReportMaxLabel[] = ["pass", ...SEVERITY_LABELS]
+
+const OPINION_SEVERITY_LABEL_TEXT: Record<OpinionSeverity, string> = {
+  NA: "미분류",
+  L0: "L0",
+  L1: "L1",
+  L2: "L2",
+  L3: "L3",
+  L4: "L4",
+}
 
 const REPORT_MAX_LABEL_TEXT: Record<ReportMaxLabel, string> = {
   pass: "적합",
@@ -154,6 +187,15 @@ const SEVERITY_STYLE: Record<SeverityLabel, string> = {
   L2: "border-amber-200 bg-amber-50 text-amber-700",
   L3: "border-orange-200 bg-orange-50 text-orange-700",
   L4: "border-red-200 bg-red-50 text-red-700",
+}
+
+const OPINION_SEVERITY_STYLE: Record<OpinionSeverity, string> = {
+  NA: "border-muted bg-muted text-muted-foreground",
+  L0: SEVERITY_STYLE.L0,
+  L1: SEVERITY_STYLE.L1,
+  L2: SEVERITY_STYLE.L2,
+  L3: SEVERITY_STYLE.L3,
+  L4: SEVERITY_STYLE.L4,
 }
 
 const REPORT_MAX_STYLE: Record<ReportMaxLabel, string> = {
@@ -193,6 +235,7 @@ const TAB_TITLES: Record<ActiveTab, string> = {
   regional: "지역별 통계",
   severity: "심각도 통계",
   keyword: "키워드 분석",
+  opinion: "의견 심각도 지정",
 }
 
 export default function StatisticsPage() {
@@ -212,21 +255,22 @@ export default function StatisticsPage() {
     }
   }, [isUserLoading, user, isAdmin, router])
 
-  useEffect(() => {
+  const fetchStats = useCallback(async () => {
     if (!isAdmin) return
-    const fetchStats = async () => {
-      setIsLoading(true)
-      try {
-        const { data } = await apiClient.get<StatsResponse>("/api/buildings/stats")
-        setStats(data)
-      } catch (err) {
-        console.error("통계 조회 실패:", err)
-      } finally {
-        setIsLoading(false)
-      }
+    setIsLoading(true)
+    try {
+      const { data } = await apiClient.get<StatsResponse>("/api/buildings/stats")
+      setStats(data)
+    } catch (err) {
+      console.error("통계 조회 실패:", err)
+    } finally {
+      setIsLoading(false)
     }
-    fetchStats()
   }, [isAdmin])
+
+  useEffect(() => {
+    fetchStats()
+  }, [fetchStats])
 
   if (isUserLoading || !user) {
     return <div className="flex justify-center py-20 text-muted-foreground">로딩 중...</div>
@@ -261,6 +305,9 @@ export default function StatisticsPage() {
         <TabButton value="keyword" activeValue={activeTab} onSelect={setActiveTab}>
           키워드 분석
         </TabButton>
+        <TabButton value="opinion" activeValue={activeTab} onSelect={setActiveTab}>
+          의견 심각도 지정
+        </TabButton>
       </div>
 
       <Card>
@@ -291,6 +338,9 @@ export default function StatisticsPage() {
               isLoading={isLoading}
               stats={stats?.keyword_stats || null}
             />
+          )}
+          {activeTab === "opinion" && (
+            <OpinionSeverityManager onChanged={fetchStats} />
           )}
         </CardContent>
       </Card>
@@ -826,6 +876,171 @@ function KeywordSummaryCard({
         {value.toLocaleString()}
         <span className="ml-1 text-sm font-normal">건</span>
       </p>
+    </div>
+  )
+}
+
+function OpinionSeverityManager({ onChanged }: { onChanged: () => Promise<void> }) {
+  const [items, setItems] = useState<OpinionDetailItem[]>([])
+  const [total, setTotal] = useState(0)
+  const [isLoading, setIsLoading] = useState(false)
+  const [savingId, setSavingId] = useState<number | null>(null)
+  const [searchInput, setSearchInput] = useState("")
+  const [search, setSearch] = useState("")
+  const [severityFilter, setSeverityFilter] = useState<OpinionSeverity | "all">("NA")
+
+  const loadOpinions = useCallback(async () => {
+    setIsLoading(true)
+    try {
+      const { data } = await apiClient.get<OpinionDetailListResponse>(
+        "/api/reviews/opinion-details",
+        {
+          params: {
+            size: 200,
+            search: search || undefined,
+            severity: severityFilter === "all" ? undefined : severityFilter,
+          },
+        },
+      )
+      setItems(data.items)
+      setTotal(data.total)
+    } catch (err) {
+      console.error("의견 상세 조회 실패:", err)
+    } finally {
+      setIsLoading(false)
+    }
+  }, [search, severityFilter])
+
+  useEffect(() => {
+    loadOpinions()
+  }, [loadOpinions])
+
+  const updateSeverity = async (item: OpinionDetailItem, severity: OpinionSeverity) => {
+    setSavingId(item.id)
+    try {
+      const { data } = await apiClient.patch<OpinionDetailItem>(
+        `/api/reviews/opinion-details/${item.id}/severity`,
+        { severity },
+      )
+      setItems((prev) =>
+        prev.map((current) => (current.id === item.id ? data : current)),
+      )
+      await onChanged()
+    } catch (err) {
+      const msg =
+        (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
+        ?? "심각도 저장 실패"
+      alert(msg)
+    } finally {
+      setSavingId(null)
+    }
+  }
+
+  const submitSearch = () => {
+    setSearch(searchInput.trim())
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+        <div className="flex flex-1 flex-col gap-2 sm:flex-row">
+          <Input
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") submitSearch()
+            }}
+            placeholder="관리번호, 건물명, 분류, 의견 검색"
+            className="sm:max-w-md"
+          />
+          <Button type="button" variant="outline" onClick={submitSearch}>
+            검색
+          </Button>
+        </div>
+        <div className="flex items-center gap-2">
+          <select
+            className="h-10 rounded-md border bg-background px-3 text-sm"
+            value={severityFilter}
+            onChange={(e) => setSeverityFilter(e.target.value as OpinionSeverity | "all")}
+          >
+            <option value="all">전체</option>
+            {OPINION_SEVERITIES.map((severity) => (
+              <option key={severity} value={severity}>
+                {OPINION_SEVERITY_LABEL_TEXT[severity]}
+              </option>
+            ))}
+          </select>
+          <Button type="button" variant="outline" onClick={loadOpinions} loading={isLoading}>
+            새로고침
+          </Button>
+        </div>
+      </div>
+
+      <div className="flex items-center justify-between text-sm text-muted-foreground">
+        <span>표시 {items.length.toLocaleString()}건 / 전체 {total.toLocaleString()}건</span>
+        <span>심각도를 선택하면 통계가 즉시 갱신됩니다.</span>
+      </div>
+
+      {isLoading ? (
+        <LoadingMessage />
+      ) : items.length === 0 ? (
+        <EmptyMessage>조건에 맞는 의견 상세가 없습니다.</EmptyMessage>
+      ) : (
+        <div className="max-h-[70vh] overflow-auto rounded-md border">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead className="min-w-[140px]">관리번호</TableHead>
+                <TableHead className="min-w-[110px]">단계</TableHead>
+                <TableHead className="min-w-[140px]">분류</TableHead>
+                <TableHead className="min-w-[360px]">의견</TableHead>
+                <TableHead className="w-[130px] text-center">심각도</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {items.map((item) => (
+                <TableRow key={item.id}>
+                  <TableCell>
+                    <div className="font-mono text-sm font-medium">{item.mgmt_no}</div>
+                    {item.building_name && (
+                      <div className="mt-1 max-w-[220px] truncate text-xs text-muted-foreground">
+                        {item.building_name}
+                      </div>
+                    )}
+                  </TableCell>
+                  <TableCell>
+                    <Badge variant="outline">
+                      {PHASE_LABEL_TEXT[item.phase] || item.phase}
+                    </Badge>
+                  </TableCell>
+                  <TableCell className="font-medium">{item.category}</TableCell>
+                  <TableCell>
+                    <div className="max-h-24 overflow-y-auto whitespace-pre-wrap break-words text-sm">
+                      {item.content}
+                    </div>
+                  </TableCell>
+                  <TableCell className="text-center">
+                    <select
+                      className={`h-9 w-full rounded-md border px-2 text-sm ${OPINION_SEVERITY_STYLE[item.severity]}`}
+                      value={item.severity}
+                      disabled={savingId === item.id}
+                      onChange={(e) =>
+                        updateSeverity(item, e.target.value as OpinionSeverity)
+                      }
+                    >
+                      {OPINION_SEVERITIES.map((severity) => (
+                        <option key={severity} value={severity}>
+                          {OPINION_SEVERITY_LABEL_TEXT[severity]}
+                        </option>
+                      ))}
+                    </select>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      )}
     </div>
   )
 }

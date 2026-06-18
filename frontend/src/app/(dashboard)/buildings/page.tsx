@@ -34,6 +34,7 @@ import { useAuthStore } from "@/stores/authStore"
 
 const RESULT_VARIANT: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
   pass: "default",
+  pass_supplement: "default",
   simple_error: "secondary",
   recalculate: "destructive",
 }

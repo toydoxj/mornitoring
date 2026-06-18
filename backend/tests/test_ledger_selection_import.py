@@ -6,6 +6,7 @@ from models.building import Building
 from models.review_opinion_detail import ReviewOpinionDetail
 from models.review_severity_summary import ReviewSeveritySummary
 from models.review_stage import PhaseType, ResultType, ReviewStage
+from models.user import UserRole
 from routers.ledger import _detect_format
 
 
@@ -276,11 +277,13 @@ def test_import_ledger_technical_reads_2026_distribution_format(db_session, tmp_
         "[구조도면 작성 적정성]\n1. 구조도면 누락 확인"
     )
     assert stages[0].stage_remarks == "판정의견: 단순오류\n관리원 입력 예비판정 결과: 보완"
-    assert stages[0].severity_l0_count == 2
+    assert stages[0].severity_l0_count == 0
+    assert stages[0].severity_l3_count == 0
     assert stages[1].result == ResultType.SIMPLE_ERROR
     assert stages[1].review_opinion == "보완 의견"
     assert stages[1].stage_remarks == "보완 비고"
-    assert stages[1].severity_l0_count == 1
+    assert stages[1].severity_l0_count == 0
+    assert stages[1].severity_l3_count == 0
 
     summary_rows = (
         db_session.query(ReviewSeveritySummary)
@@ -289,14 +292,7 @@ def test_import_ledger_technical_reads_2026_distribution_format(db_session, tmp_
         .order_by(ReviewStage.phase_order, ReviewSeveritySummary.category)
         .all()
     )
-    assert [
-        (row.category, row.severity, row.count)
-        for row in summary_rows
-    ] == [
-        ("구조도면 작성 적정성", "L0", 1),
-        ("하중 적정성", "L0", 1),
-        ("기타의견", "L0", 1),
-    ]
+    assert summary_rows == []
 
     detail_rows = (
         db_session.query(ReviewOpinionDetail)
@@ -309,9 +305,9 @@ def test_import_ledger_technical_reads_2026_distribution_format(db_session, tmp_
         (row.phase_group, row.category, row.severity, row.content)
         for row in detail_rows
     ] == [
-        ("preliminary", "하중 적정성", "L0", "활하중 확인 필요"),
-        ("preliminary", "구조도면 작성 적정성", "L0", "구조도면 누락 확인"),
-        ("supplement", "기타의견", "L0", "보완 의견"),
+        ("preliminary", "하중 적정성", "NA", "활하중 확인 필요"),
+        ("preliminary", "구조도면 작성 적정성", "NA", "구조도면 누락 확인"),
+        ("supplement", "기타의견", "NA", "보완 의견"),
     ]
 
 
@@ -349,6 +345,29 @@ def test_import_ledger_technical_updates_existing_rows_and_cleans_excel_newlines
     first_result = import_ledger_technical(path, db_session)
     assert first_result["imported"] == 1
     assert first_result["updated"] == 0
+    first_stage = (
+        db_session.query(ReviewStage)
+        .join(Building, ReviewStage.building_id == Building.id)
+        .filter(Building.mgmt_no == "2026-0001", ReviewStage.phase == PhaseType.PRELIMINARY)
+        .one()
+    )
+    first_stage.severity_l3_count = 1
+    db_session.add(ReviewOpinionDetail(
+        stage_id=first_stage.id,
+        phase=PhaseType.PRELIMINARY.value,
+        phase_group="preliminary",
+        row_number=1,
+        category="하중 적정성",
+        severity="L3",
+        content="기존 자동 분류",
+    ))
+    db_session.add(ReviewSeveritySummary(
+        stage_id=first_stage.id,
+        category="하중 적정성",
+        severity="L3",
+        count=1,
+    ))
+    db_session.commit()
 
     ws["O5"] = "수정된 건물명"
     ws["AU5"] = "재계산"
@@ -371,10 +390,77 @@ def test_import_ledger_technical_updates_existing_rows_and_cleans_excel_newlines
     assert "_x000D_" not in (stage.review_opinion or "")
     assert stage.review_opinion == "[하중 적정성]\n1. 수정 의견"
     assert stage.stage_remarks == "판정의견: 재계산\n관리원 입력 예비판정 결과: 보완"
-    assert stage.severity_l3_count == 1
+    assert stage.severity_l3_count == 0
     assert stage.severity_l0_count == 0
 
     detail = db_session.query(ReviewOpinionDetail).filter_by(stage_id=stage.id).one()
     assert detail.category == "하중 적정성"
-    assert detail.severity == "L3"
+    assert detail.severity == "NA"
     assert detail.content == "수정 의견"
+    assert db_session.query(ReviewSeveritySummary).filter_by(stage_id=stage.id).count() == 0
+
+
+def test_opinion_detail_severity_can_be_assigned_manually(
+    client,
+    db_session,
+    make_user,
+    make_building,
+):
+    _, headers = make_user(UserRole.CHIEF_SECRETARY)
+    building = make_building(mgmt_no="OPINION-SEV-001")
+    stage = ReviewStage(
+        building_id=building.id,
+        phase=PhaseType.PRELIMINARY,
+        phase_order=0,
+        result=ResultType.SIMPLE_ERROR,
+    )
+    db_session.add(stage)
+    db_session.flush()
+    detail = ReviewOpinionDetail(
+        stage_id=stage.id,
+        phase=PhaseType.PRELIMINARY.value,
+        phase_group="preliminary",
+        row_number=1,
+        category="하중 적정성",
+        severity="NA",
+        content="활하중 확인 필요",
+    )
+    db_session.add(detail)
+    db_session.commit()
+
+    list_res = client.get(
+        "/api/reviews/opinion-details",
+        headers=headers,
+        params={"severity": "NA", "search": "OPINION-SEV-001"},
+    )
+    assert list_res.status_code == 200
+    assert list_res.json()["total"] == 1
+
+    patch_res = client.patch(
+        f"/api/reviews/opinion-details/{detail.id}/severity",
+        headers=headers,
+        json={"severity": "L2"},
+    )
+    assert patch_res.status_code == 200
+    assert patch_res.json()["severity"] == "L2"
+
+    db_session.refresh(stage)
+    db_session.refresh(detail)
+    assert stage.severity_l2_count == 1
+    assert detail.severity == "L2"
+    summary = db_session.query(ReviewSeveritySummary).filter_by(stage_id=stage.id).one()
+    assert summary.category == "하중 적정성"
+    assert summary.severity == "L2"
+    assert summary.count == 1
+
+    reset_res = client.patch(
+        f"/api/reviews/opinion-details/{detail.id}/severity",
+        headers=headers,
+        json={"severity": "NA"},
+    )
+    assert reset_res.status_code == 200
+    db_session.refresh(stage)
+    db_session.refresh(detail)
+    assert stage.severity_l2_count == 0
+    assert detail.severity == "NA"
+    assert db_session.query(ReviewSeveritySummary).filter_by(stage_id=stage.id).count() == 0

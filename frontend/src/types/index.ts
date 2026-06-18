@@ -211,8 +211,12 @@ export const PHASE_LABELS: Record<string, string> = {
 }
 
 // 결과 한글 라벨
-export const RESULT_LABELS: Record<ResultType, string> = {
+export const RESULT_LABELS: Record<string, string> = {
   pass: "적합",
+  pass_supplement: "보완적합",
   simple_error: "단순오류",
   recalculate: "재계산",
+  fail: "부적합",
+  fail_no_response: "부적합(미회신)",
+  excluded: "대상제외",
 }

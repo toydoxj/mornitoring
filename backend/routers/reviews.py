@@ -7,6 +7,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query
 from pydantic import BaseModel
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from database import get_db
@@ -110,6 +111,9 @@ from services.scope import (
 )
 
 router = APIRouter()
+SEVERITY_LABELS = ("L0", "L1", "L2", "L3", "L4")
+UNCLASSIFIED_SEVERITY = "NA"
+EDITABLE_SEVERITIES = {*SEVERITY_LABELS, UNCLASSIFIED_SEVERITY}
 
 
 class SeveritySummaryResponse(BaseModel):
@@ -144,6 +148,30 @@ class ReviewStageResponse(BaseModel):
     inappropriate_decision: str | None = None
 
     model_config = {"from_attributes": True}
+
+
+class OpinionDetailResponse(BaseModel):
+    id: int
+    stage_id: int
+    building_id: int
+    mgmt_no: str
+    building_name: str | None = None
+    phase: str
+    phase_group: str
+    row_number: int | None = None
+    category: str
+    severity: str
+    content: str
+    result: str | None = None
+
+
+class OpinionDetailListResponse(BaseModel):
+    items: list[OpinionDetailResponse]
+    total: int
+
+
+class OpinionSeverityUpdate(BaseModel):
+    severity: str
 
 
 class FieldChange(BaseModel):
@@ -565,12 +593,191 @@ def _apply_opinion_details(
         ))
 
 
+def _normalize_editable_severity(value: str | None) -> str:
+    severity = (value or "").strip().upper()
+    if severity in ("", "UNCLASSIFIED", "NONE"):
+        return UNCLASSIFIED_SEVERITY
+    if severity not in EDITABLE_SEVERITIES:
+        raise HTTPException(status_code=400, detail="허용되지 않는 심각도입니다")
+    return severity
+
+
+def _rebuild_stage_severity_from_details(db: Session, stage: ReviewStage) -> None:
+    if stage.id is None:
+        db.add(stage)
+        db.flush()
+
+    db.query(ReviewSeveritySummary).filter(
+        ReviewSeveritySummary.stage_id == stage.id
+    ).delete(synchronize_session="fetch")
+    db.flush()
+
+    counts_by_severity = {label: 0 for label in SEVERITY_LABELS}
+    rows = (
+        db.query(
+            ReviewOpinionDetail.category,
+            ReviewOpinionDetail.severity,
+            func.count(ReviewOpinionDetail.id),
+        )
+        .filter(
+            ReviewOpinionDetail.stage_id == stage.id,
+            ReviewOpinionDetail.severity.in_(SEVERITY_LABELS),
+        )
+        .group_by(ReviewOpinionDetail.category, ReviewOpinionDetail.severity)
+        .all()
+    )
+
+    for category, severity, count in rows:
+        count_value = int(count or 0)
+        if count_value <= 0:
+            continue
+        counts_by_severity[severity] += count_value
+        db.add(ReviewSeveritySummary(
+            stage_id=stage.id,
+            category=category,
+            severity=severity,
+            count=count_value,
+        ))
+
+    for label in SEVERITY_LABELS:
+        setattr(stage, f"severity_{label.lower()}_count", counts_by_severity[label])
+
+
+def _opinion_detail_response(
+    detail: ReviewOpinionDetail,
+    stage: ReviewStage,
+    building: Building,
+) -> OpinionDetailResponse:
+    phase = stage.phase.value if hasattr(stage.phase, "value") else str(stage.phase)
+    result = stage.result.value if stage.result else None
+    return OpinionDetailResponse(
+        id=detail.id,
+        stage_id=stage.id,
+        building_id=building.id,
+        mgmt_no=building.mgmt_no,
+        building_name=building.building_name,
+        phase=phase,
+        phase_group=detail.phase_group,
+        row_number=detail.row_number,
+        category=detail.category,
+        severity=detail.severity,
+        content=detail.content,
+        result=result,
+    )
+
+
 def _resolve_inappropriate_review_needed(
     stage: ReviewStage | None,
     requested_value: bool,
 ) -> bool:
     """부적정 사례 검토 필요 체크는 검토서 재업로드로 해제할 수 없게 보존."""
     return bool(requested_value or (stage and stage.inappropriate_review_needed))
+
+
+@router.get("/opinion-details", response_model=OpinionDetailListResponse)
+def list_opinion_details(
+    search: str | None = None,
+    severity: str | None = None,
+    phase_group: str | None = None,
+    page: int = Query(1, ge=1),
+    size: int = Query(50, ge=1, le=200),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(
+        require_roles(
+            UserRole.TEAM_LEADER,
+            UserRole.CHIEF_SECRETARY,
+            UserRole.SECRETARY,
+            UserRole.MANAGER,
+        )
+    ),
+):
+    query = (
+        db.query(ReviewOpinionDetail, ReviewStage, Building)
+        .join(ReviewStage, ReviewOpinionDetail.stage_id == ReviewStage.id)
+        .join(Building, ReviewStage.building_id == Building.id)
+    )
+    visibility = building_visibility_filter(current_user)
+    if visibility is not None:
+        query = query.filter(visibility)
+
+    if severity:
+        query = query.filter(
+            ReviewOpinionDetail.severity == _normalize_editable_severity(severity)
+        )
+    if phase_group:
+        if phase_group not in ("preliminary", "supplement"):
+            raise HTTPException(status_code=400, detail="허용되지 않는 단계 구분입니다")
+        query = query.filter(ReviewOpinionDetail.phase_group == phase_group)
+    if search:
+        pattern = f"%{search.strip()}%"
+        query = query.filter(or_(
+            Building.mgmt_no.ilike(pattern),
+            Building.building_name.ilike(pattern),
+            ReviewOpinionDetail.category.ilike(pattern),
+            ReviewOpinionDetail.content.ilike(pattern),
+        ))
+
+    total = query.count()
+    rows = (
+        query.order_by(
+            Building.mgmt_no,
+            ReviewStage.phase_order,
+            ReviewOpinionDetail.row_number,
+            ReviewOpinionDetail.id,
+        )
+        .offset((page - 1) * size)
+        .limit(size)
+        .all()
+    )
+    return OpinionDetailListResponse(
+        items=[
+            _opinion_detail_response(detail, stage, building)
+            for detail, stage, building in rows
+        ],
+        total=total,
+    )
+
+
+@router.patch("/opinion-details/{detail_id}/severity", response_model=OpinionDetailResponse)
+def update_opinion_detail_severity(
+    detail_id: int,
+    body: OpinionSeverityUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(
+        require_roles(
+            UserRole.TEAM_LEADER,
+            UserRole.CHIEF_SECRETARY,
+            UserRole.SECRETARY,
+            UserRole.MANAGER,
+        )
+    ),
+):
+    severity = _normalize_editable_severity(body.severity)
+    query = (
+        db.query(ReviewOpinionDetail, ReviewStage, Building)
+        .join(ReviewStage, ReviewOpinionDetail.stage_id == ReviewStage.id)
+        .join(Building, ReviewStage.building_id == Building.id)
+        .filter(ReviewOpinionDetail.id == detail_id)
+    )
+    visibility = building_visibility_filter(current_user)
+    if visibility is not None:
+        query = query.filter(visibility)
+
+    row = query.first()
+    if row is None:
+        raise HTTPException(status_code=404, detail="의견 상세를 찾을 수 없습니다")
+
+    detail, stage, building = row
+    detail.severity = severity
+    _rebuild_stage_severity_from_details(db, stage)
+
+    from routers.buildings import clear_stats_cache
+
+    clear_stats_cache()
+    db.commit()
+    db.refresh(detail)
+    db.refresh(stage)
+    return _opinion_detail_response(detail, stage, building)
 
 
 @router.post("/upload", response_model=UploadResponse)

@@ -402,6 +402,10 @@ def _stats_cache_set(db: Session, key: tuple[str, str], payload: dict[str, objec
     _STATS_CACHE[key] = (monotonic(), payload)
 
 
+def clear_stats_cache() -> None:
+    _STATS_CACHE.clear()
+
+
 def _release_read_connection(db: Session) -> None:
     """읽기 전용 후처리 동안 DB 커넥션을 오래 점유하지 않도록 반환한다."""
     db.rollback()
@@ -1698,6 +1702,74 @@ def change_building_phase(
     if log is None:
         # from == to 인 경우 — 사용자에게 알리되 200으로 반환 (멱등 처리)
         pass
+    registered_names = _get_registered_names(db)
+    return _to_response(building, registered_names)
+
+
+@router.post("/{building_id}/finalize-pass", response_model=BuildingResponse)
+def finalize_pass_building(
+    building_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(UserRole.CHIEF_SECRETARY)),
+):
+    """최신 판정이 적합인 건을 총괄간사가 수동으로 최종 완료 처리한다."""
+    from models.phase_transition_log import PhaseTransitionLog
+    from models.review_stage import PhaseType, ResultType, ReviewStage
+
+    building = db.query(Building).filter(Building.id == building_id).first()
+    if not building:
+        raise HTTPException(status_code=404, detail="건축물을 찾을 수 없습니다")
+
+    latest_stage = (
+        db.query(ReviewStage)
+        .filter(
+            ReviewStage.building_id == building.id,
+            ReviewStage.result.isnot(None),
+        )
+        .order_by(ReviewStage.phase_order.desc())
+        .first()
+    )
+    if latest_stage is None:
+        raise HTTPException(status_code=400, detail="판정된 검토 단계가 없습니다")
+    if latest_stage.result != ResultType.PASS:
+        raise HTTPException(status_code=400, detail="최근 판정이 적합인 경우만 최종완료 처리할 수 있습니다")
+
+    final_result = (
+        "pass"
+        if latest_stage.phase == PhaseType.PRELIMINARY
+        else "pass_supplement"
+    )
+    previous_phase = building.current_phase
+    building.final_result = final_result
+    building.current_phase = "completed"
+
+    ip = request.client.host if request.client and request.client.host else None
+    db.add(PhaseTransitionLog(
+        building_id=building.id,
+        mgmt_no=building.mgmt_no,
+        from_phase=previous_phase,
+        to_phase="completed",
+        trigger="manual",
+        actor_user_id=current_user.id,
+        ip_address=ip,
+        reason=f"finalize_pass:{final_result}",
+    ))
+    log_action(
+        db,
+        current_user.id,
+        "finalize_pass",
+        "building",
+        building.id,
+        after_data={
+            "mgmt_no": building.mgmt_no,
+            "latest_phase": latest_stage.phase.value,
+            "final_result": final_result,
+        },
+    )
+    clear_stats_cache()
+    db.commit()
+    db.refresh(building)
     registered_names = _get_registered_names(db)
     return _to_response(building, registered_names)
 
