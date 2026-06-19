@@ -1781,6 +1781,10 @@ def update_building(
     building = db.query(Building).filter(Building.id == building_id).first()
     if not building:
         raise HTTPException(status_code=404, detail="건축물을 찾을 수 없습니다")
+    if current_user.role == UserRole.SECRETARY and not is_building_visible_to(
+        current_user, building, db
+    ):
+        raise HTTPException(status_code=404, detail="건축물을 찾을 수 없습니다")
 
     update_data = body.model_dump(exclude_unset=True)
     for key, value in update_data.items():

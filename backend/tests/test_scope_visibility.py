@@ -630,3 +630,84 @@ def test_secretary_reviewer_names_filtered_by_group(
     names = res.json()
     assert "조1위원" in names
     assert "조2위원" not in names
+
+
+def test_secretary_cannot_see_hidden_reviewer_even_same_group(
+    client, db_session, make_user, make_reviewer, make_building
+):
+    sec, sec_h = make_user(UserRole.SECRETARY)
+    sec.group_no = 1
+    visible_user, visible_rev, _ = make_reviewer()
+    visible_user.name = "공개위원"
+    visible_rev.group_no = 1
+    hidden_user, hidden_rev, _ = make_reviewer()
+    hidden_user.name = "조미정"
+    hidden_rev.group_no = 1
+    db_session.commit()
+
+    visible_building = make_building(
+        mgmt_no="VISIBLE-REVIEWER", reviewer_id=visible_rev.id
+    )
+    hidden_building = make_building(
+        mgmt_no="HIDDEN-REVIEWER", reviewer_id=hidden_rev.id
+    )
+    visible_building.assigned_reviewer_name = visible_user.name
+    hidden_building.assigned_reviewer_name = hidden_user.name
+    db_session.commit()
+
+    res = client.get("/api/buildings", headers=sec_h)
+    assert res.status_code == 200
+    mgmt_nos = {item["mgmt_no"] for item in res.json()["items"]}
+    assert visible_building.mgmt_no in mgmt_nos
+    assert hidden_building.mgmt_no not in mgmt_nos
+
+    detail_res = client.get(f"/api/buildings/{hidden_building.id}", headers=sec_h)
+    assert detail_res.status_code == 404
+    patch_res = client.patch(
+        f"/api/buildings/{hidden_building.id}",
+        headers=sec_h,
+        json={"remarks": "hidden update"},
+    )
+    assert patch_res.status_code == 404
+
+    names_res = client.get("/api/buildings/reviewer-names", headers=sec_h)
+    assert names_res.status_code == 200
+    names = names_res.json()
+    assert "공개위원" in names
+    assert "조미정" not in names
+
+    schedule_res = client.get("/api/buildings/reviewer-schedule", headers=sec_h)
+    assert schedule_res.status_code == 200
+    schedule_names = {row["reviewer_name"] for row in schedule_res.json()}
+    assert "공개위원" in schedule_names
+    assert "조미정" not in schedule_names
+
+
+def test_unassigned_secretary_still_cannot_see_hidden_reviewer(
+    client, db_session, make_user, make_reviewer, make_building
+):
+    sec, sec_h = make_user(UserRole.SECRETARY)
+    sec.group_no = None
+    visible_user, visible_rev, _ = make_reviewer()
+    visible_user.name = "다른조위원"
+    visible_rev.group_no = 2
+    hidden_user, hidden_rev, _ = make_reviewer()
+    hidden_user.name = "조미정"
+    hidden_rev.group_no = 3
+    db_session.commit()
+
+    visible_building = make_building(
+        mgmt_no="UNASSIGNED-SEC-VISIBLE", reviewer_id=visible_rev.id
+    )
+    hidden_building = make_building(
+        mgmt_no="UNASSIGNED-SEC-HIDDEN", reviewer_id=hidden_rev.id
+    )
+    visible_building.assigned_reviewer_name = visible_user.name
+    hidden_building.assigned_reviewer_name = hidden_user.name
+    db_session.commit()
+
+    res = client.get("/api/buildings", headers=sec_h)
+    assert res.status_code == 200
+    mgmt_nos = {item["mgmt_no"] for item in res.json()["items"]}
+    assert visible_building.mgmt_no in mgmt_nos
+    assert hidden_building.mgmt_no not in mgmt_nos

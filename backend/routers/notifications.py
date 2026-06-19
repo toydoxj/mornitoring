@@ -15,6 +15,7 @@ from routers.auth import get_current_user, require_roles
 from logging_config import log_event
 from services.kakao import ensure_valid_token, send_message_to_friends, send_message_to_self
 from services.scope import (
+    secretary_hidden_user_ids_subquery,
     visible_building_ids_subquery,
     visible_reviewer_user_ids,
 )
@@ -541,6 +542,7 @@ def list_notifications(
 
     user_visibility = visible_reviewer_user_ids(current_user)
     building_visibility_ids = visible_building_ids_subquery(current_user)
+    hidden_user_ids = secretary_hidden_user_ids_subquery(current_user)
     if user_visibility is not None or building_visibility_ids is not None:
         from sqlalchemy import select as _select
         # 가시 reviewer user_id 셋 + 가시 building_id 셋 중 하나라도 매치
@@ -557,6 +559,13 @@ def list_notifications(
             )
         if clauses:
             query = query.filter(or_(*clauses))
+    if hidden_user_ids is not None:
+        query = query.filter(
+            or_(
+                NotificationLog.recipient_id.is_(None),
+                NotificationLog.recipient_id.not_in(hidden_user_ids),
+            )
+        )
 
     if is_sent is not None:
         query = query.filter(NotificationLog.is_sent == is_sent)
