@@ -18,6 +18,7 @@ from models.review_severity_summary import ReviewSeveritySummary
 from models.review_stage import ReviewStage, PhaseType, ResultType
 from services.phase_transition import transition_phase
 from engines.column_mapping import col_letter_to_index
+from engines.opinion_text import clean_opinion_detail_content
 
 DATA_START_ROW = 5
 SHEET_NAME = "관리대장"
@@ -264,7 +265,7 @@ def _replace_ledger_opinion_details(
     phase_group = "preliminary" if phase == PhaseType.PRELIMINARY else "supplement"
     for index, entry in enumerate(_parse_ledger_opinion_entries(opinion_text or ""), start=1):
         category = str(entry.get("category") or "").strip()
-        content = str(entry.get("content") or "").strip()
+        content = clean_opinion_detail_content(entry.get("content"))
         if not category or not content:
             continue
         db.add(ReviewOpinionDetail(

@@ -21,6 +21,7 @@ from models.user import User, UserRole
 from routers.auth import get_current_user, require_roles
 from engines.review_validator import validate_review_file
 from engines.review_extractor import extract_review_data
+from engines.opinion_text import clean_opinion_detail_content
 
 
 def _ensure_reviewer_can_access_building(
@@ -577,7 +578,7 @@ def _apply_opinion_details(
     for row in rows:
         category = str(row.get("category") or "").strip()
         severity = str(row.get("severity") or "").strip().upper()
-        content = str(row.get("content") or "").strip()
+        content = clean_opinion_detail_content(row.get("content"))
         if not category or severity not in valid_severities or not content:
             continue
         raw_row_number = row.get("row")
