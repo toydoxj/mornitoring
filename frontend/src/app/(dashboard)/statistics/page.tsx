@@ -18,7 +18,7 @@ import apiClient from "@/lib/api/client"
 import { useAuthStore } from "@/stores/authStore"
 import { RESULT_LABELS, type PhaseType } from "@/types"
 
-type ActiveTab = "reviewer" | "regional" | "severity" | "keyword" | "opinion"
+type ActiveTab = "reviewer" | "regional" | "severity" | "keyword" | "quality" | "opinion"
 type RegionalTab = "area" | "floors" | "risk"
 type SeverityLabel = "L0" | "L1" | "L2" | "L3" | "L4"
 type OpinionSeverity = "NA" | SeverityLabel
@@ -118,6 +118,51 @@ interface KeywordStats {
   by_keyword: KeywordStat[]
 }
 
+interface OpinionQualityCategoryStat {
+  category: string
+  count: number
+}
+
+interface OpinionQualityTermStat {
+  term: string
+  count: number
+}
+
+interface OpinionQualityTagStat {
+  tag: string
+  count: number
+}
+
+interface OpinionQualityLevelStat {
+  level: string
+  count: number
+}
+
+interface OpinionQualityItem {
+  id: number
+  mgmt_no: string
+  group_no: number | null
+  reviewer_name: string | null
+  opinion: string
+  matched_terms: string[]
+  matched_categories: string[]
+  matched_tags: string[]
+  matched_levels: string[]
+  recommended_replacements: string[]
+  checked: boolean
+}
+
+interface OpinionQualityStats {
+  total_details: number
+  flagged_details: number
+  clean_details: number
+  by_category: OpinionQualityCategoryStat[]
+  by_tag: OpinionQualityTagStat[]
+  by_level: OpinionQualityLevelStat[]
+  by_term: OpinionQualityTermStat[]
+  items: OpinionQualityItem[]
+}
+
 interface OpinionDetailItem {
   id: number
   stage_id: number
@@ -143,6 +188,7 @@ interface StatsResponse {
   regional_stats: RegionalStats
   severity_stats: SeverityStats
   keyword_stats: KeywordStats
+  opinion_quality_stats: OpinionQualityStats
 }
 
 interface RegionalColumn<T extends string> {
@@ -242,6 +288,7 @@ const TAB_TITLES: Record<ActiveTab, string> = {
   regional: "지역별 통계",
   severity: "심각도 통계",
   keyword: "키워드 분석",
+  quality: "검토의견 표현 품질",
   opinion: "의견 심각도 지정",
 }
 
@@ -291,7 +338,7 @@ export default function StatisticsPage() {
       <div>
         <h1 className="text-2xl font-bold">통계자료</h1>
         <p className="text-sm text-muted-foreground">
-          검토위원별 현황, 지역별 통계, 심각도, 키워드 분석
+          검토위원별 현황, 지역별 통계, 심각도, 키워드, 표현 품질
         </p>
       </div>
 
@@ -311,6 +358,9 @@ export default function StatisticsPage() {
         </TabButton>
         <TabButton value="keyword" activeValue={activeTab} onSelect={setActiveTab}>
           키워드 분석
+        </TabButton>
+        <TabButton value="quality" activeValue={activeTab} onSelect={setActiveTab}>
+          표현 품질
         </TabButton>
         <TabButton value="opinion" activeValue={activeTab} onSelect={setActiveTab}>
           의견 심각도 지정
@@ -344,6 +394,12 @@ export default function StatisticsPage() {
             <KeywordStatsView
               isLoading={isLoading}
               stats={stats?.keyword_stats || null}
+            />
+          )}
+          {activeTab === "quality" && (
+            <OpinionQualityStatsView
+              isLoading={isLoading}
+              stats={stats?.opinion_quality_stats || null}
             />
           )}
           {activeTab === "opinion" && (
@@ -868,12 +924,14 @@ function KeywordSummaryCard({
 }: {
   label: string
   value: number
-  tone: "slate" | "blue" | "amber"
+  tone: "slate" | "blue" | "amber" | "emerald" | "red"
 }) {
   const toneClass = {
     slate: "border-slate-200 bg-slate-50 text-slate-800",
     blue: "border-blue-200 bg-blue-50 text-blue-800",
     amber: "border-amber-200 bg-amber-50 text-amber-800",
+    emerald: "border-emerald-200 bg-emerald-50 text-emerald-800",
+    red: "border-red-200 bg-red-50 text-red-800",
   }[tone]
 
   return (
@@ -883,6 +941,264 @@ function KeywordSummaryCard({
         {value.toLocaleString()}
         <span className="ml-1 text-sm font-normal">건</span>
       </p>
+    </div>
+  )
+}
+
+function OpinionQualityStatsView({
+  isLoading,
+  stats,
+}: {
+  isLoading: boolean
+  stats: OpinionQualityStats | null
+}) {
+  const [checkedIds, setCheckedIds] = useState<Set<number>>(new Set())
+
+  if (isLoading) {
+    return <LoadingMessage />
+  }
+  if (!stats || stats.total_details === 0) {
+    return <EmptyMessage>표현 품질 분석 자료가 없습니다.</EmptyMessage>
+  }
+
+  const flaggedRate = formatPercent(stats.flagged_details, stats.total_details)
+  const checkedCount = stats.items.filter(
+    (item) => checkedIds.has(item.id) || item.checked,
+  ).length
+  const toggleChecked = (id: number) => {
+    setCheckedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) {
+        next.delete(id)
+      } else {
+        next.add(id)
+      }
+      return next
+    })
+  }
+
+  return (
+    <div className="space-y-5">
+      <div className="grid gap-3 md:grid-cols-4">
+        <KeywordSummaryCard
+          label="전체 의견"
+          value={stats.total_details}
+          tone="slate"
+        />
+        <KeywordSummaryCard
+          label="점검 대상"
+          value={stats.flagged_details}
+          tone={stats.flagged_details > 0 ? "red" : "emerald"}
+        />
+        <KeywordSummaryCard
+          label="일반 표현"
+          value={stats.clean_details}
+          tone="emerald"
+        />
+        <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-amber-800">
+          <p className="text-sm font-medium">점검 비율</p>
+          <p className="mt-1 text-2xl font-bold">{flaggedRate}</p>
+        </div>
+      </div>
+
+      <div className="grid gap-5 lg:grid-cols-3">
+        <section className="space-y-2">
+          <h2 className="text-sm font-semibold">유형별 현황</h2>
+          {stats.by_category.length === 0 ? (
+            <EmptyMessage>점검 대상 유형이 없습니다.</EmptyMessage>
+          ) : (
+            <div className="overflow-x-auto rounded-md border">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>유형</TableHead>
+                    <TableHead className="w-[90px] text-center">건수</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {stats.by_category.map((row) => (
+                    <TableRow key={row.category}>
+                      <TableCell className="font-medium">{row.category}</TableCell>
+                      <TableCell className="text-center font-semibold">
+                        {row.count}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+        </section>
+
+        <section className="space-y-2">
+          <h2 className="text-sm font-semibold">태그별 현황</h2>
+          {stats.by_tag.length === 0 ? (
+            <EmptyMessage>점검 태그가 없습니다.</EmptyMessage>
+          ) : (
+            <div className="overflow-x-auto rounded-md border">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>태그</TableHead>
+                    <TableHead className="w-[90px] text-center">건수</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {stats.by_tag.map((row) => (
+                    <TableRow key={row.tag}>
+                      <TableCell className="font-mono text-sm font-medium">
+                        {row.tag}
+                      </TableCell>
+                      <TableCell className="text-center font-semibold">
+                        {row.count}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+        </section>
+
+        <section className="space-y-2">
+          <h2 className="text-sm font-semibold">금지·주의 현황</h2>
+          {stats.by_level.length === 0 ? (
+            <EmptyMessage>점검 단계가 없습니다.</EmptyMessage>
+          ) : (
+            <div className="overflow-x-auto rounded-md border">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>단계</TableHead>
+                    <TableHead className="w-[90px] text-center">건수</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {stats.by_level.map((row) => (
+                    <TableRow key={row.level}>
+                      <TableCell className="font-medium">{row.level}</TableCell>
+                      <TableCell className="text-center font-semibold">
+                        {row.count}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+        </section>
+      </div>
+
+      <section className="space-y-2">
+        <h2 className="text-sm font-semibold">표현별 현황</h2>
+        {stats.by_term.length === 0 ? (
+          <EmptyMessage>점검 대상 표현이 없습니다.</EmptyMessage>
+        ) : (
+          <div className="overflow-x-auto rounded-md border">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>표현</TableHead>
+                  <TableHead className="w-[90px] text-center">건수</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {stats.by_term.map((row) => (
+                  <TableRow key={row.term}>
+                    <TableCell className="font-medium">{row.term}</TableCell>
+                    <TableCell className="text-center font-semibold">
+                      {row.count}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        )}
+      </section>
+
+      <section className="space-y-2">
+        <div className="flex items-center justify-between gap-3">
+          <h2 className="text-sm font-semibold">상세 목록</h2>
+          <span className="text-sm text-muted-foreground">
+            확인 {checkedCount.toLocaleString()}건 / 대상 {stats.items.length.toLocaleString()}건
+          </span>
+        </div>
+        {stats.items.length === 0 ? (
+          <EmptyMessage>점검 대상 의견이 없습니다.</EmptyMessage>
+        ) : (
+          <div className="max-h-[70vh] overflow-auto rounded-md border">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="min-w-[140px]">관리번호</TableHead>
+                  <TableHead className="w-[80px] text-center">조</TableHead>
+                  <TableHead className="min-w-[120px]">검토위원</TableHead>
+                  <TableHead className="min-w-[420px]">의견</TableHead>
+                  <TableHead className="w-[100px] text-center">확인체크</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {stats.items.map((item) => {
+                  const isChecked = checkedIds.has(item.id) || item.checked
+                  return (
+                    <TableRow key={item.id}>
+                      <TableCell className="font-mono text-sm font-medium">
+                        {item.mgmt_no}
+                      </TableCell>
+                      <TableCell className="text-center">
+                        {item.group_no ? `${item.group_no}조` : "-"}
+                      </TableCell>
+                      <TableCell className="font-medium">
+                        {item.reviewer_name || "-"}
+                      </TableCell>
+                      <TableCell>
+                        <div className="max-h-28 overflow-y-auto whitespace-pre-wrap break-words text-sm">
+                          {item.opinion}
+                        </div>
+                        <div className="mt-2 flex flex-wrap gap-1">
+                          {item.matched_levels.map((level) => (
+                            <Badge
+                              key={level}
+                              variant={level === "금지어" ? "destructive" : "secondary"}
+                            >
+                              {level}
+                            </Badge>
+                          ))}
+                          {item.matched_tags.map((tag) => (
+                            <Badge key={tag} variant="outline">
+                              {tag}
+                            </Badge>
+                          ))}
+                          {item.matched_terms.map((term) => (
+                            <Badge key={term} variant="secondary">
+                              {term}
+                            </Badge>
+                          ))}
+                        </div>
+                        {item.recommended_replacements.length > 0 && (
+                          <div className="mt-2 text-xs text-muted-foreground">
+                            권장: {item.recommended_replacements.join(", ")}
+                          </div>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-center">
+                        <input
+                          type="checkbox"
+                          className="h-4 w-4 rounded border"
+                          checked={isChecked}
+                          onChange={() => toggleChecked(item.id)}
+                          aria-label={`${item.mgmt_no} 확인`}
+                        />
+                      </TableCell>
+                    </TableRow>
+                  )
+                })}
+              </TableBody>
+            </Table>
+          </div>
+        )}
+      </section>
     </div>
   )
 }

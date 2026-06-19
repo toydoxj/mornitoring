@@ -463,6 +463,7 @@ def get_stats(
       4) 위원별 doc_received 상태 중 예비검토서 제출/미제출 (LEFT JOIN + GROUP BY)
     """
     from sqlalchemy import and_, case, func as sa_func, or_
+    from engines.opinion_quality_analyzer import match_opinion_quality
     from engines.review_keyword_analyzer import match_keywords
     from models.inquiry import Inquiry, InquiryStatus
     from models.review_opinion_detail import ReviewOpinionDetail
@@ -899,26 +900,49 @@ def get_stats(
     ]
     severity_report_max_by_phase.sort(key=lambda row: phase_order.get(row["phase"], 999))
 
-    # 6) 키워드 분석 — 저장된 상세검토 원문을 예비/보완 구분으로 집계
-    keyword_detail_rows = (
+    # 6) 키워드/표현 품질 분석 — 저장된 상세검토 원문을 예비/보완 구분으로 집계
+    opinion_detail_rows = (
         _scoped_by_building_id(
             db.query(
+                ReviewOpinionDetail.id.label("detail_id"),
                 ReviewOpinionDetail.phase_group,
                 ReviewOpinionDetail.severity,
                 ReviewOpinionDetail.content,
+                ReviewOpinionDetail.row_number,
+                Building.mgmt_no,
+                Building.assigned_reviewer_name,
+                Reviewer.group_no,
+                User.name.label("reviewer_user_name"),
             )
-            .join(ReviewStage, ReviewOpinionDetail.stage_id == ReviewStage.id),
+            .join(ReviewStage, ReviewOpinionDetail.stage_id == ReviewStage.id)
+            .join(Building, ReviewStage.building_id == Building.id)
+            .outerjoin(Reviewer, Building.reviewer_id == Reviewer.id)
+            .outerjoin(User, Reviewer.user_id == User.id),
             ReviewStage.building_id,
+        )
+        .order_by(
+            Building.mgmt_no,
+            ReviewStage.phase_order,
+            ReviewOpinionDetail.row_number,
+            ReviewOpinionDetail.id,
         )
         .all()
     )
     _release_read_connection(db)
     detail_counts = {"preliminary": 0, "supplement": 0}
     keyword_map: dict[str, dict[str, int | str]] = {}
-    for phase_group, severity, content in keyword_detail_rows:
+    quality_term_map: dict[str, dict[str, int | str]] = {}
+    quality_category_map: dict[str, dict[str, int | str]] = {}
+    quality_tag_map: dict[str, dict[str, int | str]] = {}
+    quality_level_map: dict[str, dict[str, int | str]] = {}
+    quality_items: list[dict[str, object]] = []
+    for row in opinion_detail_rows:
+        phase_group = row.phase_group
+        severity = row.severity
+        content = row.content or ""
         if phase_group in detail_counts:
             detail_counts[phase_group] += 1
-        for keyword in match_keywords(content or ""):
+        for keyword in match_keywords(content):
             item = keyword_map.setdefault(keyword, {
                 "keyword": keyword,
                 "total": 0,
@@ -935,9 +959,67 @@ def get_stats(
                 item[phase_group] = int(item[phase_group]) + 1
             if severity in SEVERITY_LABELS:
                 item[severity] = int(item[severity]) + 1
+
+        quality_matches = match_opinion_quality(content)
+        if not quality_matches:
+            continue
+
+        matched_terms = sorted({match.term for match in quality_matches})
+        matched_categories = sorted({match.category for match in quality_matches})
+        matched_tags = sorted({match.tag for match in quality_matches})
+        matched_levels = sorted({match.level for match in quality_matches})
+        recommended_replacements = sorted({
+            match.replacement
+            for match in quality_matches
+            if match.replacement
+        })
+        for term in matched_terms:
+            term_item = quality_term_map.setdefault(term, {"term": term, "count": 0})
+            term_item["count"] = int(term_item["count"]) + 1
+        for category in matched_categories:
+            category_item = quality_category_map.setdefault(
+                category,
+                {"category": category, "count": 0},
+            )
+            category_item["count"] = int(category_item["count"]) + 1
+        for tag in matched_tags:
+            tag_item = quality_tag_map.setdefault(tag, {"tag": tag, "count": 0})
+            tag_item["count"] = int(tag_item["count"]) + 1
+        for level in matched_levels:
+            level_item = quality_level_map.setdefault(level, {"level": level, "count": 0})
+            level_item["count"] = int(level_item["count"]) + 1
+        quality_items.append({
+            "id": int(row.detail_id),
+            "mgmt_no": row.mgmt_no,
+            "group_no": row.group_no,
+            "reviewer_name": row.reviewer_user_name or row.assigned_reviewer_name,
+            "opinion": content,
+            "matched_terms": matched_terms,
+            "matched_categories": matched_categories,
+            "matched_tags": matched_tags,
+            "matched_levels": matched_levels,
+            "recommended_replacements": recommended_replacements,
+            "checked": False,
+        })
     keyword_rows = sorted(
         keyword_map.values(),
         key=lambda row: (-int(row["total"]), str(row["keyword"])),
+    )
+    quality_term_rows = sorted(
+        quality_term_map.values(),
+        key=lambda row: (-int(row["count"]), str(row["term"])),
+    )
+    quality_category_rows = sorted(
+        quality_category_map.values(),
+        key=lambda row: (-int(row["count"]), str(row["category"])),
+    )
+    quality_tag_rows = sorted(
+        quality_tag_map.values(),
+        key=lambda row: (-int(row["count"]), str(row["tag"])),
+    )
+    quality_level_rows = sorted(
+        quality_level_map.values(),
+        key=lambda row: (-int(row["count"]), str(row["level"])),
     )
 
     result: dict[str, object] = {
@@ -979,9 +1061,19 @@ def get_stats(
             },
         },
         "keyword_stats": {
-            "total_details": len(keyword_detail_rows),
+            "total_details": len(opinion_detail_rows),
             "detail_counts": detail_counts,
             "by_keyword": keyword_rows,
+        },
+        "opinion_quality_stats": {
+            "total_details": len(opinion_detail_rows),
+            "flagged_details": len(quality_items),
+            "clean_details": len(opinion_detail_rows) - len(quality_items),
+            "by_category": quality_category_rows,
+            "by_tag": quality_tag_rows,
+            "by_level": quality_level_rows,
+            "by_term": quality_term_rows,
+            "items": quality_items,
         },
     }
     _stats_cache_set(db, cache_key, result)

@@ -402,6 +402,74 @@ def test_stats_returns_keyword_summary_from_opinion_details(
     assert by_keyword["누락"]["supplement"] == 1
 
 
+def test_stats_returns_opinion_quality_summary_and_details(
+    client, db_session, make_user, make_reviewer, make_building
+):
+    _, headers = make_user(UserRole.CHIEF_SECRETARY)
+    reviewer_user, reviewer, _ = make_reviewer()
+    reviewer_user.name = "품질위원"
+    reviewer.group_no = 3
+    building = make_building(reviewer_id=reviewer.id, mgmt_no="QUAL-STATS-001")
+    db_session.commit()
+
+    stage = ReviewStage(
+        building_id=building.id,
+        phase=PhaseType.PRELIMINARY,
+        phase_order=0,
+    )
+    db_session.add(stage)
+    db_session.commit()
+    db_session.refresh(stage)
+    db_session.add_all([
+        ReviewOpinionDetail(
+            stage_id=stage.id,
+            phase="preliminary",
+            phase_group="preliminary",
+            row_number=33,
+            category="기타의견",
+            severity="L0",
+            content="너무 황당한 구조계산서입니다.",
+        ),
+        ReviewOpinionDetail(
+            stage_id=stage.id,
+            phase="preliminary",
+            phase_group="preliminary",
+            row_number=34,
+            category="기타의견",
+            severity="L0",
+            content="전이보 간격 확인 필요.",
+        ),
+    ])
+    db_session.commit()
+
+    res = client.get("/api/buildings/stats", headers=headers)
+    assert res.status_code == 200
+    quality_stats = res.json()["opinion_quality_stats"]
+    by_term = {row["term"]: row["count"] for row in quality_stats["by_term"]}
+    by_category = {
+        row["category"]: row["count"]
+        for row in quality_stats["by_category"]
+    }
+
+    assert quality_stats["total_details"] == 2
+    assert quality_stats["flagged_details"] == 1
+    assert quality_stats["clean_details"] == 1
+    assert by_term["너무"] == 1
+    assert by_term["황당함"] == 1
+    assert by_category["감정적·비난성 표현"] == 1
+    assert by_category["과장 표현"] == 1
+    assert quality_stats["by_tag"] == [{"tag": "ASSERTIVE", "count": 1}, {"tag": "EMOTION", "count": 1}]
+
+    item = quality_stats["items"][0]
+    assert item["mgmt_no"] == "QUAL-STATS-001"
+    assert item["group_no"] == 3
+    assert item["reviewer_name"] == "품질위원"
+    assert item["opinion"] == "너무 황당한 구조계산서입니다."
+    assert item["matched_tags"] == ["ASSERTIVE", "EMOTION"]
+    assert "설계 의도 확인 필요" in item["recommended_replacements"]
+    assert item["checked"] is False
+
+
 def test_secretary_stats_severity_excludes_other_group(
     client, db_session, make_user, make_reviewer, make_building
 ):
@@ -485,7 +553,7 @@ def test_secretary_stats_keyword_excludes_other_group(
             row_number=33,
             category="기타의견",
             severity="L0",
-            content="지반조사서 누락",
+            content="너무 지반조사서 누락",
         ),
         ReviewOpinionDetail(
             stage_id=stage2.id,
@@ -494,7 +562,7 @@ def test_secretary_stats_keyword_excludes_other_group(
             row_number=33,
             category="기타의견",
             severity="L4",
-            content="전이보 스트럽 보완",
+            content="황당한 전이보 스트럽 보완",
         ),
     ])
     db_session.commit()
@@ -506,6 +574,13 @@ def test_secretary_stats_keyword_excludes_other_group(
     assert keyword_stats["total_details"] == 1
     assert "지반조사서" in keywords
     assert "전이보" not in keywords
+
+    quality_stats = res.json()["opinion_quality_stats"]
+    terms = {row["term"] for row in quality_stats["by_term"]}
+    assert quality_stats["total_details"] == 1
+    assert quality_stats["flagged_details"] == 1
+    assert "너무" in terms
+    assert "황당함" not in terms
 
 
 # ===== 부적합 검토 (/api/reviews/inappropriate) =====
