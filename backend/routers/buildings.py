@@ -1121,7 +1121,7 @@ def list_buildings(
     검토위원(REVIEWER)은 본인이 배정된 건물만 조회 가능. `?reviewer=` 파라미터는
     REVIEWER가 보내도 무시되어 다른 위원 데이터에 접근할 수 없다.
     """
-    from models.review_stage import ReviewStage
+    from models.review_stage import PhaseType, ReviewStage
 
     query = db.query(Building)
 
@@ -1180,6 +1180,39 @@ def list_buildings(
             latest_result_subq.c.building_id == Building.id,
         )
         order_cols = [latest_result_subq.c.latest_result]
+    elif sort_key == "report_due_date":
+        BuildingForDue = aliased(Building)
+        pending_due_conditions = [
+            (BuildingForDue.current_phase == received_phase)
+            & (ReviewStage.phase == submit_phase)
+            for received_phase, submit_phase in (
+                ("doc_received", PhaseType.PRELIMINARY),
+                ("supplement_1_received", PhaseType.SUPPLEMENT_1),
+                ("supplement_2_received", PhaseType.SUPPLEMENT_2),
+                ("supplement_3_received", PhaseType.SUPPLEMENT_3),
+                ("supplement_4_received", PhaseType.SUPPLEMENT_4),
+                ("supplement_5_received", PhaseType.SUPPLEMENT_5),
+            )
+        ]
+        pending_due_subq = (
+            db.query(
+                ReviewStage.building_id.label("building_id"),
+                func.max(ReviewStage.report_due_date).label("report_due_date"),
+            )
+            .join(BuildingForDue, BuildingForDue.id == ReviewStage.building_id)
+            .filter(
+                ReviewStage.report_submitted_at.is_(None),
+                ReviewStage.report_due_date.isnot(None),
+                or_(*pending_due_conditions),
+            )
+            .group_by(ReviewStage.building_id)
+            .subquery()
+        )
+        query = query.outerjoin(
+            pending_due_subq,
+            pending_due_subq.c.building_id == Building.id,
+        )
+        order_cols = [pending_due_subq.c.report_due_date]
     else:
         sort_map = {
             "mgmt_no": [Building.mgmt_no],
@@ -1199,10 +1232,12 @@ def list_buildings(
             "final_result": [Building.final_result],
         }
         order_cols = sort_map.get(sort_key, [Building.mgmt_no])
-    order_by = [
-        col.desc() if sort_desc else col.asc()
-        for col in order_cols
-    ]
+    order_by = []
+    for col in order_cols:
+        ordered_col = col.desc() if sort_desc else col.asc()
+        if sort_key == "report_due_date":
+            ordered_col = ordered_col.nulls_last()
+        order_by.append(ordered_col)
     if sort_key != "mgmt_no":
         order_by.append(Building.mgmt_no.asc())
 
@@ -1217,6 +1252,7 @@ def list_buildings(
     registered_names = _get_registered_names(db)
     building_ids = [building.id for building in buildings]
     latest_by_building: dict[int, ReviewStage] = {}
+    pending_by_building: dict[int, ReviewStage] = {}
     if building_ids:
         latest_stages = (
             db.query(ReviewStage)
@@ -1230,6 +1266,25 @@ def list_buildings(
         for stage in latest_stages:
             if stage.building_id not in latest_by_building:
                 latest_by_building[stage.building_id] = stage
+        pending_stages = (
+            db.query(ReviewStage)
+            .filter(
+                ReviewStage.building_id.in_(building_ids),
+                ReviewStage.report_submitted_at.is_(None),
+                ReviewStage.report_due_date.isnot(None),
+            )
+            .order_by(ReviewStage.building_id, ReviewStage.phase_order.desc())
+            .all()
+        )
+        buildings_by_id = {building.id: building for building in buildings}
+        for stage in pending_stages:
+            building = buildings_by_id.get(stage.building_id)
+            if (
+                building
+                and stage.building_id not in pending_by_building
+                and _is_current_pending_stage(building, stage)
+            ):
+                pending_by_building[stage.building_id] = stage
 
     items = []
     for building in buildings:
@@ -1238,6 +1293,9 @@ def list_buildings(
         if latest_stage and latest_stage.result:
             item["latest_result"] = latest_stage.result.value
             item["latest_inappropriate"] = bool(latest_stage.inappropriate_review_needed)
+        pending_stage = pending_by_building.get(building.id)
+        if pending_stage and pending_stage.report_due_date:
+            item["report_due_date"] = pending_stage.report_due_date.isoformat()
         items.append(item)
     return BuildingListResponse(items=items, total=total)
 

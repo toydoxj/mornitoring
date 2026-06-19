@@ -95,6 +95,7 @@ const SORTABLE_FIELDS = new Set([
   "high_risk_type",
   "current_phase",
   "latest_result",
+  "report_due_date",
   "final_result",
 ])
 
@@ -695,6 +696,19 @@ export default function BuildingsPage() {
         },
       },
       {
+        accessorKey: "report_due_date",
+        header: () => renderSortableHeader("report_due_date", "제출 예정일"),
+        size: 110,
+        cell: ({ getValue }) => {
+          const value = getValue<string | null>()
+          return value ? (
+            <span className="font-mono text-sm">{value}</span>
+          ) : (
+            <span className="text-muted-foreground">-</span>
+          )
+        },
+      },
+      {
         accessorKey: "final_result",
         header: () => renderSortableHeader("final_result", "최종완료"),
         size: 90,
@@ -885,6 +899,8 @@ export default function BuildingsPage() {
           <option value="current_phase_desc">현재단계 ↓</option>
           <option value="latest_result_asc">최근판정 ↑</option>
           <option value="latest_result_desc">최근판정 ↓</option>
+          <option value="report_due_date_asc">제출 예정일 ↑</option>
+          <option value="report_due_date_desc">제출 예정일 ↓</option>
           <option value="final_result_asc">최종완료 ↑</option>
           <option value="final_result_desc">최종완료 ↓</option>
         </select>
@@ -901,7 +917,7 @@ export default function BuildingsPage() {
       </div>
 
       {/* 테이블 */}
-      <div className="rounded-md border bg-white">
+      <div className="overflow-x-auto rounded-md border bg-white">
         <Table>
           <TableHeader>
             {table.getHeaderGroups().map((headerGroup) => (

@@ -5,6 +5,8 @@
 - GET /{id}: REVIEWER는 본인 담당이 아니면 404
 """
 
+from datetime import date
+
 from models.review_stage import PhaseType, ResultType, ReviewStage
 from models.user import UserRole
 
@@ -104,6 +106,54 @@ def test_building_list_supports_header_sort_fields(
         "HEADER-SORT-002",
         "HEADER-SORT-001",
     ]
+
+
+def test_building_list_returns_and_sorts_current_report_due_date(
+    client, db_session, make_user, make_building
+):
+    _, headers = make_user(UserRole.CHIEF_SECRETARY)
+    early = make_building(mgmt_no="DUE-SORT-001")
+    late = make_building(mgmt_no="DUE-SORT-002")
+    without_due = make_building(mgmt_no="DUE-SORT-003")
+    early.current_phase = "doc_received"
+    late.current_phase = "doc_received"
+    without_due.current_phase = "doc_received"
+    db_session.add_all([
+        ReviewStage(
+            building_id=early.id,
+            phase=PhaseType.PRELIMINARY,
+            phase_order=0,
+            report_due_date=date(2026, 7, 10),
+        ),
+        ReviewStage(
+            building_id=late.id,
+            phase=PhaseType.PRELIMINARY,
+            phase_order=0,
+            report_due_date=date(2026, 7, 20),
+        ),
+        ReviewStage(
+            building_id=early.id,
+            phase=PhaseType.SUPPLEMENT_1,
+            phase_order=1,
+            report_due_date=date(2026, 8, 1),
+        ),
+    ])
+    db_session.commit()
+
+    res = client.get(
+        "/api/buildings",
+        headers=headers,
+        params={"sort_by": "report_due_date", "sort_order": "asc"},
+    )
+    assert res.status_code == 200
+    items = res.json()["items"]
+    assert [item["mgmt_no"] for item in items[:3]] == [
+        "DUE-SORT-001",
+        "DUE-SORT-002",
+        "DUE-SORT-003",
+    ]
+    early_item = next(item for item in items if item["mgmt_no"] == "DUE-SORT-001")
+    assert early_item["report_due_date"] == "2026-07-10"
 
 
 def test_chief_secretary_can_finalize_preliminary_pass(
