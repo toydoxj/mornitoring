@@ -115,6 +115,7 @@ router = APIRouter()
 SEVERITY_LABELS = ("L0", "L1", "L2", "L3", "L4")
 UNCLASSIFIED_SEVERITY = "NA"
 EDITABLE_SEVERITIES = {*SEVERITY_LABELS, UNCLASSIFIED_SEVERITY}
+QUALITY_DECISIONS = {"suitable", "unsuitable"}
 
 
 class SeveritySummaryResponse(BaseModel):
@@ -163,6 +164,7 @@ class OpinionDetailResponse(BaseModel):
     category: str
     severity: str
     content: str
+    quality_decision: str = "unsuitable"
     result: str | None = None
 
 
@@ -173,6 +175,10 @@ class OpinionDetailListResponse(BaseModel):
 
 class OpinionSeverityUpdate(BaseModel):
     severity: str
+
+
+class OpinionQualityDecisionUpdate(BaseModel):
+    quality_decision: str
 
 
 class FieldChange(BaseModel):
@@ -663,6 +669,7 @@ def _opinion_detail_response(
         category=detail.category,
         severity=detail.severity,
         content=detail.content,
+        quality_decision=detail.quality_decision or "unsuitable",
         result=result,
     )
 
@@ -778,6 +785,52 @@ def update_opinion_detail_severity(
     db.commit()
     db.refresh(detail)
     db.refresh(stage)
+    return _opinion_detail_response(detail, stage, building)
+
+
+@router.patch(
+    "/opinion-details/{detail_id}/quality-decision",
+    response_model=OpinionDetailResponse,
+)
+def update_opinion_detail_quality_decision(
+    detail_id: int,
+    body: OpinionQualityDecisionUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(
+        require_roles(
+            UserRole.TEAM_LEADER,
+            UserRole.CHIEF_SECRETARY,
+            UserRole.SECRETARY,
+            UserRole.MANAGER,
+        )
+    ),
+):
+    decision = body.quality_decision
+    if decision not in QUALITY_DECISIONS:
+        raise HTTPException(status_code=400, detail="허용되지 않는 표현 품질 판정입니다")
+
+    query = (
+        db.query(ReviewOpinionDetail, ReviewStage, Building)
+        .join(ReviewStage, ReviewOpinionDetail.stage_id == ReviewStage.id)
+        .join(Building, ReviewStage.building_id == Building.id)
+        .filter(ReviewOpinionDetail.id == detail_id)
+    )
+    visibility = building_visibility_filter(current_user)
+    if visibility is not None:
+        query = query.filter(visibility)
+
+    row = query.first()
+    if row is None:
+        raise HTTPException(status_code=404, detail="의견 상세를 찾을 수 없습니다")
+
+    detail, stage, building = row
+    detail.quality_decision = decision
+
+    from routers.buildings import clear_stats_cache
+
+    clear_stats_cache()
+    db.commit()
+    db.refresh(detail)
     return _opinion_detail_response(detail, stage, building)
 
 

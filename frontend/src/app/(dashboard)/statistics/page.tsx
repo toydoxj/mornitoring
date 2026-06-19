@@ -23,6 +23,7 @@ type RegionalTab = "area" | "floors" | "risk"
 type SeverityLabel = "L0" | "L1" | "L2" | "L3" | "L4"
 type OpinionSeverity = "NA" | SeverityLabel
 type ReportMaxLabel = "pass" | SeverityLabel
+type OpinionQualityDecision = "suitable" | "unsuitable"
 type AreaStatKey =
   | "area_0_300"
   | "area_300_600"
@@ -149,7 +150,7 @@ interface OpinionQualityItem {
   matched_tags: string[]
   matched_levels: string[]
   recommended_replacements: string[]
-  checked: boolean
+  quality_decision: OpinionQualityDecision
 }
 
 interface OpinionQualityStats {
@@ -400,6 +401,7 @@ export default function StatisticsPage() {
             <OpinionQualityStatsView
               isLoading={isLoading}
               stats={stats?.opinion_quality_stats || null}
+              onChanged={fetchStats}
             />
           )}
           {activeTab === "opinion" && (
@@ -948,11 +950,13 @@ function KeywordSummaryCard({
 function OpinionQualityStatsView({
   isLoading,
   stats,
+  onChanged,
 }: {
   isLoading: boolean
   stats: OpinionQualityStats | null
+  onChanged: () => Promise<void>
 }) {
-  const [checkedIds, setCheckedIds] = useState<Set<number>>(new Set())
+  const [updatingId, setUpdatingId] = useState<number | null>(null)
 
   if (isLoading) {
     return <LoadingMessage />
@@ -962,19 +966,23 @@ function OpinionQualityStatsView({
   }
 
   const flaggedRate = formatPercent(stats.flagged_details, stats.total_details)
-  const checkedCount = stats.items.filter(
-    (item) => checkedIds.has(item.id) || item.checked,
-  ).length
-  const toggleChecked = (id: number) => {
-    setCheckedIds((prev) => {
-      const next = new Set(prev)
-      if (next.has(id)) {
-        next.delete(id)
-      } else {
-        next.add(id)
-      }
-      return next
-    })
+  const updateQualityDecision = async (
+    item: OpinionQualityItem,
+    qualityDecision: OpinionQualityDecision,
+  ) => {
+    if (item.quality_decision === qualityDecision) return
+    setUpdatingId(item.id)
+    try {
+      await apiClient.patch(
+        `/api/reviews/opinion-details/${item.id}/quality-decision`,
+        { quality_decision: qualityDecision },
+      )
+      await onChanged()
+    } catch (err) {
+      console.error("표현 품질 판정 저장 실패:", err)
+    } finally {
+      setUpdatingId(null)
+    }
   }
 
   return (
@@ -1121,7 +1129,7 @@ function OpinionQualityStatsView({
         <div className="flex items-center justify-between gap-3">
           <h2 className="text-sm font-semibold">상세 목록</h2>
           <span className="text-sm text-muted-foreground">
-            확인 {checkedCount.toLocaleString()}건 / 대상 {stats.items.length.toLocaleString()}건
+            통계 포함 {stats.items.length.toLocaleString()}건
           </span>
         </div>
         {stats.items.length === 0 ? (
@@ -1135,12 +1143,12 @@ function OpinionQualityStatsView({
                   <TableHead className="w-[80px] text-center">조</TableHead>
                   <TableHead className="min-w-[120px]">검토자</TableHead>
                   <TableHead className="min-w-[420px]">의견</TableHead>
-                  <TableHead className="w-[100px] text-center">확인체크</TableHead>
+                  <TableHead className="w-[150px] text-center">판정</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {stats.items.map((item) => {
-                  const isChecked = checkedIds.has(item.id) || item.checked
+                  const isUpdating = updatingId === item.id
                   return (
                     <TableRow key={item.id}>
                       <TableCell className="font-mono text-sm font-medium">
@@ -1183,13 +1191,32 @@ function OpinionQualityStatsView({
                         )}
                       </TableCell>
                       <TableCell className="text-center">
-                        <input
-                          type="checkbox"
-                          className="h-4 w-4 rounded border"
-                          checked={isChecked}
-                          onChange={() => toggleChecked(item.id)}
-                          aria-label={`${item.mgmt_no} 확인`}
-                        />
+                        <div className="inline-flex rounded-md border bg-background p-0.5">
+                          <Button
+                            type="button"
+                            size="xs"
+                            variant="outline"
+                            className="border-emerald-200 text-emerald-700 hover:bg-emerald-50"
+                            disabled={isUpdating}
+                            onClick={() => updateQualityDecision(item, "suitable")}
+                          >
+                            적합
+                          </Button>
+                          <Button
+                            type="button"
+                            size="xs"
+                            variant={
+                              item.quality_decision === "unsuitable"
+                                ? "destructive"
+                                : "outline"
+                            }
+                            className="ml-1"
+                            disabled={isUpdating}
+                            onClick={() => updateQualityDecision(item, "unsuitable")}
+                          >
+                            부적합
+                          </Button>
+                        </div>
                       </TableCell>
                     </TableRow>
                   )

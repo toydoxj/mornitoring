@@ -921,6 +921,7 @@ def get_stats(
                 ReviewOpinionDetail.severity,
                 ReviewOpinionDetail.content,
                 ReviewOpinionDetail.row_number,
+                ReviewOpinionDetail.quality_decision,
                 ReviewStage.reviewer_name.label("actual_reviewer_name"),
                 actual_reviewer_group_no.label("actual_reviewer_group_no"),
                 Building.mgmt_no,
@@ -950,6 +951,7 @@ def get_stats(
     quality_tag_map: dict[str, dict[str, int | str]] = {}
     quality_level_map: dict[str, dict[str, int | str]] = {}
     quality_items: list[dict[str, object]] = []
+    quality_total_details = 0
     for row in opinion_detail_rows:
         phase_group = row.phase_group
         severity = row.severity
@@ -974,6 +976,10 @@ def get_stats(
             if severity in SEVERITY_LABELS:
                 item[severity] = int(item[severity]) + 1
 
+        if row.quality_decision == "suitable":
+            continue
+
+        quality_total_details += 1
         quality_matches = match_opinion_quality(content)
         if not quality_matches:
             continue
@@ -1016,7 +1022,7 @@ def get_stats(
             "matched_tags": matched_tags,
             "matched_levels": matched_levels,
             "recommended_replacements": recommended_replacements,
-            "checked": False,
+            "quality_decision": row.quality_decision or "unsuitable",
         })
     keyword_rows = sorted(
         keyword_map.values(),
@@ -1083,9 +1089,9 @@ def get_stats(
             "by_keyword": keyword_rows,
         },
         "opinion_quality_stats": {
-            "total_details": len(opinion_detail_rows),
+            "total_details": quality_total_details,
             "flagged_details": len(quality_items),
-            "clean_details": len(opinion_detail_rows) - len(quality_items),
+            "clean_details": quality_total_details - len(quality_items),
             "by_category": quality_category_rows,
             "by_tag": quality_tag_rows,
             "by_level": quality_level_rows,

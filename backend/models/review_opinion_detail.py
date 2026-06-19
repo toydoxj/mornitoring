@@ -23,6 +23,12 @@ class ReviewOpinionDetail(Base):
     category: Mapped[str] = mapped_column(String(255), index=True, nullable=False)
     severity: Mapped[str] = mapped_column(String(2), index=True, nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
+    quality_decision: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        default="unsuitable",
+        server_default="unsuitable",
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

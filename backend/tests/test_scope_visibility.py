@@ -474,7 +474,70 @@ def test_stats_returns_opinion_quality_summary_and_details(
     assert item["opinion"] == "너무 황당한 구조계산서입니다."
     assert item["matched_tags"] == ["ASSERTIVE", "EMOTION"]
     assert "설계 의도 확인 필요" in item["recommended_replacements"]
-    assert item["checked"] is False
+    assert item["quality_decision"] == "unsuitable"
+
+
+def test_stats_opinion_quality_suitable_decision_excluded(
+    client, db_session, make_user, make_reviewer, make_building
+):
+    _, headers = make_user(UserRole.CHIEF_SECRETARY)
+    reviewer_user, reviewer, _ = make_reviewer()
+    reviewer_user.name = "판정위원"
+    reviewer.group_no = 2
+    building = make_building(
+        reviewer_id=reviewer.id,
+        mgmt_no="QUAL-DECISION-001",
+    )
+    db_session.commit()
+
+    stage = ReviewStage(
+        building_id=building.id,
+        phase=PhaseType.PRELIMINARY,
+        phase_order=0,
+        reviewer_name="판정위원",
+    )
+    db_session.add(stage)
+    db_session.commit()
+    db_session.refresh(stage)
+    detail = ReviewOpinionDetail(
+        stage_id=stage.id,
+        phase="preliminary",
+        phase_group="preliminary",
+        row_number=33,
+        category="기타의견",
+        severity="L0",
+        content="황당한 구조계산서입니다.",
+    )
+    db_session.add(detail)
+    db_session.commit()
+    db_session.refresh(detail)
+
+    before_res = client.get("/api/buildings/stats", headers=headers)
+    assert before_res.status_code == 200
+    before_quality = before_res.json()["opinion_quality_stats"]
+    assert before_quality["total_details"] == 1
+    assert before_quality["flagged_details"] == 1
+    assert before_quality["items"][0]["quality_decision"] == "unsuitable"
+
+    patch_res = client.patch(
+        f"/api/reviews/opinion-details/{detail.id}/quality-decision",
+        headers=headers,
+        json={"quality_decision": "suitable"},
+    )
+    assert patch_res.status_code == 200
+    assert patch_res.json()["quality_decision"] == "suitable"
+
+    db_session.refresh(detail)
+    assert detail.quality_decision == "suitable"
+
+    after_res = client.get("/api/buildings/stats", headers=headers)
+    assert after_res.status_code == 200
+    after_quality = after_res.json()["opinion_quality_stats"]
+    assert after_quality["total_details"] == 0
+    assert after_quality["flagged_details"] == 0
+    assert after_quality["clean_details"] == 0
+    assert after_quality["by_term"] == []
+    assert after_quality["items"] == []
 
 
 def test_stats_opinion_quality_group_uses_actual_reviewer_only(
