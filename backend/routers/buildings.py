@@ -1004,11 +1004,7 @@ def get_stats(
             level_item["count"] = int(level_item["count"]) + 1
         actual_reviewer_name = (row.actual_reviewer_name or "").strip()
         assigned_reviewer_name = row.reviewer_user_name or row.assigned_reviewer_name
-        group_no = (
-            row.actual_reviewer_group_no
-            if actual_reviewer_name and row.actual_reviewer_group_no is not None
-            else row.group_no
-        )
+        group_no = row.actual_reviewer_group_no if actual_reviewer_name else row.group_no
         quality_items.append({
             "id": int(row.detail_id),
             "mgmt_no": row.mgmt_no,

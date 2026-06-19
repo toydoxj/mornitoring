@@ -477,6 +477,50 @@ def test_stats_returns_opinion_quality_summary_and_details(
     assert item["checked"] is False
 
 
+def test_stats_opinion_quality_group_uses_actual_reviewer_only(
+    client, db_session, make_user, make_reviewer, make_building
+):
+    _, headers = make_user(UserRole.CHIEF_SECRETARY)
+    assigned_user, assigned_reviewer, _ = make_reviewer()
+    assigned_user.name = "배정위원"
+    assigned_reviewer.group_no = 3
+    building = make_building(
+        reviewer_id=assigned_reviewer.id,
+        mgmt_no="QUAL-STATS-GROUP",
+    )
+    db_session.commit()
+
+    stage = ReviewStage(
+        building_id=building.id,
+        phase=PhaseType.PRELIMINARY,
+        phase_order=0,
+        reviewer_name="외부검토자",
+    )
+    db_session.add(stage)
+    db_session.commit()
+    db_session.refresh(stage)
+    db_session.add(ReviewOpinionDetail(
+        stage_id=stage.id,
+        phase="preliminary",
+        phase_group="preliminary",
+        row_number=33,
+        category="기타의견",
+        severity="L0",
+        content="황당한 구조계산서입니다.",
+    ))
+    db_session.commit()
+
+    res = client.get("/api/buildings/stats", headers=headers)
+    assert res.status_code == 200
+    item = next(
+        row
+        for row in res.json()["opinion_quality_stats"]["items"]
+        if row["mgmt_no"] == "QUAL-STATS-GROUP"
+    )
+    assert item["reviewer_name"] == "외부검토자"
+    assert item["group_no"] is None
+
+
 def test_secretary_stats_severity_excludes_other_group(
     client, db_session, make_user, make_reviewer, make_building
 ):
