@@ -1133,7 +1133,7 @@ function OpinionQualityStatsView({
                 <TableRow>
                   <TableHead className="min-w-[140px]">관리번호</TableHead>
                   <TableHead className="w-[80px] text-center">조</TableHead>
-                  <TableHead className="min-w-[120px]">검토위원</TableHead>
+                  <TableHead className="min-w-[120px]">검토자</TableHead>
                   <TableHead className="min-w-[420px]">의견</TableHead>
                   <TableHead className="w-[100px] text-center">확인체크</TableHead>
                 </TableRow>

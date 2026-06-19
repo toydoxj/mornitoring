@@ -4,8 +4,8 @@ from time import monotonic
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
-from sqlalchemy import func, or_
-from sqlalchemy.orm import Session, load_only, selectinload
+from sqlalchemy import func, or_, select
+from sqlalchemy.orm import Session, aliased, load_only, selectinload
 
 from config import settings
 from database import get_db
@@ -901,6 +901,18 @@ def get_stats(
     severity_report_max_by_phase.sort(key=lambda row: phase_order.get(row["phase"], 999))
 
     # 6) 키워드/표현 품질 분석 — 저장된 상세검토 원문을 예비/보완 구분으로 집계
+    actual_reviewer = aliased(Reviewer)
+    actual_reviewer_user = aliased(User)
+    actual_reviewer_group_no = (
+        select(actual_reviewer.group_no)
+        .join(actual_reviewer_user, actual_reviewer.user_id == actual_reviewer_user.id)
+        .where(
+            actual_reviewer_user.role == UserRole.REVIEWER,
+            actual_reviewer_user.name == ReviewStage.reviewer_name,
+        )
+        .limit(1)
+        .scalar_subquery()
+    )
     opinion_detail_rows = (
         _scoped_by_building_id(
             db.query(
@@ -909,6 +921,8 @@ def get_stats(
                 ReviewOpinionDetail.severity,
                 ReviewOpinionDetail.content,
                 ReviewOpinionDetail.row_number,
+                ReviewStage.reviewer_name.label("actual_reviewer_name"),
+                actual_reviewer_group_no.label("actual_reviewer_group_no"),
                 Building.mgmt_no,
                 Building.assigned_reviewer_name,
                 Reviewer.group_no,
@@ -988,11 +1002,18 @@ def get_stats(
         for level in matched_levels:
             level_item = quality_level_map.setdefault(level, {"level": level, "count": 0})
             level_item["count"] = int(level_item["count"]) + 1
+        actual_reviewer_name = (row.actual_reviewer_name or "").strip()
+        assigned_reviewer_name = row.reviewer_user_name or row.assigned_reviewer_name
+        group_no = (
+            row.actual_reviewer_group_no
+            if actual_reviewer_name and row.actual_reviewer_group_no is not None
+            else row.group_no
+        )
         quality_items.append({
             "id": int(row.detail_id),
             "mgmt_no": row.mgmt_no,
-            "group_no": row.group_no,
-            "reviewer_name": row.reviewer_user_name or row.assigned_reviewer_name,
+            "group_no": group_no,
+            "reviewer_name": actual_reviewer_name or assigned_reviewer_name,
             "opinion": content,
             "matched_terms": matched_terms,
             "matched_categories": matched_categories,

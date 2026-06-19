@@ -406,16 +406,23 @@ def test_stats_returns_opinion_quality_summary_and_details(
     client, db_session, make_user, make_reviewer, make_building
 ):
     _, headers = make_user(UserRole.CHIEF_SECRETARY)
-    reviewer_user, reviewer, _ = make_reviewer()
-    reviewer_user.name = "품질위원"
-    reviewer.group_no = 3
-    building = make_building(reviewer_id=reviewer.id, mgmt_no="QUAL-STATS-001")
+    assigned_user, assigned_reviewer, _ = make_reviewer()
+    assigned_user.name = "배정위원"
+    assigned_reviewer.group_no = 3
+    actual_user, actual_reviewer, _ = make_reviewer()
+    actual_user.name = "실제검토자"
+    actual_reviewer.group_no = 5
+    building = make_building(
+        reviewer_id=assigned_reviewer.id,
+        mgmt_no="QUAL-STATS-001",
+    )
     db_session.commit()
 
     stage = ReviewStage(
         building_id=building.id,
         phase=PhaseType.PRELIMINARY,
         phase_order=0,
+        reviewer_name="실제검토자",
     )
     db_session.add(stage)
     db_session.commit()
@@ -462,8 +469,8 @@ def test_stats_returns_opinion_quality_summary_and_details(
 
     item = quality_stats["items"][0]
     assert item["mgmt_no"] == "QUAL-STATS-001"
-    assert item["group_no"] == 3
-    assert item["reviewer_name"] == "품질위원"
+    assert item["group_no"] == 5
+    assert item["reviewer_name"] == "실제검토자"
     assert item["opinion"] == "너무 황당한 구조계산서입니다."
     assert item["matched_tags"] == ["ASSERTIVE", "EMOTION"]
     assert "설계 의도 확인 필요" in item["recommended_replacements"]
