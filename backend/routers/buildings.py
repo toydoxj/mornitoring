@@ -1607,7 +1607,7 @@ def my_review_buildings(
             db.query(ReviewStage)
             .filter(
                 ReviewStage.building_id.in_(building_ids),
-                ReviewStage.report_submitted_at.isnot(None),
+                ReviewStage.result.isnot(None),
             )
             .order_by(ReviewStage.building_id, ReviewStage.phase_order.desc())
             .all()
