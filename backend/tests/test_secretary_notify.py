@@ -65,22 +65,22 @@ def test_secretary_send_to_same_group_allowed_then_blocked_for_other(
     assert detail["invalid_recipient_ids"] == [other_user.id]
 
 
-def test_secretary_send_to_hidden_same_group_reviewer_blocked(
+def test_secretary_send_to_unassigned_reviewer_blocked(
     client, db_session, make_user, make_reviewer, make_building
 ):
-    _, sec_h, same_user, *_ = _setup(
-        make_user, make_reviewer, make_building, db_session
-    )
-    same_user.name = "조미정"
+    sec, sec_h = make_user(UserRole.SECRETARY)
+    sec.group_no = 1
+    unassigned_user, unassigned_rev, _ = make_reviewer()
+    unassigned_rev.group_no = None
     db_session.commit()
 
     res = client.post(
         "/api/notifications/send", headers=sec_h,
-        json={"recipient_ids": [same_user.id], "title": "t", "message": "m"},
+        json={"recipient_ids": [unassigned_user.id], "title": "t", "message": "m"},
     )
 
     assert res.status_code == 403
-    assert res.json()["detail"]["invalid_recipient_ids"] == [same_user.id]
+    assert res.json()["detail"]["invalid_recipient_ids"] == [unassigned_user.id]
 
 
 def test_chief_secretary_send_unrestricted(
@@ -150,16 +150,19 @@ def test_secretary_review_reminder_dry_run_filters_by_group(
     assert reviewers[0]["reviewer_user_id"] == same_user.id
 
 
-def test_secretary_review_reminder_excludes_hidden_same_group_reviewer(
+def test_secretary_review_reminder_excludes_unassigned_reviewer(
     client, db_session, make_user, make_reviewer, make_building
 ):
-    _, sec_h, same_user, _, b_same, _ = _setup(
-        make_user, make_reviewer, make_building, db_session
+    sec, sec_h = make_user(UserRole.SECRETARY)
+    sec.group_no = 1
+    _, unassigned_rev, _ = make_reviewer()
+    unassigned_rev.group_no = None
+    building = make_building(
+        mgmt_no="REMINDER-UNASSIGNED", reviewer_id=unassigned_rev.id
     )
-    same_user.name = "조미정"
     today = date.today()
     db_session.add(ReviewStage(
-        building_id=b_same.id, phase=PhaseType.PRELIMINARY, phase_order=0,
+        building_id=building.id, phase=PhaseType.PRELIMINARY, phase_order=0,
         report_due_date=today + timedelta(days=1),
     ))
     db_session.commit()
@@ -290,21 +293,22 @@ def test_secretary_list_notifications_includes_related_building_match(
     assert "rel-g2" not in titles
 
 
-def test_secretary_list_notifications_excludes_hidden_recipient(
+def test_secretary_list_notifications_excludes_unassigned_recipient(
     client, db_session, make_user, make_reviewer, make_building
 ):
-    sec, sec_h, same_user, other_user, _, _ = _setup(
+    sec, sec_h, _, other_user, _, _ = _setup(
         make_user, make_reviewer, make_building, db_session
     )
-    same_user.name = "조미정"
+    unassigned_user, unassigned_rev, _ = make_reviewer()
+    unassigned_rev.group_no = None
     _, visible_rev, _ = make_reviewer()
     visible_rev.group_no = 1
     visible_building = make_building(
         mgmt_no="VISIBLE-RELATED", reviewer_id=visible_rev.id
     )
     db_session.add(NotificationLog(
-        recipient_id=same_user.id, channel="kakao", template_type="t",
-        title="hidden-recipient", message="m",
+        recipient_id=unassigned_user.id, channel="kakao", template_type="t",
+        title="unassigned-recipient", message="m",
         related_building_id=visible_building.id, is_sent=True,
     ))
     db_session.add(NotificationLog(
@@ -317,7 +321,7 @@ def test_secretary_list_notifications_excludes_hidden_recipient(
     res = client.get("/api/notifications", headers=sec_h)
     assert res.status_code == 200
     titles = [it["title"] for it in res.json()["items"]]
-    assert "hidden-recipient" not in titles
+    assert "unassigned-recipient" not in titles
     assert "visible-by-building" in titles
 
 

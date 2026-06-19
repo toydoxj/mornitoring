@@ -12,48 +12,13 @@
 
 from __future__ import annotations
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import ColumnElement
 
 from models.building import Building
 from models.reviewer import Reviewer
 from models.user import User, UserRole
-
-
-SECRETARY_HIDDEN_REVIEWER_NAMES = frozenset({"조미정"})
-
-
-def _hidden_reviewer_user_filter() -> ColumnElement[bool]:
-    """조별간사 화면/대상 목록에서 숨길 사용자 필터."""
-    return User.name.not_in(SECRETARY_HIDDEN_REVIEWER_NAMES)
-
-
-def _secretary_building_exclusion_filter() -> ColumnElement[bool]:
-    """조별간사에게 노출하지 않을 검토위원 배정 건물을 제외한다."""
-    hidden_reviewer_ids = (
-        select(Reviewer.id)
-        .join(User, Reviewer.user_id == User.id)
-        .where(User.name.in_(SECRETARY_HIDDEN_REVIEWER_NAMES))
-    )
-    return and_(
-        or_(
-            Building.reviewer_id.is_(None),
-            Building.reviewer_id.not_in(hidden_reviewer_ids),
-        ),
-        or_(
-            Building.assigned_reviewer_name.is_(None),
-            Building.assigned_reviewer_name.not_in(SECRETARY_HIDDEN_REVIEWER_NAMES),
-        ),
-    )
-
-
-def _reviewer_is_hidden_from_secretary(reviewer: Reviewer | None) -> bool:
-    return bool(
-        reviewer
-        and reviewer.user
-        and reviewer.user.name in SECRETARY_HIDDEN_REVIEWER_NAMES
-    )
 
 
 def _is_unrestricted(user: User) -> bool:
@@ -79,17 +44,14 @@ def building_visibility_filter(user: User) -> ColumnElement[bool] | None:
     리턴값이 None 이면 호출자는 필터를 건너뛴다. 그 외엔
     `query.filter(building_visibility_filter(user))` 식으로 사용.
     """
+    if _is_unrestricted(user):
+        return None
     if user.role == UserRole.SECRETARY:
-        exclusion = _secretary_building_exclusion_filter()
-        if user.group_no is None:
-            return exclusion
         # 같은 조 검토위원이 담당하는 건물 (Reviewer.group_no 기준).
         same_group_reviewer_ids = (
             select(Reviewer.id).where(Reviewer.group_no == user.group_no)
         )
-        return and_(Building.reviewer_id.in_(same_group_reviewer_ids), exclusion)
-    if _is_unrestricted(user):
-        return None
+        return Building.reviewer_id.in_(same_group_reviewer_ids)
     if user.role == UserRole.REVIEWER:
         # 검토위원은 본인 reviewer 행 매칭. Reviewer 행 미존재 사용자는 빈 결과.
         own_reviewer_id = (
@@ -102,22 +64,15 @@ def building_visibility_filter(user: User) -> ColumnElement[bool] | None:
 
 def is_building_visible_to(user: User, building: Building, db: Session) -> bool:
     """단건 가시성 검사 (404 매핑용)."""
+    if _is_unrestricted(user):
+        return True
     if user.role == UserRole.SECRETARY:
-        if building.assigned_reviewer_name in SECRETARY_HIDDEN_REVIEWER_NAMES:
+        if building.reviewer_id is None:
             return False
         reviewer = (
             db.query(Reviewer).filter(Reviewer.id == building.reviewer_id).first()
-            if building.reviewer_id is not None else None
         )
-        if _reviewer_is_hidden_from_secretary(reviewer):
-            return False
-        if user.group_no is None:
-            return True
-        if reviewer is None:
-            return False
         return bool(reviewer and reviewer.group_no == user.group_no)
-    if _is_unrestricted(user):
-        return True
     if user.role == UserRole.REVIEWER:
         reviewer = (
             db.query(Reviewer).filter(Reviewer.user_id == user.id).first()
@@ -138,11 +93,18 @@ def visible_building_ids_subquery(user: User):
     return select(Building.id).where(visibility)
 
 
-def secretary_hidden_user_ids_subquery(user: User):
-    """조별간사에게 사용자명 자체를 숨겨야 하는 user_id 셋."""
-    if user.role != UserRole.SECRETARY:
+def secretary_unassigned_reviewer_user_ids_subquery(user: User):
+    """조별간사에게 숨길 조 미편성 검토위원 user_id 셋."""
+    if user.role != UserRole.SECRETARY or user.group_no is None:
         return None
-    return select(User.id).where(User.name.in_(SECRETARY_HIDDEN_REVIEWER_NAMES))
+    return (
+        select(User.id)
+        .outerjoin(Reviewer, Reviewer.user_id == User.id)
+        .where(
+            User.role == UserRole.REVIEWER,
+            or_(Reviewer.id.is_(None), Reviewer.group_no.is_(None)),
+        )
+    )
 
 
 def visible_reviewer_user_ids(user: User) -> ColumnElement[bool] | None:
@@ -150,17 +112,14 @@ def visible_reviewer_user_ids(user: User) -> ColumnElement[bool] | None:
 
     리턴 None = 전체. 간사는 같은 조 검토위원의 user_id 만 노출.
     """
+    if _is_unrestricted(user):
+        return None
     if user.role == UserRole.SECRETARY:
-        visible_user_filter = _hidden_reviewer_user_filter()
-        if user.group_no is None:
-            return visible_user_filter
         # 같은 조 검토위원의 user_id
         same_group_user_ids = (
             select(Reviewer.user_id).where(Reviewer.group_no == user.group_no)
         )
-        return and_(User.id.in_(same_group_user_ids), visible_user_filter)
-    if _is_unrestricted(user):
-        return None
+        return User.id.in_(same_group_user_ids)
     if user.role == UserRole.REVIEWER:
         # 검토위원은 본인만
         return User.id == user.id
