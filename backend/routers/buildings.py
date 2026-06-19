@@ -685,25 +685,28 @@ def get_stats(
     )
     related_tech_coop_filter = sa_func.length(sa_func.trim(Building.struct_eng_name)) > 0
 
+    gross_area_for_stats = sa_func.coalesce(Building.gross_area, 0)
+    floors_above_for_stats = sa_func.coalesce(Building.floors_above, 0)
+
     area_stats_raw = (
         _scoped(
             db.query(
                 Building.sido.label("sido"),
                 Building.sigungu.label("sigungu"),
                 sa_func.count(Building.id).filter(
-                    and_(Building.gross_area >= 0, Building.gross_area < 300)
+                    and_(gross_area_for_stats >= 0, gross_area_for_stats < 300)
                 ).label("area_0_300"),
                 sa_func.count(Building.id).filter(
-                    and_(Building.gross_area >= 300, Building.gross_area < 600)
+                    and_(gross_area_for_stats >= 300, gross_area_for_stats < 600)
                 ).label("area_300_600"),
                 sa_func.count(Building.id).filter(
-                    and_(Building.gross_area >= 600, Building.gross_area < 1000)
+                    and_(gross_area_for_stats >= 600, gross_area_for_stats < 1000)
                 ).label("area_600_1000"),
                 sa_func.count(Building.id).filter(
-                    and_(Building.gross_area >= 1000, Building.gross_area < 5000)
+                    and_(gross_area_for_stats >= 1000, gross_area_for_stats < 5000)
                 ).label("area_1000_5000"),
                 sa_func.count(Building.id).filter(
-                    Building.gross_area >= 5000
+                    gross_area_for_stats >= 5000
                 ).label("area_5000_over"),
             )
         )
@@ -716,13 +719,13 @@ def get_stats(
                 Building.sido.label("sido"),
                 Building.sigungu.label("sigungu"),
                 sa_func.count(Building.id).filter(
-                    Building.floors_above < 6
+                    floors_above_for_stats < 6
                 ).label("floors_under_6"),
                 sa_func.count(Building.id).filter(
-                    and_(Building.floors_above >= 6, Building.floors_above < 16)
+                    and_(floors_above_for_stats >= 6, floors_above_for_stats < 16)
                 ).label("floors_6_under_16"),
                 sa_func.count(Building.id).filter(
-                    Building.floors_above >= 16
+                    floors_above_for_stats >= 16
                 ).label("floors_16_over"),
             )
         )

@@ -176,6 +176,32 @@ def test_secretary_stats_total_excludes_other_group(
     assert "부산광역시" not in area_regions
 
 
+def test_stats_counts_missing_area_and_floor_as_zero(
+    client, db_session, make_user, make_building
+):
+    _, headers = make_user(UserRole.CHIEF_SECRETARY)
+    building = make_building(mgmt_no="REG-STATS-NULL-001")
+    building.gross_area = None
+    building.floors_above = None
+    db_session.commit()
+
+    res = client.get("/api/buildings/stats", headers=headers)
+    assert res.status_code == 200
+    regional_stats = res.json()["regional_stats"]
+
+    area_total = regional_stats["area"][0]
+    assert area_total["area_0_300"] == 1
+    assert area_total["area_300_600"] == 0
+    assert area_total["area_600_1000"] == 0
+    assert area_total["area_1000_5000"] == 0
+    assert area_total["area_5000_over"] == 0
+
+    floor_total = regional_stats["floors"][0]
+    assert floor_total["floors_under_6"] == 1
+    assert floor_total["floors_6_under_16"] == 0
+    assert floor_total["floors_16_over"] == 0
+
+
 def test_stats_returns_regional_building_stats_with_total_row(
     client, db_session, make_user, make_building
 ):
