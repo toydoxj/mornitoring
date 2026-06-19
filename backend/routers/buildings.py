@@ -4,7 +4,7 @@ from time import monotonic
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session, load_only, selectinload
 
 from config import settings
@@ -45,6 +45,30 @@ def _is_current_pending_stage(building: Building, stage) -> bool:
     """건물의 현재 접수 단계와 짝이 맞는 미제출 검토서 stage인지 확인."""
     expected_phase = RECEIVED_TO_SUBMIT_PHASE.get(building.current_phase or "")
     return expected_phase is not None and _stage_phase_value(stage) == expected_phase
+
+
+def _my_assignment_filter(db: Session, current_user: User):
+    """내 검토대상용 담당 필터.
+
+    검토위원은 동명이인 위험 때문에 reviewer_id만 사용한다. 총괄간사는
+    실무상 직접 검토를 맡을 수 있으므로 이름 배정 건도 함께 포함한다.
+    """
+    reviewer = db.query(Reviewer).filter(Reviewer.user_id == current_user.id).first()
+    if current_user.role == UserRole.REVIEWER:
+        if reviewer is None:
+            return Building.id.is_(None)
+        return Building.reviewer_id == reviewer.id
+
+    filters = []
+    if reviewer is not None:
+        filters.append(Building.reviewer_id == reviewer.id)
+    if current_user.role == UserRole.CHIEF_SECRETARY:
+        filters.append(Building.assigned_reviewer_name == current_user.name)
+    if not filters:
+        return Building.id.is_(None)
+    if len(filters) == 1:
+        return filters[0]
+    return or_(*filters)
 
 
 # --- Pydantic 스키마 ---
@@ -1320,9 +1344,8 @@ def my_stats(
 ):
     """개인 대시보드 통계 (본인 담당 건물 기준).
 
-    담당 매칭은 `reviewer_id`만 사용한다. 이름 기반 OR 매칭은 동명이인
-    위험 + 권한 체크 일관성을 위해 제거됨. 관리자(SECRETARY/CHIEF/TEAM_LEADER)도
-    Reviewer 행이 없으면 빈 결과를 반환한다(본인 담당이 없으면 자연스러운 결과).
+    검토위원은 `reviewer_id`만 사용한다. 총괄간사는 실무상 직접 검토자로
+    배정될 수 있으므로 자기 이름 배정 건도 포함한다.
     """
     from datetime import date as _date
     from sqlalchemy import and_, func as sa_func, or_
@@ -1335,33 +1358,7 @@ def my_stats(
         "fail_no_response": 0,   # 부적합(미회신)
         "excluded": 0,           # 대상제외
     }
-    reviewer = db.query(Reviewer).filter(Reviewer.user_id == current_user.id).first()
-    if reviewer is None:
-        return {
-            "total": 0,
-            "total_area": 0.0,
-            "area_over_1000": 0,
-            "high_risk": 0,
-            "need_review": 0,
-            "submitted": 0,
-            "submitted_preliminary": 0,
-            "submitted_supplement": 0,
-            "elapsed_buckets": {
-                "1일": 0, "2일": 0, "3일": 0, "4일": 0, "5일": 0,
-                "6일": 0, "7일": 0, "1주": 0, "2주이상": 0,
-            },
-            "schedule_counts": {
-                "in_progress": 0,
-                "d_minus_3": 0,
-                "d_minus_2": 0,
-                "d_minus_1": 0,
-                "d_day": 0,
-                "overdue": 0,
-            },
-            "final_counts": final_counts,
-        }
-
-    reviewer_filter = Building.reviewer_id == reviewer.id
+    reviewer_filter = _my_assignment_filter(db, current_user)
     summary = (
         db.query(
             sa_func.count(Building.id).label("total"),
@@ -1518,16 +1515,12 @@ def my_review_buildings(
 ):
     """내가 배정된 검토 대상 건축물 목록 (검토위원/간사/총괄간사).
 
-    담당 매칭은 `reviewer_id`만 사용한다. 이름 기반 매칭은 동명이인 위험으로 제거.
-    Reviewer 행이 없는 사용자는 빈 결과.
+    검토위원은 `reviewer_id`만 사용한다. 총괄간사는 실무상 직접 검토자로
+    배정될 수 있으므로 자기 이름 배정 건도 포함한다.
     """
     from models.review_stage import ReviewStage
 
-    reviewer = db.query(Reviewer).filter(Reviewer.user_id == current_user.id).first()
-    if reviewer is None:
-        return BuildingListResponse(items=[], total=0)
-
-    query = db.query(Building).filter(Building.reviewer_id == reviewer.id)
+    query = db.query(Building).filter(_my_assignment_filter(db, current_user))
     pending_due_subq = None
     if sort_by == "report_due_date":
         pending_due_subq = (
