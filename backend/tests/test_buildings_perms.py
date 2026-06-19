@@ -172,3 +172,95 @@ def test_only_chief_secretary_can_finalize_pass(
 
     res = client.post(f"/api/buildings/{building.id}/finalize-pass", headers=headers)
     assert res.status_code == 403
+
+
+def test_chief_secretary_can_bulk_finalize_selected_pass_buildings(
+    client, db_session, make_user, make_building
+):
+    _, headers = make_user(UserRole.CHIEF_SECRETARY)
+    preliminary_pass = make_building(mgmt_no="BULK-FINAL-PRE-001")
+    preliminary_pass.current_phase = "preliminary"
+    supplement_pass = make_building(mgmt_no="BULK-FINAL-SUP-001")
+    supplement_pass.current_phase = "supplement_1"
+    recalculate = make_building(mgmt_no="BULK-FINAL-SKIP-001")
+    recalculate.current_phase = "preliminary"
+    db_session.add_all([
+        ReviewStage(
+            building_id=preliminary_pass.id,
+            phase=PhaseType.PRELIMINARY,
+            phase_order=0,
+            result=ResultType.PASS,
+        ),
+        ReviewStage(
+            building_id=supplement_pass.id,
+            phase=PhaseType.PRELIMINARY,
+            phase_order=0,
+            result=ResultType.RECALCULATE,
+        ),
+        ReviewStage(
+            building_id=supplement_pass.id,
+            phase=PhaseType.SUPPLEMENT_1,
+            phase_order=1,
+            result=ResultType.PASS,
+        ),
+        ReviewStage(
+            building_id=recalculate.id,
+            phase=PhaseType.PRELIMINARY,
+            phase_order=0,
+            result=ResultType.RECALCULATE,
+        ),
+    ])
+    db_session.commit()
+
+    res = client.post(
+        "/api/buildings/finalize-pass/bulk",
+        headers=headers,
+        json={
+            "building_ids": [
+                preliminary_pass.id,
+                supplement_pass.id,
+                recalculate.id,
+            ],
+        },
+    )
+
+    assert res.status_code == 200
+    body = res.json()
+    assert body["applied"] == 2
+    assert body["skipped"] == 1
+    by_mgmt_no = {item["mgmt_no"]: item for item in body["items"]}
+    assert by_mgmt_no["BULK-FINAL-PRE-001"]["final_result"] == "pass"
+    assert by_mgmt_no["BULK-FINAL-SUP-001"]["final_result"] == "pass_supplement"
+    assert by_mgmt_no["BULK-FINAL-SKIP-001"]["status"] == "skipped"
+
+    db_session.refresh(preliminary_pass)
+    db_session.refresh(supplement_pass)
+    db_session.refresh(recalculate)
+    assert preliminary_pass.final_result == "pass"
+    assert preliminary_pass.current_phase == "completed"
+    assert supplement_pass.final_result == "pass_supplement"
+    assert supplement_pass.current_phase == "completed"
+    assert recalculate.final_result is None
+    assert recalculate.current_phase == "preliminary"
+
+
+def test_only_chief_secretary_can_bulk_finalize_pass(
+    client, db_session, make_user, make_building
+):
+    _, headers = make_user(UserRole.TEAM_LEADER)
+    building = make_building(mgmt_no="BULK-FINAL-FORBIDDEN-001")
+    building.current_phase = "preliminary"
+    db_session.add(ReviewStage(
+        building_id=building.id,
+        phase=PhaseType.PRELIMINARY,
+        phase_order=0,
+        result=ResultType.PASS,
+    ))
+    db_session.commit()
+
+    res = client.post(
+        "/api/buildings/finalize-pass/bulk",
+        headers=headers,
+        json={"building_ids": [building.id]},
+    )
+    assert res.status_code == 403

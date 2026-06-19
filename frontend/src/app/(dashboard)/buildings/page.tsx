@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState, useMemo } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
-import { ArrowDown, ArrowUp, ArrowUpDown, FileSpreadsheet, Upload, X } from "lucide-react"
+import { ArrowDown, ArrowUp, ArrowUpDown, CheckCircle2, FileSpreadsheet, Upload, X } from "lucide-react"
 import {
   useReactTable,
   getCoreRowModel,
@@ -72,6 +72,18 @@ type ReviewUploadResult = {
   changes: FieldChange[]
 }
 
+type BulkFinalizePassResult = {
+  applied: number
+  skipped: number
+  items: {
+    id: number
+    mgmt_no: string | null
+    status: "applied" | "skipped"
+    final_result?: string | null
+    detail?: string | null
+  }[]
+}
+
 type SortOrder = "asc" | "desc"
 
 const SORTABLE_FIELDS = new Set([
@@ -104,6 +116,10 @@ function parseSortValue(value: string) {
   return { field, order }
 }
 
+function canFinalizeBuilding(building: Building) {
+  return building.latest_result === "pass" && !building.final_result
+}
+
 export default function BuildingsPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -127,6 +143,8 @@ export default function BuildingsPage() {
   const [uploadOpen, setUploadOpen] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [uploadResult, setUploadResult] = useState<LedgerUploadResult | null>(null)
+  const [selectedBuildingIds, setSelectedBuildingIds] = useState<Set<number>>(() => new Set())
+  const [bulkFinalizing, setBulkFinalizing] = useState(false)
   // 검토위원 배정
   const [assignOpen, setAssignOpen] = useState(false)
   const [assignFile, setAssignFile] = useState<File | null>(null)
@@ -150,6 +168,12 @@ export default function BuildingsPage() {
   // 통합관리대장 업로드는 총괄간사에게만 허용
   const canUploadLedger = user?.role === "chief_secretary"
   const canProxyReviewUpload = user?.role === "chief_secretary"
+  const canBulkFinalize = user?.role === "chief_secretary"
+  const selectableBuildings = useMemo(
+    () => data.filter(canFinalizeBuilding),
+    [data]
+  )
+  const selectedBulkCount = selectedBuildingIds.size
 
   const listQueryString = useMemo(() => {
     const params = new URLSearchParams()
@@ -216,6 +240,45 @@ export default function BuildingsPage() {
       .then(({ data }) => setReviewerNames(data))
       .catch(() => {})
   }, [])
+
+  useEffect(() => {
+    if (!canBulkFinalize) {
+      setSelectedBuildingIds(new Set())
+      return
+    }
+
+    const selectableIds = new Set(selectableBuildings.map((building) => building.id))
+    setSelectedBuildingIds((current) => {
+      const next = new Set([...current].filter((id) => selectableIds.has(id)))
+      return next.size === current.size ? current : next
+    })
+  }, [canBulkFinalize, selectableBuildings])
+
+  const toggleBuildingSelection = useCallback((buildingId: number, checked: boolean) => {
+    setSelectedBuildingIds((current) => {
+      const next = new Set(current)
+      if (checked) {
+        next.add(buildingId)
+      } else {
+        next.delete(buildingId)
+      }
+      return next
+    })
+  }, [])
+
+  const togglePageSelection = useCallback((checked: boolean) => {
+    setSelectedBuildingIds((current) => {
+      const next = new Set(current)
+      for (const building of selectableBuildings) {
+        if (checked) {
+          next.add(building.id)
+        } else {
+          next.delete(building.id)
+        }
+      }
+      return next
+    })
+  }, [selectableBuildings])
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -438,6 +501,50 @@ export default function BuildingsPage() {
     setSearch(searchInput.trim())
   }
 
+  const handleBulkFinalizePass = useCallback(async () => {
+    const buildingIds = Array.from(selectedBuildingIds)
+    if (buildingIds.length === 0) return
+
+    const confirmed = confirm(
+      `선택한 ${buildingIds.length}건을 최종완료 처리할까요?\n` +
+        "예비단계 적합은 적합, 보완단계 적합은 보완적합으로 처리됩니다."
+    )
+    if (!confirmed) return
+
+    setBulkFinalizing(true)
+    try {
+      const { data: result } = await apiClient.post<BulkFinalizePassResult>(
+        "/api/buildings/finalize-pass/bulk",
+        { building_ids: buildingIds }
+      )
+      setSelectedBuildingIds(new Set())
+      await fetchBuildings()
+
+      const skippedItems = result.items.filter((item) => item.status !== "applied")
+      if (skippedItems.length > 0) {
+        const details = skippedItems
+          .slice(0, 5)
+          .map((item) => `${item.mgmt_no ?? item.id}: ${item.detail ?? "제외"}`)
+          .join("\n")
+        alert(
+          `완료 ${result.applied}건, 제외 ${result.skipped}건` +
+            (details ? `\n${details}` : "") +
+            (skippedItems.length > 5 ? "\n..." : "")
+        )
+      } else {
+        alert(`선택한 ${result.applied}건을 최종완료 처리했습니다.`)
+      }
+    } catch (err) {
+      const axiosErr = err as {
+        response?: { data?: { detail?: string } }
+        message?: string
+      }
+      alert(axiosErr.response?.data?.detail ?? axiosErr.message ?? "일괄 최종완료 처리에 실패했습니다.")
+    } finally {
+      setBulkFinalizing(false)
+    }
+  }, [fetchBuildings, selectedBuildingIds])
+
   const handleSort = useCallback((field: string) => {
     setPage(1)
     setSortBy((current) => {
@@ -468,6 +575,48 @@ export default function BuildingsPage() {
 
   const columns = useMemo<ColumnDef<Building>[]>(
     () => [
+      ...(canBulkFinalize
+        ? [
+            {
+              id: "select",
+              header: () => {
+                const allSelected =
+                  selectableBuildings.length > 0 &&
+                  selectableBuildings.every((building) => selectedBuildingIds.has(building.id))
+                return (
+                  <div className="flex justify-center">
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4 rounded border-border"
+                      checked={allSelected}
+                      disabled={selectableBuildings.length === 0}
+                      aria-label="현재 페이지 적합 건 전체 선택"
+                      title="현재 페이지 적합 건 전체 선택"
+                      onChange={(event) => togglePageSelection(event.target.checked)}
+                    />
+                  </div>
+                )
+              },
+              size: 48,
+              cell: ({ row }) => {
+                const selectable = canFinalizeBuilding(row.original)
+                return (
+                  <div className="flex justify-center" onClick={(event) => event.stopPropagation()}>
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4 rounded border-border"
+                      checked={selectedBuildingIds.has(row.original.id)}
+                      disabled={!selectable}
+                      aria-label={`${row.original.mgmt_no} 선택`}
+                      title={selectable ? "최종완료 대상 선택" : "최근판정 적합 건만 선택할 수 있습니다"}
+                      onChange={(event) => toggleBuildingSelection(row.original.id, event.target.checked)}
+                    />
+                  </div>
+                )
+              },
+            } satisfies ColumnDef<Building>,
+          ]
+        : []),
       {
         accessorKey: "mgmt_no",
         header: () => renderSortableHeader("mgmt_no", "관리번호"),
@@ -580,7 +729,16 @@ export default function BuildingsPage() {
           ]
         : []),
     ],
-    [canProxyReviewUpload, openReviewUpload, renderSortableHeader]
+    [
+      canBulkFinalize,
+      canProxyReviewUpload,
+      openReviewUpload,
+      renderSortableHeader,
+      selectableBuildings,
+      selectedBuildingIds,
+      toggleBuildingSelection,
+      togglePageSelection,
+    ]
   )
 
   const table = useReactTable({
@@ -602,6 +760,17 @@ export default function BuildingsPage() {
           </p>
         </div>
         <div className="flex gap-2">
+          {canBulkFinalize && (
+            <Button
+              onClick={handleBulkFinalizePass}
+              disabled={selectedBulkCount === 0}
+              loading={bulkFinalizing}
+              loadingText="처리 중"
+            >
+              <CheckCircle2 />
+              선택 최종완료{selectedBulkCount > 0 ? ` ${selectedBulkCount}건` : ""}
+            </Button>
+          )}
           <Button variant="outline" onClick={handleExport}>
             엑셀 다운로드
           </Button>

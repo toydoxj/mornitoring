@@ -1709,6 +1709,145 @@ class PhaseChangeRequest(BaseModel):
     reason: str | None = None  # 운영 사유(권장)
 
 
+class BulkFinalizePassRequest(BaseModel):
+    building_ids: list[int]
+
+
+class BulkFinalizePassItem(BaseModel):
+    id: int
+    mgmt_no: str | None = None
+    status: str
+    final_result: str | None = None
+    detail: str | None = None
+
+
+class BulkFinalizePassResponse(BaseModel):
+    applied: int
+    skipped: int
+    items: list[BulkFinalizePassItem]
+
+
+@router.post("/finalize-pass/bulk", response_model=BulkFinalizePassResponse)
+def bulk_finalize_pass_buildings(
+    body: BulkFinalizePassRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(UserRole.CHIEF_SECRETARY)),
+):
+    """최근 판정이 적합인 선택 건을 총괄간사가 일괄 최종완료 처리한다."""
+    from models.phase_transition_log import PhaseTransitionLog
+    from models.review_stage import PhaseType, ResultType, ReviewStage
+
+    seen: set[int] = set()
+    building_ids = []
+    for building_id in body.building_ids:
+        if building_id in seen:
+            continue
+        seen.add(building_id)
+        building_ids.append(building_id)
+
+    if not building_ids:
+        raise HTTPException(status_code=400, detail="처리할 건축물을 선택해 주세요")
+    if len(building_ids) > 500:
+        raise HTTPException(status_code=400, detail="한 번에 500건까지만 처리할 수 있습니다")
+
+    ip = request.client.host if request.client and request.client.host else None
+    items: list[BulkFinalizePassItem] = []
+    applied = 0
+
+    for building_id in building_ids:
+        building = db.query(Building).filter(Building.id == building_id).first()
+        if not building:
+            items.append(BulkFinalizePassItem(
+                id=building_id,
+                status="skipped",
+                detail="건축물을 찾을 수 없습니다",
+            ))
+            continue
+
+        if building.final_result or building.current_phase == "completed":
+            items.append(BulkFinalizePassItem(
+                id=building.id,
+                mgmt_no=building.mgmt_no,
+                status="skipped",
+                detail="이미 최종완료 처리된 건입니다",
+            ))
+            continue
+
+        latest_stage = (
+            db.query(ReviewStage)
+            .filter(
+                ReviewStage.building_id == building.id,
+                ReviewStage.result.isnot(None),
+            )
+            .order_by(ReviewStage.phase_order.desc())
+            .first()
+        )
+        if latest_stage is None:
+            items.append(BulkFinalizePassItem(
+                id=building.id,
+                mgmt_no=building.mgmt_no,
+                status="skipped",
+                detail="판정된 검토 단계가 없습니다",
+            ))
+            continue
+        if latest_stage.result != ResultType.PASS:
+            items.append(BulkFinalizePassItem(
+                id=building.id,
+                mgmt_no=building.mgmt_no,
+                status="skipped",
+                detail="최근 판정이 적합이 아닙니다",
+            ))
+            continue
+
+        final_result = (
+            "pass"
+            if latest_stage.phase == PhaseType.PRELIMINARY
+            else "pass_supplement"
+        )
+        previous_phase = building.current_phase
+        building.final_result = final_result
+        building.current_phase = "completed"
+        db.add(PhaseTransitionLog(
+            building_id=building.id,
+            mgmt_no=building.mgmt_no,
+            from_phase=previous_phase,
+            to_phase="completed",
+            trigger="manual",
+            actor_user_id=current_user.id,
+            ip_address=ip,
+            reason=f"bulk_finalize_pass:{final_result}",
+        ))
+        log_action(
+            db,
+            current_user.id,
+            "bulk_finalize_pass",
+            "building",
+            building.id,
+            after_data={
+                "mgmt_no": building.mgmt_no,
+                "latest_phase": latest_stage.phase.value,
+                "final_result": final_result,
+            },
+        )
+        applied += 1
+        items.append(BulkFinalizePassItem(
+            id=building.id,
+            mgmt_no=building.mgmt_no,
+            status="applied",
+            final_result=final_result,
+        ))
+
+    if applied:
+        clear_stats_cache()
+    db.commit()
+    return BulkFinalizePassResponse(
+        applied=applied,
+        skipped=len(items) - applied,
+        items=items,
+    )
+
+
 @router.post("/{building_id}/phase", response_model=BuildingResponse)
 def change_building_phase(
     building_id: int,
