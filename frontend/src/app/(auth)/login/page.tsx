@@ -9,6 +9,9 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { useAuthStore } from "@/stores/authStore"
 import apiClient from "@/lib/api/client"
 
+const PASSWORD_LOGIN_NOTICE = `"이메일/비밀번호" 로그인 기능은 7월부터 차단될 예정입니다.
+카카오톡 로그인으로 진행해 주시기 바랍니다.`
+
 export default function LoginPage() {
   const router = useRouter()
   const login = useAuthStore((s) => s.login)
@@ -46,6 +49,7 @@ export default function LoginPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setError("")
+    window.alert(PASSWORD_LOGIN_NOTICE)
     setIsSubmitting(true)
 
     try {
