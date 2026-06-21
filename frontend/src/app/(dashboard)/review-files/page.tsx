@@ -1,6 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useState } from "react"
+import { useRouter } from "next/navigation"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -13,6 +14,7 @@ import {
 } from "@/components/ui/table"
 import apiClient from "@/lib/api/client"
 import { useAuthStore } from "@/stores/authStore"
+import type { BuildingListResponse } from "@/types"
 
 interface ReviewFile {
   key: string
@@ -21,15 +23,69 @@ interface ReviewFile {
   filename: string
   size: number
   last_modified: string
+  mgmt_no?: string | null
+  building_id?: number | null
+  reviewer_name?: string | null
+}
+
+interface BuildingLookup {
+  buildingId: number | null
+  reviewerName: string | null
 }
 
 export default function ReviewFilesPage() {
+  const router = useRouter()
   const user = useAuthStore((s) => s.user)
   const [files, setFiles] = useState<ReviewFile[]>([])
+  const [buildingByMgmtNo, setBuildingByMgmtNo] = useState<Record<string, BuildingLookup>>({})
   const [filterPhase, setFilterPhase] = useState("")
   const [isLoading, setIsLoading] = useState(true)
   const canDeleteFiles =
     !!user && ["team_leader", "chief_secretary"].includes(user.role)
+
+  const extractMgmtNo = (file: ReviewFile) => {
+    if (file.mgmt_no) return file.mgmt_no
+    const extensionIndex = file.filename.lastIndexOf(".")
+    return extensionIndex > 0 ? file.filename.slice(0, extensionIndex) : file.filename
+  }
+
+  const hydrateBuildingInfo = useCallback(async (reviewFiles: ReviewFile[]) => {
+    const mgmtNos = Array.from(new Set(reviewFiles.map(extractMgmtNo).filter(Boolean)))
+    if (mgmtNos.length === 0) return
+
+    const entries = await Promise.all(
+      mgmtNos.map(async (mgmtNo) => {
+        const fromFile = reviewFiles.find((file) => extractMgmtNo(file) === mgmtNo)
+        if (fromFile?.building_id) {
+          return [
+            mgmtNo,
+            {
+              buildingId: fromFile.building_id,
+              reviewerName: fromFile.reviewer_name ?? null,
+            },
+          ] as const
+        }
+
+        try {
+          const { data } = await apiClient.get<BuildingListResponse>("/api/buildings", {
+            params: { search: mgmtNo, size: 200 },
+          })
+          const building = data.items.find((item) => item.mgmt_no === mgmtNo)
+          return [
+            mgmtNo,
+            {
+              buildingId: building?.id ?? null,
+              reviewerName: building?.reviewer_name ?? building?.assigned_reviewer_name ?? null,
+            },
+          ] as const
+        } catch {
+          return [mgmtNo, { buildingId: null, reviewerName: null }] as const
+        }
+      }),
+    )
+
+    setBuildingByMgmtNo(Object.fromEntries(entries))
+  }, [])
 
   const fetchFiles = useCallback(async () => {
     setIsLoading(true)
@@ -38,12 +94,13 @@ export default function ReviewFilesPage() {
       if (filterPhase) params.phase = filterPhase
       const { data } = await apiClient.get<ReviewFile[]>("/api/reviews/files", { params })
       setFiles(data)
+      hydrateBuildingInfo(data)
     } catch (err) {
       console.error("파일 목록 조회 실패:", err)
     } finally {
       setIsLoading(false)
     }
-  }, [filterPhase])
+  }, [filterPhase, hydrateBuildingInfo])
 
   useEffect(() => {
     fetchFiles()
@@ -62,6 +119,36 @@ export default function ReviewFilesPage() {
       }
     } catch (err) {
       console.error("다운로드 실패:", err)
+    }
+  }
+
+  const handleOpenBuildingDetail = async (file: ReviewFile) => {
+    const mgmtNo = extractMgmtNo(file)
+    const cached = buildingByMgmtNo[mgmtNo]
+    if (cached?.buildingId) {
+      router.push(`/buildings/${cached.buildingId}?from=review-files`)
+      return
+    }
+
+    try {
+      const { data } = await apiClient.get<BuildingListResponse>("/api/buildings", {
+        params: { search: mgmtNo, size: 200 },
+      })
+      const building = data.items.find((item) => item.mgmt_no === mgmtNo)
+      if (!building) {
+        alert(`관리번호 ${mgmtNo}에 해당하는 건축물을 찾을 수 없습니다.`)
+        return
+      }
+      setBuildingByMgmtNo((prev) => ({
+        ...prev,
+        [mgmtNo]: {
+          buildingId: building.id,
+          reviewerName: building.reviewer_name ?? building.assigned_reviewer_name ?? null,
+        },
+      }))
+      router.push(`/buildings/${building.id}?from=review-files`)
+    } catch {
+      alert("건축물 상세 정보를 불러오지 못했습니다.")
     }
   }
 
@@ -253,40 +340,60 @@ export default function ReviewFilesPage() {
                 <Table>
                   <TableHeader>
                     <TableRow>
+                      <TableHead className="w-[140px]">관리번호</TableHead>
                       <TableHead>파일명</TableHead>
+                      <TableHead className="w-[120px]">검토위원</TableHead>
                       <TableHead className="w-[80px]">크기</TableHead>
                       <TableHead className="w-[200px]">관리</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {groupFiles.map((f) => (
-                      <TableRow key={f.key}>
-                        <TableCell className="font-mono text-sm">{f.filename}</TableCell>
-                        <TableCell className="text-sm text-muted-foreground">{formatSize(f.size)}</TableCell>
-                        <TableCell>
-                          <div className="flex gap-1">
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => handleDownload(f.key, f.filename)}
+                    {groupFiles.map((f) => {
+                      const mgmtNo = extractMgmtNo(f)
+                      const lookup = buildingByMgmtNo[mgmtNo]
+                      const reviewerName = f.reviewer_name ?? lookup?.reviewerName
+                      return (
+                        <TableRow key={f.key}>
+                          <TableCell>
+                            <button
+                              type="button"
+                              className="font-mono text-sm font-medium text-blue-600 hover:underline disabled:cursor-not-allowed disabled:text-muted-foreground disabled:no-underline"
+                              disabled={lookup?.buildingId === null}
+                              onClick={() => handleOpenBuildingDetail(f)}
                             >
-                              다운로드
-                            </Button>
-                            {canDeleteFiles && (
+                              {mgmtNo}
+                            </button>
+                          </TableCell>
+                          <TableCell className="font-mono text-sm">{f.filename}</TableCell>
+                          <TableCell className="text-sm">
+                            {reviewerName || <span className="text-muted-foreground">-</span>}
+                          </TableCell>
+                          <TableCell className="text-sm text-muted-foreground">{formatSize(f.size)}</TableCell>
+                          <TableCell>
+                            <div className="flex gap-1">
                               <Button
                                 size="sm"
-                                variant="destructive"
-                                onClick={() => handleDelete(f.key, f.filename)}
-                                loading={deletingKey === f.key}
-                                loadingText="삭제 중..."
+                                variant="outline"
+                                onClick={() => handleDownload(f.key, f.filename)}
                               >
-                                삭제
+                                다운로드
                               </Button>
-                            )}
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                    ))}
+                              {canDeleteFiles && (
+                                <Button
+                                  size="sm"
+                                  variant="destructive"
+                                  onClick={() => handleDelete(f.key, f.filename)}
+                                  loading={deletingKey === f.key}
+                                  loadingText="삭제 중..."
+                                >
+                                  삭제
+                                </Button>
+                              )}
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      )
+                    })}
                   </TableBody>
                 </Table>
               </div>
