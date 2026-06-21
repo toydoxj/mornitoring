@@ -4,6 +4,7 @@ from models.discussion import Discussion
 from models.inquiry import Inquiry
 from models.review_stage import PhaseType, ReviewStage
 from models.user import UserRole
+from routers import reviews as reviews_router
 
 
 def test_manager_can_read_limited_user_directory(
@@ -114,6 +115,47 @@ def test_manager_can_read_core_pages_and_review_files(
         headers=headers,
         params={"key": "reviews/test.xlsm"},
     ).status_code == 403
+
+
+def test_review_files_include_building_and_reviewer_metadata(
+    client, db_session, make_user, make_building, monkeypatch
+):
+    _, headers = make_user(UserRole.MANAGER)
+    building = make_building(mgmt_no="FILE-META-001")
+    s3_key = "reviews/예비검토/2026-06-21/FILE-META-001.xlsm"
+    stage = ReviewStage(
+        building_id=building.id,
+        phase=PhaseType.PRELIMINARY,
+        phase_order=0,
+        reviewer_name="업로드검토위원",
+        s3_file_key=s3_key,
+    )
+    db_session.add(stage)
+    db_session.commit()
+
+    monkeypatch.setattr(
+        reviews_router,
+        "list_review_files",
+        lambda prefix="reviews/": [
+            {
+                "key": s3_key,
+                "phase": "예비검토",
+                "date": "2026-06-21",
+                "filename": "FILE-META-001.xlsm",
+                "size": 1024,
+                "last_modified": "2026-06-21T12:00:00+00:00",
+            }
+        ],
+    )
+
+    res = client.get("/api/reviews/files", headers=headers)
+
+    assert res.status_code == 200
+    item = res.json()[0]
+    assert item["mgmt_no"] == "FILE-META-001"
+    assert item["building_id"] == building.id
+    assert item["stage_id"] == stage.id
+    assert item["reviewer_name"] == "업로드검토위원"
 
 
 def test_manager_can_read_inquiries_but_not_reply_or_delete(

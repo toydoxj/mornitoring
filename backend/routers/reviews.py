@@ -8,7 +8,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query
 from pydantic import BaseModel
 from sqlalchemy import func, or_
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from database import get_db
 from dependencies import stream_upload_to_tempfile
@@ -116,6 +116,89 @@ SEVERITY_LABELS = ("L0", "L1", "L2", "L3", "L4")
 UNCLASSIFIED_SEVERITY = "NA"
 EDITABLE_SEVERITIES = {*SEVERITY_LABELS, UNCLASSIFIED_SEVERITY}
 QUALITY_DECISIONS = {"suitable", "unsuitable"}
+
+
+def _reviewer_display_name_for_building(building: Building | None) -> str | None:
+    """건물에 배정된 검토위원 표시명."""
+    if building is None:
+        return None
+    if building.reviewer and building.reviewer.user:
+        return building.reviewer.user.name
+    return building.assigned_reviewer_name
+
+
+def _mgmt_no_from_review_filename(filename: str | None) -> str | None:
+    """S3 파일명에서 관리번호를 추출한다."""
+    if not filename:
+        return None
+    stem = Path(filename).stem.strip()
+    return stem or None
+
+
+def _attach_review_file_metadata(db: Session, files: list[dict]) -> list[dict]:
+    """검토서 파일 목록에 관리번호/건물 ID/업로드 검토자명을 일괄 보강한다.
+
+    프론트가 파일마다 `/api/buildings`를 호출하지 않도록 여기서 한 번에 붙인다.
+    """
+    keys = [str(f.get("key") or "") for f in files if f.get("key")]
+    stages = []
+    if keys:
+        stages = (
+            db.query(ReviewStage)
+            .options(
+                selectinload(ReviewStage.building)
+                .selectinload(Building.reviewer)
+                .selectinload(Reviewer.user)
+            )
+            .filter(ReviewStage.s3_file_key.in_(keys))
+            .all()
+        )
+    stage_by_key = {stage.s3_file_key: stage for stage in stages if stage.s3_file_key}
+
+    fallback_mgmt_nos = {
+        mgmt_no
+        for f in files
+        if str(f.get("key") or "") not in stage_by_key
+        for mgmt_no in [_mgmt_no_from_review_filename(f.get("filename"))]
+        if mgmt_no
+    }
+    buildings_by_mgmt_no: dict[str, Building] = {}
+    if fallback_mgmt_nos:
+        buildings = (
+            db.query(Building)
+            .options(selectinload(Building.reviewer).selectinload(Reviewer.user))
+            .filter(Building.mgmt_no.in_(fallback_mgmt_nos))
+            .all()
+        )
+        buildings_by_mgmt_no = {
+            building.mgmt_no: building
+            for building in buildings
+            if building.mgmt_no
+        }
+
+    enriched = []
+    for f in files:
+        item = dict(f)
+        key = str(item.get("key") or "")
+        stage = stage_by_key.get(key)
+        if stage and stage.building:
+            item["stage_id"] = stage.id
+            item["building_id"] = stage.building.id
+            item["mgmt_no"] = stage.building.mgmt_no
+            item["reviewer_name"] = (
+                stage.reviewer_name
+                or _reviewer_display_name_for_building(stage.building)
+            )
+        else:
+            mgmt_no = _mgmt_no_from_review_filename(item.get("filename"))
+            building = buildings_by_mgmt_no.get(mgmt_no or "")
+            item["stage_id"] = None
+            item["building_id"] = building.id if building else None
+            item["mgmt_no"] = mgmt_no
+            item["reviewer_name"] = _reviewer_display_name_for_building(building)
+        enriched.append(item)
+
+    return enriched
 
 
 class SeveritySummaryResponse(BaseModel):
@@ -1021,7 +1104,7 @@ def list_uploaded_files(
         prefix = f"reviews/{phase_folder}/"
 
     files = list_review_files(prefix)
-    return files
+    return _attach_review_file_metadata(db, files)
 
 
 @router.get("/files/download")
