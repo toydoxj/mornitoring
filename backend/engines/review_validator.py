@@ -46,6 +46,25 @@ REVIEW_RESULT_ALIASES = {
 }
 
 
+def _expected_phase_labels(
+    expected_phase: str | None,
+) -> tuple[str, tuple[str, ...], str] | None:
+    """업로드 단계에 맞는 절차(C5) 값과 시트명 차수 라벨을 반환한다."""
+    if expected_phase == "preliminary":
+        return ("예비검토", ("1차 적정성 검토",), "1차")
+
+    match = re.fullmatch(r"supplement_(\d+)", expected_phase or "")
+    if match:
+        supplement_order = match.group(1)
+        return (
+            f"보완검토({supplement_order}차)",
+            (f"2차 적정성 검토({supplement_order})", "2차 적정성 검토"),
+            "2차",
+        )
+
+    return None
+
+
 @dataclass
 class ValidationResult:
     is_valid: bool = True
@@ -148,8 +167,7 @@ def validate_review_file(
     5. 적정성 검토 결과에 내용이 있는데 부적합유형이 "적합" 또는 비어있는 경우
     6. 차수 라벨 검증 (시트명 + 절차 C5)
        - expected_phase=preliminary → "1차 적정성 검토" / "검토서(1차)"
-       - expected_phase=supplement_1~5 → "2차 적정성 검토" / "검토서(2차)"
-       (보완검토는 몇 차 보완이든 모두 "2차" 라벨 사용)
+       - expected_phase=supplement_N → "2차 적정성 검토(N)" 또는 "2차 적정성 검토" / "검토서(2차)"
     7. 시트가 2개 이상이면 안됨
     """
     result = ValidationResult()
@@ -215,30 +233,23 @@ def validate_review_file(
         )
 
     # 6. 절차 (C5) 및 시트명 검증 — expected_phase에 맞춰 차수 검증
-    #   예비검토(preliminary)        → "1차 적정성 검토" / "검토서(1차)"
-    #   보완검토(supplement_1..5)    → "2차 적정성 검토" / "검토서(2차)"  (보완은 차수 무관 동일)
+    #   예비검토(preliminary)     → "1차 적정성 검토" / "검토서(1차)"
+    #   보완검토(supplement_N)    → "2차 적정성 검토(N)" 또는 "2차 적정성 검토" / "검토서(2차)"
     procedure = _cell_str(ws, "C5")
+    expected_labels = _expected_phase_labels(expected_phase)
 
-    if expected_phase == "preliminary":
-        expected_round = "1차"
-        round_label = "예비검토"
-    elif expected_phase and expected_phase.startswith("supplement_"):
-        expected_round = "2차"
-        round_label = "보완검토"
-    else:
-        expected_round = None
-        round_label = None
-
-    if expected_round:
-        if procedure and expected_round not in procedure:
+    if expected_labels:
+        round_label, expected_procedures, expected_sheet_round = expected_labels
+        if procedure and procedure not in expected_procedures:
+            procedure_label = " 또는 ".join(f"'{value}'" for value in expected_procedures)
             result.add_error(
                 f"{round_label} 업로드인데 절차(C5)가 '{procedure}'입니다. "
-                f"'{expected_round} 적정성 검토'여야 합니다."
+                f"{procedure_label}여야 합니다."
             )
-        if expected_round not in sheet_name:
+        if expected_sheet_round not in sheet_name:
             result.add_error(
                 f"{round_label} 업로드인데 시트명이 '{sheet_name}'입니다. "
-                f"'검토서({expected_round})' 형식이어야 합니다."
+                f"'검토서({expected_sheet_round})' 형식이어야 합니다."
             )
     else:
         # phase 정보 없으면 기존 휴리스틱 (1차/2차 라벨 기반)

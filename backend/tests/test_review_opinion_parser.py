@@ -115,6 +115,76 @@ def test_validate_review_file_builds_opinion_from_detail_rows(tmp_path):
     assert extracted["opinion_entries"] == result.extracted_data["opinion_entries"]
 
 
+def test_validate_review_file_accepts_supplement_procedure_suffix(tmp_path):
+    path = tmp_path / "2026-0001.xlsm"
+    _make_workbook(path)
+
+    wb = load_workbook(path)
+    ws = wb[wb.sheetnames[0]]
+    ws.title = "검토서 (2차)"
+    ws["C5"] = "2차 적정성 검토(2)"
+    wb.save(path)
+    wb.close()
+
+    result = validate_review_file(
+        path,
+        filename="2026-0001.xlsm",
+        expected_mgmt_no="2026-0001",
+        submitter_name="이공우",
+        expected_phase="supplement_2",
+    )
+
+    assert result.is_valid is True
+
+
+def test_validate_review_file_accepts_supplement_common_procedure(tmp_path):
+    path = tmp_path / "2026-0001.xlsm"
+    _make_workbook(path)
+
+    wb = load_workbook(path)
+    ws = wb[wb.sheetnames[0]]
+    ws.title = "검토서 (2차)"
+    ws["C5"] = "2차 적정성 검토"
+    wb.save(path)
+    wb.close()
+
+    result = validate_review_file(
+        path,
+        filename="2026-0001.xlsm",
+        expected_mgmt_no="2026-0001",
+        submitter_name="이공우",
+        expected_phase="supplement_4",
+    )
+
+    assert result.is_valid is True
+
+
+def test_validate_review_file_rejects_wrong_supplement_procedure_suffix(tmp_path):
+    path = tmp_path / "2026-0001.xlsm"
+    _make_workbook(path)
+
+    wb = load_workbook(path)
+    ws = wb[wb.sheetnames[0]]
+    ws.title = "검토서 (2차)"
+    ws["C5"] = "2차 적정성 검토(2)"
+    wb.save(path)
+    wb.close()
+
+    result = validate_review_file(
+        path,
+        filename="2026-0001.xlsm",
+        expected_mgmt_no="2026-0001",
+        submitter_name="이공우",
+        expected_phase="supplement_3",
+    )
+
+    assert result.is_valid is False
+    assert any(
+        "'2차 적정성 검토(3)' 또는 '2차 적정성 검토'여야 합니다" in error
+        for error in result.errors
+    )
+
+
 def test_validate_review_file_rejects_detail_without_severity(tmp_path):
     path = tmp_path / "2026-0001.xlsm"
     _make_workbook(path, missing_severity=True)
