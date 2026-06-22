@@ -61,7 +61,7 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
         status = response.status_code
         response.headers["X-Request-ID"] = request_id
         # health check 200은 노이즈라 로깅 생략 (헤더는 항상 부여)
-        if request.url.path == "/api/health" and 200 <= status < 300:
+        if request.url.path in {"/", "/api/health"} and 200 <= status < 300:
             return response
         level = "error" if status >= 500 else ("warning" if status >= 400 else "info")
         log_event(
@@ -159,4 +159,9 @@ app.include_router(checklist.router, prefix="/api/checklist", tags=["상세체�
 
 @app.get("/api/health")
 async def health_check():
+    return {"status": "ok"}
+
+
+@app.api_route("/", methods=["GET", "HEAD"])
+async def root_health_check():
     return {"status": "ok"}

@@ -14,6 +14,7 @@ from models.reviewer import Reviewer
 from models.user import User, UserRole
 from routers.auth import get_current_user, require_roles
 from services.audit import log_action
+from services.related_tech import related_tech_coop_filter, related_tech_target_filter
 from services.scope import (
     building_visibility_filter,
     is_building_visible_to,
@@ -349,6 +350,12 @@ RISK_STAT_KEYS = (
     "quasi_multi_use",
     "related_tech_coop_target",
     "related_tech_coop",
+    "related_tech_coop_missing",
+)
+DRAWING_CREATOR_STAT_KEYS = (
+    "drawing_creator_architect",
+    "drawing_creator_structural_engineer",
+    "drawing_creator_unknown",
 )
 
 
@@ -532,11 +539,23 @@ def get_stats(
         if key in inquiry_counts:
             inquiry_counts[key] = count
 
-    # 1-3) 업로드된 검토서 수 (ReviewStage 누적) — 건물 phase 기반이 아니라
-    # 제출 기록 자체를 센다. 건물이 보완 단계로 넘어가도 과거 예비 제출이 집계에 남는다.
+    # 1-3) 검토서 제출/업로드 수 (ReviewStage 누적) — 건물 phase 기반이 아니라
+    # 제출 기록 자체를 센다. 파일 삭제로 s3_file_key가 비어도 제출 이력은 별도 집계한다.
+    has_uploaded_file = and_(
+        ReviewStage.s3_file_key.isnot(None),
+        ReviewStage.s3_file_key != "",
+    )
+    missing_uploaded_file = or_(
+        ReviewStage.s3_file_key.is_(None),
+        ReviewStage.s3_file_key == "",
+    )
     uploaded_rows = (
         _scoped_by_building_id(
-            db.query(ReviewStage.phase, sa_func.count(ReviewStage.id))
+            db.query(
+                ReviewStage.phase,
+                sa_func.count(ReviewStage.id).filter(has_uploaded_file).label("uploaded"),
+                sa_func.count(ReviewStage.id).filter(missing_uploaded_file).label("deleted_submitted"),
+            )
             .filter(ReviewStage.report_submitted_at.isnot(None)),
             ReviewStage.building_id,
         )
@@ -545,12 +564,16 @@ def get_stats(
     )
     uploaded_reports_preliminary = 0
     uploaded_reports_supplement = 0
-    for phase, count in uploaded_rows:
+    deleted_submitted_reports_preliminary = 0
+    deleted_submitted_reports_supplement = 0
+    for phase, uploaded_count, deleted_submitted_count in uploaded_rows:
         key = phase.value if hasattr(phase, "value") else str(phase)
         if key == "preliminary":
-            uploaded_reports_preliminary += count
+            uploaded_reports_preliminary += uploaded_count
+            deleted_submitted_reports_preliminary += deleted_submitted_count
         elif key.startswith("supplement_"):
-            uploaded_reports_supplement += count
+            uploaded_reports_supplement += uploaded_count
+            deleted_submitted_reports_supplement += deleted_submitted_count
 
     # 2) phase 별 건수
     phase_counts_raw = (
@@ -674,20 +697,18 @@ def get_stats(
             "completed": comp_count,
         })
 
-    related_tech_coop_target_filter = or_(
-        Building.floors_above >= 6,
-        Building.is_special_structure.is_(True),
-        Building.is_multi_use.is_(True),
-        Building.is_quasi_multi_use.is_(True),
-        and_(
-            Building.floors_above >= 3,
-            Building.detail_category9.ilike("%필로티%"),
-        ),
+    related_tech_coop_target_filter = related_tech_target_filter()
+    related_tech_coop_input_filter = related_tech_coop_filter()
+    related_tech_coop_missing_filter = and_(
+        related_tech_coop_target_filter,
+        ~related_tech_coop_input_filter,
     )
-    related_tech_coop_filter = sa_func.length(sa_func.trim(Building.struct_eng_name)) > 0
 
     gross_area_for_stats = sa_func.coalesce(Building.gross_area, 0)
     floors_above_for_stats = sa_func.coalesce(Building.floors_above, 0)
+    drawing_creator_qualification = sa_func.trim(
+        sa_func.coalesce(Building.drawing_creator_qualification, "")
+    )
 
     area_stats_raw = (
         _scoped(
@@ -755,8 +776,30 @@ def get_stats(
                     related_tech_coop_target_filter
                 ).label("related_tech_coop_target"),
                 sa_func.count(Building.id).filter(
-                    related_tech_coop_filter
+                    related_tech_coop_input_filter
                 ).label("related_tech_coop"),
+                sa_func.count(Building.id).filter(
+                    related_tech_coop_missing_filter
+                ).label("related_tech_coop_missing"),
+            )
+        )
+        .group_by(Building.sido, Building.sigungu)
+        .all()
+    )
+    drawing_creator_stats_raw = (
+        _scoped(
+            db.query(
+                Building.sido.label("sido"),
+                Building.sigungu.label("sigungu"),
+                sa_func.count(Building.id).filter(
+                    drawing_creator_qualification == "건축사"
+                ).label("drawing_creator_architect"),
+                sa_func.count(Building.id).filter(
+                    drawing_creator_qualification == "건축구조기술사"
+                ).label("drawing_creator_structural_engineer"),
+                sa_func.count(Building.id).filter(
+                    drawing_creator_qualification.notin_(("건축사", "건축구조기술사"))
+                ).label("drawing_creator_unknown"),
             )
         )
         .group_by(Building.sido, Building.sigungu)
@@ -766,6 +809,10 @@ def get_stats(
         "area": _merge_regional_rows(area_stats_raw, AREA_STAT_KEYS),
         "floors": _merge_regional_rows(floor_stats_raw, FLOOR_STAT_KEYS),
         "risk": _merge_regional_rows(risk_stats_raw, RISK_STAT_KEYS),
+        "drawing_creator": _merge_regional_rows(
+            drawing_creator_stats_raw,
+            DRAWING_CREATOR_STAT_KEYS,
+        ),
     }
 
     # 5) 심각도 통계 — 상세의견 분류별 집계 테이블을 기준으로 전체/분류/단계별 피벗 생성
@@ -1059,6 +1106,8 @@ def get_stats(
         # 업로드된 검토서 누적 수 (대시보드 "업로드된 검토서" 카드용)
         "uploaded_reports_preliminary": uploaded_reports_preliminary,
         "uploaded_reports_supplement": uploaded_reports_supplement,
+        "deleted_submitted_reports_preliminary": deleted_submitted_reports_preliminary,
+        "deleted_submitted_reports_supplement": deleted_submitted_reports_supplement,
         "completed": completed,
         # 최종 판정 5분류 (적합/보완적합/부적합/부적합(미회신)/대상제외)
         "final_counts": final_counts,

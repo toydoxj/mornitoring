@@ -1,3 +1,6 @@
+import io
+import zipfile
+
 from models.announcement import Announcement
 from models.checklist import ChecklistOpinion
 from models.discussion import Discussion
@@ -156,6 +159,55 @@ def test_review_files_include_building_and_reviewer_metadata(
     assert item["building_id"] == building.id
     assert item["stage_id"] == stage.id
     assert item["reviewer_name"] == "업로드검토위원"
+
+
+def test_review_files_download_zip_returns_single_archive(
+    client, make_user, monkeypatch
+):
+    _, headers = make_user(UserRole.MANAGER)
+    files = {
+        "reviews/preliminary/2026-06-21/ZIP-001.xlsm": b"first-review",
+        "reviews/preliminary/2026-06-21/ZIP-002.xlsm": b"second-review",
+    }
+
+    def fake_stream_s3_file_to_writer(key, writer):
+        data = files[key]
+        writer.write(data)
+        return len(data)
+
+    monkeypatch.setattr(
+        reviews_router,
+        "stream_s3_file_to_writer",
+        fake_stream_s3_file_to_writer,
+    )
+
+    res = client.post(
+        "/api/reviews/files/download-zip",
+        headers=headers,
+        json={
+            "keys": list(files.keys()),
+            "archive_name": "예비검토_2026-06-21.zip",
+        },
+    )
+
+    assert res.status_code == 200
+    assert res.headers["content-type"].startswith("application/zip")
+    with zipfile.ZipFile(io.BytesIO(res.content)) as archive:
+        assert sorted(archive.namelist()) == ["ZIP-001.xlsm", "ZIP-002.xlsm"]
+        assert archive.read("ZIP-001.xlsm") == b"first-review"
+        assert archive.read("ZIP-002.xlsm") == b"second-review"
+
+
+def test_review_files_download_zip_rejects_non_review_keys(client, make_user):
+    _, headers = make_user(UserRole.MANAGER)
+
+    res = client.post(
+        "/api/reviews/files/download-zip",
+        headers=headers,
+        json={"keys": ["announcements/1/file.pdf"]},
+    )
+
+    assert res.status_code == 400
 
 
 def test_manager_can_read_inquiries_but_not_reply_or_delete(

@@ -31,6 +31,17 @@ def test_health_check_returns_request_id_header(client):
     assert len(res.headers["X-Request-ID"]) == 12
 
 
+def test_root_health_check_accepts_render_probe(client):
+    res = client.get("/")
+    assert res.status_code == 200
+    assert res.json() == {"status": "ok"}
+    assert "X-Request-ID" in res.headers
+
+    head_res = client.head("/")
+    assert head_res.status_code == 200
+    assert "X-Request-ID" in head_res.headers
+
+
 def test_login_failure_emits_warning_event(client, caplog):
     caplog.set_level(logging.WARNING, logger=EVENT_LOGGER_NAME)
     res = client.post(

@@ -3,6 +3,7 @@
 from datetime import date
 from functools import lru_cache
 from pathlib import Path
+from typing import BinaryIO
 
 import boto3
 from botocore.exceptions import ClientError
@@ -91,6 +92,35 @@ def get_download_url(s3_key: str, expires_in: int = 3600) -> str:
         return url
     except ClientError:
         return ""
+
+
+def stream_s3_file_to_writer(s3_key: str, writer: BinaryIO) -> int:
+    """S3 객체를 writer로 스트리밍한다."""
+    if not settings.aws_access_key_id:
+        raise FileNotFoundError(s3_key)
+
+    client = _get_s3_client()
+    try:
+        response = client.get_object(Bucket=settings.s3_bucket_name, Key=s3_key)
+    except ClientError as exc:
+        error_code = exc.response.get("Error", {}).get("Code")
+        if error_code in {"NoSuchKey", "NoSuchBucket", "404", "NotFound"}:
+            raise FileNotFoundError(s3_key) from exc
+        raise
+
+    body = response["Body"]
+    written = 0
+    try:
+        while True:
+            chunk = body.read(1024 * 1024)
+            if not chunk:
+                break
+            writer.write(chunk)
+            written += len(chunk)
+    finally:
+        body.close()
+
+    return written
 
 
 def list_review_files(prefix: str = "reviews/") -> list[dict]:

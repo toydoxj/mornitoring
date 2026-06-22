@@ -7,6 +7,8 @@
 - REVIEWER: 본인 reviewer_id (기존 정책 유지)
 """
 
+from datetime import date
+
 from models.inquiry import Inquiry, InquiryStatus
 from models.review_opinion_detail import ReviewOpinionDetail
 from models.review_severity_summary import ReviewSeveritySummary
@@ -202,6 +204,66 @@ def test_stats_counts_missing_area_and_floor_as_zero(
     assert floor_total["floors_16_over"] == 0
 
 
+def test_stats_splits_uploaded_reports_and_deleted_submissions(
+    client, db_session, make_user, make_building
+):
+    _, headers = make_user(UserRole.CHIEF_SECRETARY)
+    uploaded_preliminary = make_building(mgmt_no="STAT-UP-PRE")
+    deleted_preliminary = make_building(mgmt_no="STAT-DEL-PRE")
+    uploaded_supplement = make_building(mgmt_no="STAT-UP-SUP")
+    deleted_supplement = make_building(mgmt_no="STAT-DEL-SUP")
+    pending = make_building(mgmt_no="STAT-PENDING")
+
+    submitted_at = date(2026, 6, 22)
+    db_session.add_all([
+        ReviewStage(
+            building_id=uploaded_preliminary.id,
+            phase=PhaseType.PRELIMINARY,
+            phase_order=0,
+            report_submitted_at=submitted_at,
+            s3_file_key="reviews/preliminary/2026-06-22/STAT-UP-PRE.xlsm",
+        ),
+        ReviewStage(
+            building_id=deleted_preliminary.id,
+            phase=PhaseType.PRELIMINARY,
+            phase_order=0,
+            report_submitted_at=submitted_at,
+            s3_file_key=None,
+        ),
+        ReviewStage(
+            building_id=uploaded_supplement.id,
+            phase=PhaseType.SUPPLEMENT_1,
+            phase_order=1,
+            report_submitted_at=submitted_at,
+            s3_file_key="reviews/supplement_1/2026-06-22/STAT-UP-SUP.xlsm",
+        ),
+        ReviewStage(
+            building_id=deleted_supplement.id,
+            phase=PhaseType.SUPPLEMENT_2,
+            phase_order=2,
+            report_submitted_at=submitted_at,
+            s3_file_key=None,
+        ),
+        ReviewStage(
+            building_id=pending.id,
+            phase=PhaseType.SUPPLEMENT_3,
+            phase_order=3,
+            report_submitted_at=None,
+            s3_file_key="reviews/supplement_3/2026-06-22/STAT-PENDING.xlsm",
+        ),
+    ])
+    db_session.commit()
+
+    res = client.get("/api/buildings/stats", headers=headers)
+
+    assert res.status_code == 200
+    body = res.json()
+    assert body["uploaded_reports_preliminary"] == 1
+    assert body["uploaded_reports_supplement"] == 1
+    assert body["deleted_submitted_reports_preliminary"] == 1
+    assert body["deleted_submitted_reports_supplement"] == 1
+
+
 def test_stats_returns_regional_building_stats_with_total_row(
     client, db_session, make_user, make_building
 ):
@@ -213,6 +275,7 @@ def test_stats_returns_regional_building_stats_with_total_row(
     b1.floors_above = 5
     b1.is_special_structure = True
     b1.struct_eng_name = "홍길동"
+    b1.drawing_creator_qualification = "건축사"
 
     b2 = make_building(mgmt_no="REG-STATS-002")
     b2.sido = "서울특별시"
@@ -220,6 +283,7 @@ def test_stats_returns_regional_building_stats_with_total_row(
     b2.gross_area = 300
     b2.floors_above = 6
     b2.is_multi_use = True
+    b2.drawing_creator_qualification = "건축구조기술사"
 
     b3 = make_building(mgmt_no="REG-STATS-003")
     b3.sido = "부산광역시"
@@ -229,6 +293,7 @@ def test_stats_returns_regional_building_stats_with_total_row(
     b3.is_high_rise = True
     b3.is_quasi_multi_use = True
     b3.struct_eng_firm = "협력사"
+    b3.drawing_creator_qualification = "기타"
 
     b4 = make_building(mgmt_no="REG-STATS-004")
     b4.gross_area = 800
@@ -261,14 +326,29 @@ def test_stats_returns_regional_building_stats_with_total_row(
     assert risk_total["quasi_multi_use"] == 1
     assert risk_total["related_tech_coop_target"] == 4
     assert risk_total["related_tech_coop"] == 1
+    assert risk_total["related_tech_coop_missing"] == 3
 
     seoul = next(row for row in regional_stats["risk"] if row["region"] == "서울특별시")
     assert seoul["total"] == 2
     assert seoul["related_tech_coop_target"] == 2
     assert seoul["related_tech_coop"] == 1
+    assert seoul["related_tech_coop_missing"] == 1
 
     risk_regions = [row["region"] for row in regional_stats["risk"]]
     assert risk_regions[:3] == ["전체", "서울특별시", "부산광역시"]
+
+    drawing_creator_total = regional_stats["drawing_creator"][0]
+    assert drawing_creator_total["region"] == "전체"
+    assert drawing_creator_total["drawing_creator_architect"] == 1
+    assert drawing_creator_total["drawing_creator_structural_engineer"] == 1
+    assert drawing_creator_total["drawing_creator_unknown"] == 2
+
+    drawing_creator_seoul = next(
+        row for row in regional_stats["drawing_creator"] if row["region"] == "서울특별시"
+    )
+    assert drawing_creator_seoul["drawing_creator_architect"] == 1
+    assert drawing_creator_seoul["drawing_creator_structural_engineer"] == 1
+    assert drawing_creator_seoul["drawing_creator_unknown"] == 0
 
 
 def test_stats_returns_severity_summary_by_category_and_phase(

@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from models.building import Building
 from models.review_stage import ReviewStage, PhaseType
+from services.related_tech import has_related_tech_cooperation, is_related_tech_target
 from engines.column_mapping import (
     BUILDING_COLUMN_MAP,
     PRELIMINARY_STAGE_MAP,
@@ -35,6 +36,7 @@ CENTER_ALIGN = Alignment(horizontal="center", vertical="center", wrap_text=True)
 # Row 1 대분류 헤더 정의
 ROW1_HEADERS = {
     "C": "대상 건축물 개요(허가대장 DB)",
+    "AC": "관계기술자 협력",
     "AE": "예비도서 접수",
     "AF": "예비판정",
     "AN": "보완서류 제출(1차)",
@@ -77,6 +79,8 @@ FIELD_TO_LABEL = {
     "struct_eng_firm": "책임구조기술자(소속)",
     "struct_eng_name": "책임구조기술자(성명)",
     "high_risk_type": "고위험유형",
+    "related_tech_coop_target": "협력대상",
+    "related_tech_coop": "협력여부",
     "doc_received_at": "도서접수일",
     "report_submitted_at": "검토서 제출일",
     "reviewer_name": "검토자",
@@ -89,6 +93,11 @@ FIELD_TO_LABEL = {
     "objection_filed": "이의신청 제출",
     "objection_content": "이의신청\n검토내용",
     "objection_reason": "이의신청 사유",
+}
+
+RELATED_TECH_COLUMNS = {
+    "AC": "related_tech_coop_target",
+    "AD": "related_tech_coop",
 }
 
 RESULT_LABELS = {
@@ -108,6 +117,14 @@ def _format_value(val, field_name: str):
     if isinstance(val, bool):
         return "Y" if val else "N"
     return val
+
+
+def _related_tech_value(building: Building, field_name: str) -> bool:
+    if field_name == "related_tech_coop_target":
+        return is_related_tech_target(building)
+    if field_name == "related_tech_coop":
+        return has_related_tech_cooperation(building)
+    return False
 
 
 def export_ledger(db: Session) -> BytesIO:
@@ -134,6 +151,14 @@ def export_ledger(db: Session) -> BytesIO:
     ws.cell(row=2, column=2, value="검토\n위원")
 
     for col_letter, field_name in BUILDING_COLUMN_MAP.items():
+        col_idx = col_letter_to_index(col_letter) + 1
+        label = FIELD_TO_LABEL.get(field_name, field_name)
+        cell = ws.cell(row=2, column=col_idx, value=label)
+        cell.font = HEADER_FONT
+        cell.alignment = CENTER_ALIGN
+        cell.border = THIN_BORDER
+
+    for col_letter, field_name in RELATED_TECH_COLUMNS.items():
         col_idx = col_letter_to_index(col_letter) + 1
         label = FIELD_TO_LABEL.get(field_name, field_name)
         cell = ws.cell(row=2, column=col_idx, value=label)
@@ -198,6 +223,11 @@ def export_ledger(db: Session) -> BytesIO:
         for col_letter, field_name in BUILDING_COLUMN_MAP.items():
             col_idx = col_letter_to_index(col_letter) + 1
             val = getattr(building, field_name, None)
+            ws.cell(row=row_num, column=col_idx, value=_format_value(val, field_name))
+
+        for col_letter, field_name in RELATED_TECH_COLUMNS.items():
+            col_idx = col_letter_to_index(col_letter) + 1
+            val = _related_tech_value(building, field_name)
             ws.cell(row=row_num, column=col_idx, value=_format_value(val, field_name))
 
         # 검토위원명 (B열)

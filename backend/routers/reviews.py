@@ -2,6 +2,7 @@
 
 import tempfile
 import uuid
+import zipfile
 from datetime import date, datetime
 from pathlib import Path
 
@@ -9,6 +10,8 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query
 from pydantic import BaseModel
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session, selectinload
+from starlette.background import BackgroundTask
+from starlette.responses import FileResponse
 
 from database import get_db
 from dependencies import stream_upload_to_tempfile
@@ -98,6 +101,7 @@ from services.s3_storage import (
     get_download_url,
     list_review_files,
     delete_file,
+    stream_s3_file_to_writer,
 )
 from services.audit import log_action
 from services.phase_transition import (
@@ -1107,6 +1111,130 @@ def list_uploaded_files(
     return _attach_review_file_metadata(db, files)
 
 
+MAX_REVIEW_FILE_ZIP_COUNT = 500
+
+
+class ReviewFilesZipRequest(BaseModel):
+    keys: list[str]
+    archive_name: str | None = None
+
+
+def _normalize_review_file_keys(keys: list[str]) -> list[str]:
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for raw_key in keys:
+        key = (raw_key or "").strip()
+        if not key:
+            continue
+        if not key.startswith("reviews/"):
+            raise HTTPException(status_code=400, detail="검토서 파일만 다운로드할 수 있습니다")
+        if key not in seen:
+            seen.add(key)
+            normalized.append(key)
+
+    if not normalized:
+        raise HTTPException(status_code=400, detail="다운로드할 파일이 없습니다")
+    if len(normalized) > MAX_REVIEW_FILE_ZIP_COUNT:
+        raise HTTPException(
+            status_code=400,
+            detail=f"한 번에 최대 {MAX_REVIEW_FILE_ZIP_COUNT}개까지 다운로드할 수 있습니다",
+        )
+    return normalized
+
+
+def _safe_zip_download_filename(name: str | None) -> str:
+    fallback = f"review-files-{datetime.now():%Y%m%d-%H%M%S}.zip"
+    raw = (name or fallback).strip() or fallback
+    cleaned = "".join(
+        ch if ch.isalnum() or ch in {" ", "-", "_", "."} else "_"
+        for ch in raw.replace("\\", "_").replace("/", "_")
+    ).strip(" ._")
+    if not cleaned:
+        cleaned = fallback
+    if cleaned.lower().endswith(".zip"):
+        cleaned = cleaned[:-4]
+    return f"{cleaned[:150]}.zip"
+
+
+def _unique_zip_member_name(key: str, used_names: set[str]) -> str:
+    filename = Path(key).name.strip() or "review-file"
+    filename = filename.replace("\\", "_").replace("/", "_")
+    path = Path(filename)
+    stem = path.stem or "review-file"
+    suffix = path.suffix
+    candidate = f"{stem}{suffix}"
+    index = 2
+    while candidate in used_names:
+        candidate = f"{stem} ({index}){suffix}"
+        index += 1
+    used_names.add(candidate)
+    return candidate
+
+
+@router.post("/files/download-zip")
+def download_files_zip(
+    payload: ReviewFilesZipRequest,
+    current_user: User = Depends(
+        require_roles(
+            UserRole.TEAM_LEADER,
+            UserRole.CHIEF_SECRETARY,
+            UserRole.MANAGER,
+        )
+    ),
+):
+    """선택한 검토서 파일들을 ZIP 하나로 다운로드한다."""
+    del current_user
+    keys = _normalize_review_file_keys(payload.keys)
+    archive_filename = _safe_zip_download_filename(payload.archive_name)
+
+    tmp = tempfile.NamedTemporaryFile(
+        prefix="review-files-",
+        suffix=".zip",
+        delete=False,
+    )
+    zip_path = Path(tmp.name)
+    tmp.close()
+
+    try:
+        with zipfile.ZipFile(
+            zip_path,
+            mode="w",
+            compression=zipfile.ZIP_DEFLATED,
+            allowZip64=True,
+        ) as archive:
+            used_names: set[str] = set()
+            for key in keys:
+                member_name = _unique_zip_member_name(key, used_names)
+                info = zipfile.ZipInfo(
+                    filename=member_name,
+                    date_time=datetime.now().timetuple()[:6],
+                )
+                info.compress_type = zipfile.ZIP_DEFLATED
+                with archive.open(info, "w") as member:
+                    try:
+                        stream_s3_file_to_writer(key, member)
+                    except FileNotFoundError as exc:
+                        raise HTTPException(
+                            status_code=404,
+                            detail=f"파일을 찾을 수 없습니다: {key}",
+                        ) from exc
+                    except Exception as exc:
+                        raise HTTPException(
+                            status_code=502,
+                            detail="검토서 ZIP 생성 중 S3 파일을 읽지 못했습니다",
+                        ) from exc
+
+        return FileResponse(
+            path=zip_path,
+            media_type="application/zip",
+            filename=archive_filename,
+            background=BackgroundTask(zip_path.unlink, missing_ok=True),
+        )
+    except Exception:
+        zip_path.unlink(missing_ok=True)
+        raise
+
+
 @router.get("/files/download")
 def download_file(
     key: str = Query(...),
@@ -1170,6 +1298,10 @@ def delete_review_file(
         },
     )
     db.commit()
+    if affected_stage_ids:
+        from routers.buildings import clear_stats_cache
+
+        clear_stats_cache()
 
     return {
         "key": key,

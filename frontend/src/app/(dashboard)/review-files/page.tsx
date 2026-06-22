@@ -34,6 +34,27 @@ const extractMgmtNo = (file: ReviewFile) => {
   return extensionIndex > 0 ? file.filename.slice(0, extensionIndex) : file.filename
 }
 
+const makeArchiveName = (phase: string, date: string) => {
+  const safePhase = phase.replace(/[\\/:*?"<>|]+/g, "_").trim() || "review-files"
+  return `${safePhase}_${date}_검토서.zip`
+}
+
+const downloadBlob = (blob: Blob, filename: string) => {
+  const url = window.URL.createObjectURL(blob)
+  const link = document.createElement("a")
+  link.href = url
+  link.download = filename
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  window.setTimeout(() => window.URL.revokeObjectURL(url), 1000)
+}
+
+const getErrorMessage = (err: unknown, fallback: string) => {
+  const detail = (err as { response?: { data?: { detail?: unknown } } }).response?.data?.detail
+  return typeof detail === "string" ? detail : fallback
+}
+
 export default function ReviewFilesPage() {
   const router = useRouter()
   const user = useAuthStore((s) => s.user)
@@ -86,10 +107,33 @@ export default function ReviewFilesPage() {
     router.push(`/buildings/${file.building_id}?from=review-files`)
   }
 
+  const downloadFilesAsZip = async (targetFiles: ReviewFile[], phase: string, date: string) => {
+    const archiveName = makeArchiveName(phase, date)
+    const { data } = await apiClient.post<Blob>(
+      "/api/reviews/files/download-zip",
+      {
+        keys: targetFiles.map((f) => f.key),
+        archive_name: archiveName,
+      },
+      { responseType: "blob" },
+    )
+    downloadBlob(data, archiveName)
+  }
+
+  const [downloadingGroup, setDownloadingGroup] = useState<string | null>(null)
+
   const handleDownloadAll = async (phase: string, date: string) => {
     const targetFiles = files.filter((f) => f.phase === phase && f.date === date)
-    for (const f of targetFiles) {
-      await handleDownload(f.key, f.filename)
+    if (targetFiles.length === 0) return
+
+    const groupKey = `${phase}|||${date}`
+    setDownloadingGroup(groupKey)
+    try {
+      await downloadFilesAsZip(targetFiles, phase, date)
+    } catch (err) {
+      alert(getErrorMessage(err, "전체 다운로드에 실패했습니다."))
+    } finally {
+      setDownloadingGroup(null)
     }
   }
 
@@ -116,31 +160,15 @@ export default function ReviewFilesPage() {
     const targetFiles = files.filter((f) => f.phase === phase && f.date === date)
     if (targetFiles.length === 0) return
     const confirmed = confirm(
-      `${phase} ${date} 검토서 ${targetFiles.length}건을 모두 다운로드한 뒤 삭제합니다.\n` +
-      `다운로드 시작 후 짧은 대기 시간을 두고 삭제가 진행됩니다. 계속할까요?`,
+      `${phase} ${date} 검토서 ${targetFiles.length}건을 ZIP 파일로 다운로드한 뒤 삭제합니다.\n` +
+      `ZIP 다운로드가 실패하면 삭제하지 않습니다. 계속할까요?`,
     )
     if (!confirmed) return
 
     const groupKey = `${phase}|||${date}`
     setDeletingGroup(groupKey)
     try {
-      // 1) 다운로드 순차 트리거 — 브라우저 동시 다운로드 제한 회피용 짧은 간격
-      for (const f of targetFiles) {
-        try {
-          const { data } = await apiClient.get("/api/reviews/files/download", { params: { key: f.key } })
-          if (data.download_url) {
-            const link = document.createElement("a")
-            link.href = data.download_url
-            link.download = f.filename
-            link.click()
-          }
-        } catch {
-          // 개별 다운로드 실패는 무시 — 삭제는 계속 진행 (사용자 판단)
-        }
-        await new Promise((r) => setTimeout(r, 200))
-      }
-      // 2) 브라우저 다운로드가 큐잉될 시간을 주고 삭제 진행
-      await new Promise((r) => setTimeout(r, 1500))
+      await downloadFilesAsZip(targetFiles, phase, date)
       const failed: string[] = []
       for (const f of targetFiles) {
         try {
@@ -153,6 +181,8 @@ export default function ReviewFilesPage() {
         alert(`일부 파일 삭제 실패 (${failed.length}건):\n${failed.slice(0, 10).join("\n")}${failed.length > 10 ? "\n..." : ""}`)
       }
       fetchFiles()
+    } catch (err) {
+      alert(getErrorMessage(err, "다운로드 후 삭제에 실패했습니다. 파일은 삭제하지 않았습니다."))
     } finally {
       setDeletingGroup(null)
     }
@@ -243,6 +273,9 @@ export default function ReviewFilesPage() {
                     size="sm"
                     variant="outline"
                     onClick={() => handleDownloadAll(phase, date)}
+                    loading={downloadingGroup === `${phase}|||${date}`}
+                    loadingText="압축 중..."
+                    disabled={deletingGroup === `${phase}|||${date}`}
                   >
                     전체 다운로드
                   </Button>
@@ -254,6 +287,7 @@ export default function ReviewFilesPage() {
                         onClick={() => handleDownloadThenDelete(phase, date)}
                         loading={deletingGroup === `${phase}|||${date}`}
                         loadingText="처리 중..."
+                        disabled={downloadingGroup === `${phase}|||${date}`}
                       >
                         다운로드 후 삭제
                       </Button>
