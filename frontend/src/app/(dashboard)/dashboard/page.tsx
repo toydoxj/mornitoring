@@ -55,6 +55,8 @@ interface DashboardStats {
   review_in_progress_supplement: number
   uploaded_reports_preliminary: number
   uploaded_reports_supplement: number
+  deleted_submitted_reports_preliminary: number
+  deleted_submitted_reports_supplement: number
   completed: number
   final_counts: FinalCounts
   inquiry_counts: InquiryCounts
@@ -330,13 +332,20 @@ export default function DashboardPage() {
                   ]}
                 />
                 <BreakdownCard
-                  title="업로드된 검토서"
-                  total={stats.uploaded_reports_preliminary + stats.uploaded_reports_supplement}
+                  title="검토서 제출"
+                  total={
+                    stats.uploaded_reports_preliminary +
+                    stats.uploaded_reports_supplement +
+                    stats.deleted_submitted_reports_preliminary +
+                    stats.deleted_submitted_reports_supplement
+                  }
                   accent="slate"
                   onClick={canManageReports ? () => router.push("/review-files") : undefined}
                   items={[
-                    { label: "예비", value: stats.uploaded_reports_preliminary },
-                    { label: "보완", value: stats.uploaded_reports_supplement },
+                    { label: "예비 업로드", value: stats.uploaded_reports_preliminary },
+                    { label: "보완 업로드", value: stats.uploaded_reports_supplement },
+                    { label: "예비 제출(삭제)", value: stats.deleted_submitted_reports_preliminary },
+                    { label: "보완 제출(삭제)", value: stats.deleted_submitted_reports_supplement },
                   ]}
                 />
                 <BreakdownCard

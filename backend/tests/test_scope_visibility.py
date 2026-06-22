@@ -7,6 +7,8 @@
 - REVIEWER: 본인 reviewer_id (기존 정책 유지)
 """
 
+from datetime import date
+
 from models.inquiry import Inquiry, InquiryStatus
 from models.review_opinion_detail import ReviewOpinionDetail
 from models.review_severity_summary import ReviewSeveritySummary
@@ -200,6 +202,66 @@ def test_stats_counts_missing_area_and_floor_as_zero(
     assert floor_total["floors_under_6"] == 1
     assert floor_total["floors_6_under_16"] == 0
     assert floor_total["floors_16_over"] == 0
+
+
+def test_stats_splits_uploaded_reports_and_deleted_submissions(
+    client, db_session, make_user, make_building
+):
+    _, headers = make_user(UserRole.CHIEF_SECRETARY)
+    uploaded_preliminary = make_building(mgmt_no="STAT-UP-PRE")
+    deleted_preliminary = make_building(mgmt_no="STAT-DEL-PRE")
+    uploaded_supplement = make_building(mgmt_no="STAT-UP-SUP")
+    deleted_supplement = make_building(mgmt_no="STAT-DEL-SUP")
+    pending = make_building(mgmt_no="STAT-PENDING")
+
+    submitted_at = date(2026, 6, 22)
+    db_session.add_all([
+        ReviewStage(
+            building_id=uploaded_preliminary.id,
+            phase=PhaseType.PRELIMINARY,
+            phase_order=0,
+            report_submitted_at=submitted_at,
+            s3_file_key="reviews/preliminary/2026-06-22/STAT-UP-PRE.xlsm",
+        ),
+        ReviewStage(
+            building_id=deleted_preliminary.id,
+            phase=PhaseType.PRELIMINARY,
+            phase_order=0,
+            report_submitted_at=submitted_at,
+            s3_file_key=None,
+        ),
+        ReviewStage(
+            building_id=uploaded_supplement.id,
+            phase=PhaseType.SUPPLEMENT_1,
+            phase_order=1,
+            report_submitted_at=submitted_at,
+            s3_file_key="reviews/supplement_1/2026-06-22/STAT-UP-SUP.xlsm",
+        ),
+        ReviewStage(
+            building_id=deleted_supplement.id,
+            phase=PhaseType.SUPPLEMENT_2,
+            phase_order=2,
+            report_submitted_at=submitted_at,
+            s3_file_key=None,
+        ),
+        ReviewStage(
+            building_id=pending.id,
+            phase=PhaseType.SUPPLEMENT_3,
+            phase_order=3,
+            report_submitted_at=None,
+            s3_file_key="reviews/supplement_3/2026-06-22/STAT-PENDING.xlsm",
+        ),
+    ])
+    db_session.commit()
+
+    res = client.get("/api/buildings/stats", headers=headers)
+
+    assert res.status_code == 200
+    body = res.json()
+    assert body["uploaded_reports_preliminary"] == 1
+    assert body["uploaded_reports_supplement"] == 1
+    assert body["deleted_submitted_reports_preliminary"] == 1
+    assert body["deleted_submitted_reports_supplement"] == 1
 
 
 def test_stats_returns_regional_building_stats_with_total_row(

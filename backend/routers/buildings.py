@@ -532,11 +532,23 @@ def get_stats(
         if key in inquiry_counts:
             inquiry_counts[key] = count
 
-    # 1-3) 업로드된 검토서 수 (ReviewStage 누적) — 건물 phase 기반이 아니라
-    # 제출 기록 자체를 센다. 건물이 보완 단계로 넘어가도 과거 예비 제출이 집계에 남는다.
+    # 1-3) 검토서 제출/업로드 수 (ReviewStage 누적) — 건물 phase 기반이 아니라
+    # 제출 기록 자체를 센다. 파일 삭제로 s3_file_key가 비어도 제출 이력은 별도 집계한다.
+    has_uploaded_file = and_(
+        ReviewStage.s3_file_key.isnot(None),
+        ReviewStage.s3_file_key != "",
+    )
+    missing_uploaded_file = or_(
+        ReviewStage.s3_file_key.is_(None),
+        ReviewStage.s3_file_key == "",
+    )
     uploaded_rows = (
         _scoped_by_building_id(
-            db.query(ReviewStage.phase, sa_func.count(ReviewStage.id))
+            db.query(
+                ReviewStage.phase,
+                sa_func.count(ReviewStage.id).filter(has_uploaded_file).label("uploaded"),
+                sa_func.count(ReviewStage.id).filter(missing_uploaded_file).label("deleted_submitted"),
+            )
             .filter(ReviewStage.report_submitted_at.isnot(None)),
             ReviewStage.building_id,
         )
@@ -545,12 +557,16 @@ def get_stats(
     )
     uploaded_reports_preliminary = 0
     uploaded_reports_supplement = 0
-    for phase, count in uploaded_rows:
+    deleted_submitted_reports_preliminary = 0
+    deleted_submitted_reports_supplement = 0
+    for phase, uploaded_count, deleted_submitted_count in uploaded_rows:
         key = phase.value if hasattr(phase, "value") else str(phase)
         if key == "preliminary":
-            uploaded_reports_preliminary += count
+            uploaded_reports_preliminary += uploaded_count
+            deleted_submitted_reports_preliminary += deleted_submitted_count
         elif key.startswith("supplement_"):
-            uploaded_reports_supplement += count
+            uploaded_reports_supplement += uploaded_count
+            deleted_submitted_reports_supplement += deleted_submitted_count
 
     # 2) phase 별 건수
     phase_counts_raw = (
@@ -1059,6 +1075,8 @@ def get_stats(
         # 업로드된 검토서 누적 수 (대시보드 "업로드된 검토서" 카드용)
         "uploaded_reports_preliminary": uploaded_reports_preliminary,
         "uploaded_reports_supplement": uploaded_reports_supplement,
+        "deleted_submitted_reports_preliminary": deleted_submitted_reports_preliminary,
+        "deleted_submitted_reports_supplement": deleted_submitted_reports_supplement,
         "completed": completed,
         # 최종 판정 5분류 (적합/보완적합/부적합/부적합(미회신)/대상제외)
         "final_counts": final_counts,
