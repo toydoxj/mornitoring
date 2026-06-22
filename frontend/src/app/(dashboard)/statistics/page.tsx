@@ -19,7 +19,7 @@ import { useAuthStore } from "@/stores/authStore"
 import { RESULT_LABELS, type PhaseType } from "@/types"
 
 type ActiveTab = "reviewer" | "regional" | "severity" | "keyword" | "quality" | "opinion"
-type RegionalTab = "area" | "floors" | "risk"
+type RegionalTab = "area" | "floors" | "risk" | "drawing_creator"
 type SeverityLabel = "L0" | "L1" | "L2" | "L3" | "L4"
 type OpinionSeverity = "NA" | SeverityLabel
 type ReportMaxLabel = "pass" | SeverityLabel
@@ -41,6 +41,11 @@ type RiskStatKey =
   | "quasi_multi_use"
   | "related_tech_coop_target"
   | "related_tech_coop"
+  | "related_tech_coop_missing"
+type DrawingCreatorStatKey =
+  | "drawing_creator_architect"
+  | "drawing_creator_structural_engineer"
+  | "drawing_creator_unknown"
 
 interface ReviewerStat {
   name: string
@@ -63,6 +68,7 @@ interface RegionalStats {
   area: RegionalStatRow<AreaStatKey>[]
   floors: RegionalStatRow<FloorStatKey>[]
   risk: RegionalStatRow<RiskStatKey>[]
+  drawing_creator: RegionalStatRow<DrawingCreatorStatKey>[]
 }
 
 interface SeverityPivotRow {
@@ -280,8 +286,15 @@ const RISK_COLUMNS: RegionalColumn<RiskStatKey>[] = [
   { key: "multi_use", label: "다중" },
   { key: "high_rise", label: "고층" },
   { key: "quasi_multi_use", label: "준다중" },
-  { key: "related_tech_coop_target", label: "관계기술자 협력 대상" },
-  { key: "related_tech_coop", label: "관계기술자 협력" },
+  { key: "related_tech_coop_target", label: "협력대상" },
+  { key: "related_tech_coop", label: "협력여부" },
+  { key: "related_tech_coop_missing", label: "미입력" },
+]
+
+const DRAWING_CREATOR_COLUMNS: RegionalColumn<DrawingCreatorStatKey>[] = [
+  { key: "drawing_creator_architect", label: "건축사" },
+  { key: "drawing_creator_structural_engineer", label: "건축구조기술사" },
+  { key: "drawing_creator_unknown", label: "미확인" },
 ]
 
 const TAB_TITLES: Record<ActiveTab, string> = {
@@ -541,6 +554,13 @@ function RegionalStatsView({
         <TabButton value="risk" activeValue={activeRegionalTab} onSelect={setActiveRegionalTab}>
           고위험군 및 관계기술자
         </TabButton>
+        <TabButton
+          value="drawing_creator"
+          activeValue={activeRegionalTab}
+          onSelect={setActiveRegionalTab}
+        >
+          구조도면 작성자
+        </TabButton>
       </div>
 
       {activeRegionalTab === "area" && (
@@ -551,6 +571,9 @@ function RegionalStatsView({
       )}
       {activeRegionalTab === "risk" && (
         <RegionalStatsTable rows={stats.risk} columns={RISK_COLUMNS} />
+      )}
+      {activeRegionalTab === "drawing_creator" && (
+        <RegionalStatsTable rows={stats.drawing_creator} columns={DRAWING_CREATOR_COLUMNS} />
       )}
     </div>
   )

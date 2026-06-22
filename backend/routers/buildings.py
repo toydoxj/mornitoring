@@ -14,6 +14,7 @@ from models.reviewer import Reviewer
 from models.user import User, UserRole
 from routers.auth import get_current_user, require_roles
 from services.audit import log_action
+from services.related_tech import related_tech_coop_filter, related_tech_target_filter
 from services.scope import (
     building_visibility_filter,
     is_building_visible_to,
@@ -349,6 +350,12 @@ RISK_STAT_KEYS = (
     "quasi_multi_use",
     "related_tech_coop_target",
     "related_tech_coop",
+    "related_tech_coop_missing",
+)
+DRAWING_CREATOR_STAT_KEYS = (
+    "drawing_creator_architect",
+    "drawing_creator_structural_engineer",
+    "drawing_creator_unknown",
 )
 
 
@@ -690,20 +697,18 @@ def get_stats(
             "completed": comp_count,
         })
 
-    related_tech_coop_target_filter = or_(
-        Building.floors_above >= 6,
-        Building.is_special_structure.is_(True),
-        Building.is_multi_use.is_(True),
-        Building.is_quasi_multi_use.is_(True),
-        and_(
-            Building.floors_above >= 3,
-            Building.detail_category9.ilike("%필로티%"),
-        ),
+    related_tech_coop_target_filter = related_tech_target_filter()
+    related_tech_coop_input_filter = related_tech_coop_filter()
+    related_tech_coop_missing_filter = and_(
+        related_tech_coop_target_filter,
+        ~related_tech_coop_input_filter,
     )
-    related_tech_coop_filter = sa_func.length(sa_func.trim(Building.struct_eng_name)) > 0
 
     gross_area_for_stats = sa_func.coalesce(Building.gross_area, 0)
     floors_above_for_stats = sa_func.coalesce(Building.floors_above, 0)
+    drawing_creator_qualification = sa_func.trim(
+        sa_func.coalesce(Building.drawing_creator_qualification, "")
+    )
 
     area_stats_raw = (
         _scoped(
@@ -771,8 +776,30 @@ def get_stats(
                     related_tech_coop_target_filter
                 ).label("related_tech_coop_target"),
                 sa_func.count(Building.id).filter(
-                    related_tech_coop_filter
+                    related_tech_coop_input_filter
                 ).label("related_tech_coop"),
+                sa_func.count(Building.id).filter(
+                    related_tech_coop_missing_filter
+                ).label("related_tech_coop_missing"),
+            )
+        )
+        .group_by(Building.sido, Building.sigungu)
+        .all()
+    )
+    drawing_creator_stats_raw = (
+        _scoped(
+            db.query(
+                Building.sido.label("sido"),
+                Building.sigungu.label("sigungu"),
+                sa_func.count(Building.id).filter(
+                    drawing_creator_qualification == "건축사"
+                ).label("drawing_creator_architect"),
+                sa_func.count(Building.id).filter(
+                    drawing_creator_qualification == "건축구조기술사"
+                ).label("drawing_creator_structural_engineer"),
+                sa_func.count(Building.id).filter(
+                    drawing_creator_qualification.notin_(("건축사", "건축구조기술사"))
+                ).label("drawing_creator_unknown"),
             )
         )
         .group_by(Building.sido, Building.sigungu)
@@ -782,6 +809,10 @@ def get_stats(
         "area": _merge_regional_rows(area_stats_raw, AREA_STAT_KEYS),
         "floors": _merge_regional_rows(floor_stats_raw, FLOOR_STAT_KEYS),
         "risk": _merge_regional_rows(risk_stats_raw, RISK_STAT_KEYS),
+        "drawing_creator": _merge_regional_rows(
+            drawing_creator_stats_raw,
+            DRAWING_CREATOR_STAT_KEYS,
+        ),
     }
 
     # 5) 심각도 통계 — 상세의견 분류별 집계 테이블을 기준으로 전체/분류/단계별 피벗 생성

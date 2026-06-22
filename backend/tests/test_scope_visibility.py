@@ -275,6 +275,7 @@ def test_stats_returns_regional_building_stats_with_total_row(
     b1.floors_above = 5
     b1.is_special_structure = True
     b1.struct_eng_name = "홍길동"
+    b1.drawing_creator_qualification = "건축사"
 
     b2 = make_building(mgmt_no="REG-STATS-002")
     b2.sido = "서울특별시"
@@ -282,6 +283,7 @@ def test_stats_returns_regional_building_stats_with_total_row(
     b2.gross_area = 300
     b2.floors_above = 6
     b2.is_multi_use = True
+    b2.drawing_creator_qualification = "건축구조기술사"
 
     b3 = make_building(mgmt_no="REG-STATS-003")
     b3.sido = "부산광역시"
@@ -291,6 +293,7 @@ def test_stats_returns_regional_building_stats_with_total_row(
     b3.is_high_rise = True
     b3.is_quasi_multi_use = True
     b3.struct_eng_firm = "협력사"
+    b3.drawing_creator_qualification = "기타"
 
     b4 = make_building(mgmt_no="REG-STATS-004")
     b4.gross_area = 800
@@ -323,14 +326,29 @@ def test_stats_returns_regional_building_stats_with_total_row(
     assert risk_total["quasi_multi_use"] == 1
     assert risk_total["related_tech_coop_target"] == 4
     assert risk_total["related_tech_coop"] == 1
+    assert risk_total["related_tech_coop_missing"] == 3
 
     seoul = next(row for row in regional_stats["risk"] if row["region"] == "서울특별시")
     assert seoul["total"] == 2
     assert seoul["related_tech_coop_target"] == 2
     assert seoul["related_tech_coop"] == 1
+    assert seoul["related_tech_coop_missing"] == 1
 
     risk_regions = [row["region"] for row in regional_stats["risk"]]
     assert risk_regions[:3] == ["전체", "서울특별시", "부산광역시"]
+
+    drawing_creator_total = regional_stats["drawing_creator"][0]
+    assert drawing_creator_total["region"] == "전체"
+    assert drawing_creator_total["drawing_creator_architect"] == 1
+    assert drawing_creator_total["drawing_creator_structural_engineer"] == 1
+    assert drawing_creator_total["drawing_creator_unknown"] == 2
+
+    drawing_creator_seoul = next(
+        row for row in regional_stats["drawing_creator"] if row["region"] == "서울특별시"
+    )
+    assert drawing_creator_seoul["drawing_creator_architect"] == 1
+    assert drawing_creator_seoul["drawing_creator_structural_engineer"] == 1
+    assert drawing_creator_seoul["drawing_creator_unknown"] == 0
 
 
 def test_stats_returns_severity_summary_by_category_and_phase(
