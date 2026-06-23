@@ -381,26 +381,40 @@ def _build_preliminary_data(row: tuple, columns: dict[str, str]) -> dict:
 def _apply_final_result(
     db: Session,
     result: dict,
-    building: Building,
+    building: Building | None,
     *,
+    mgmt_no: str | None = None,
     row_idx: int,
     final_raw: str | None,
     actor_user_id: int | None,
+    dry_run: bool = False,
 ) -> None:
     final_result = _parse_final_result(final_raw)
     if final_result is None:
         return
 
-    before_final = building.final_result
-    before_phase = building.current_phase
+    before_final = building.final_result if building is not None else None
+    before_phase = building.current_phase if building is not None else None
     phase_changed = before_phase != "completed"
     final_changed = before_final != final_result
     if not phase_changed and not final_changed:
         return
 
+    display_mgmt_no = mgmt_no or (building.mgmt_no if building is not None else "-")
+    result["final_result_updated"] += 1
+    if dry_run:
+        _append_warning(
+            result,
+            f"{display_mgmt_no}: CW 최종완료 반영 예정 "
+            f"({before_final or '-'} → {final_result}, 원문: {final_raw})",
+        )
+        return
+
+    if building is None:
+        return
+
     building.final_result = final_result
     building.current_phase = "completed"
-    result["final_result_updated"] += 1
 
     if phase_changed:
         db.add(PhaseTransitionLog(
@@ -434,7 +448,7 @@ def _apply_final_result(
     )
     _append_warning(
         result,
-        f"{building.mgmt_no}: CW 최종완료 반영 "
+        f"{display_mgmt_no}: CW 최종완료 반영 "
         f"({before_final or '-'} → {final_result}, 원문: {final_raw})",
     )
 
@@ -448,6 +462,7 @@ def _warn_preliminary_mismatch(
     row_idx: int,
     excel_value: str | None,
     actor_user_id: int | None,
+    dry_run: bool = False,
 ) -> None:
     if not excel_value or _is_blank_marker(excel_value):
         return
@@ -463,6 +478,8 @@ def _warn_preliminary_mismatch(
         f"(엑셀: {excel_value}, DB: {db_label})"
     )
     _append_warning(result, message)
+    if dry_run:
+        return
     log_action(
         db,
         actor_user_id,
@@ -491,6 +508,7 @@ def _warn_supplement_mismatch(
     column: str,
     excel_value: str | None,
     actor_user_id: int | None,
+    dry_run: bool = False,
 ) -> None:
     if not excel_value or _is_blank_marker(excel_value):
         return
@@ -506,6 +524,8 @@ def _warn_supplement_mismatch(
         f"(엑셀 {column}: {excel_value}, DB: {db_label})"
     )
     _append_warning(result, message)
+    if dry_run:
+        return
     log_action(
         db,
         actor_user_id,
@@ -524,7 +544,13 @@ def _warn_supplement_mismatch(
     )
 
 
-def import_ledger_unified(file_path: str | Path, db: Session, actor_user_id: int | None = None) -> dict:
+def import_ledger_unified(
+    file_path: str | Path,
+    db: Session,
+    actor_user_id: int | None = None,
+    *,
+    dry_run: bool = False,
+) -> dict:
     """통합 관리대장 시트를 DB에 import (일괄 처리 최적화)"""
     wb = load_workbook(str(file_path), data_only=True, read_only=True)
 
@@ -635,6 +661,7 @@ def import_ledger_unified(file_path: str | Path, db: Session, actor_user_id: int
         "final_result_updated": 0,
         "sheet": ws.title,
         "supplement_sheet": supplement_ws.title if supplement_ws is not None else None,
+        "mode": "validate" if dry_run else "import",
     }
 
     # 3단계: 일괄 생성 (배치 커밋)
@@ -659,19 +686,21 @@ def import_ledger_unified(file_path: str | Path, db: Session, actor_user_id: int
         building = existing_map.get(mgmt_no)
         is_new = building is None
         if is_new:
-            building = Building(**building_data)
-            db.add(building)
-            db.flush()
-            existing_map[mgmt_no] = building
+            if not dry_run:
+                building = Building(**building_data)
+                db.add(building)
+                db.flush()
+                existing_map[mgmt_no] = building
         else:
-            _apply_data(building, building_data, skip_none=True)
+            if not dry_run:
+                _apply_data(building, building_data, skip_none=True)
 
         # 예비검토
         prelim_data = _build_preliminary_data(row, columns)
 
         if any(v is not None for v in prelim_data.values()):
-            stage = _find_stage(stage_map, building, PhaseType.PRELIMINARY)
-            if not is_new:
+            stage = _find_stage(stage_map, building, PhaseType.PRELIMINARY) if building else None
+            if not is_new and building is not None:
                 _warn_preliminary_mismatch(
                     db,
                     result,
@@ -680,25 +709,27 @@ def import_ledger_unified(file_path: str | Path, db: Session, actor_user_id: int
                     row_idx=row_idx,
                     excel_value=_text_cell_value(row, columns["preliminary_decision"]),
                     actor_user_id=actor_user_id,
+                    dry_run=dry_run,
                 )
-            if stage is None:
-                stage = ReviewStage(
-                    building_id=building.id,
-                    phase=PhaseType.PRELIMINARY,
-                    phase_order=0,
-                    **prelim_data,
+            if not dry_run and building is not None:
+                if stage is None:
+                    stage = ReviewStage(
+                        building_id=building.id,
+                        phase=PhaseType.PRELIMINARY,
+                        phase_order=0,
+                        **prelim_data,
+                    )
+                    db.add(stage)
+                    db.flush()
+                    stage_map[(building.id, PhaseType.PRELIMINARY)] = stage
+                else:
+                    _apply_data(stage, prelim_data)
+                _transition_import_forward(
+                    db,
+                    building,
+                    to_phase="preliminary",
+                    actor_user_id=actor_user_id,
                 )
-                db.add(stage)
-                db.flush()
-                stage_map[(building.id, PhaseType.PRELIMINARY)] = stage
-            else:
-                _apply_data(stage, prelim_data)
-            _transition_import_forward(
-                db,
-                building,
-                to_phase="preliminary",
-                actor_user_id=actor_user_id,
-            )
 
         # 1차 보완
         supp1_data = {}
@@ -709,33 +740,36 @@ def import_ledger_unified(file_path: str | Path, db: Session, actor_user_id: int
             supp1_data[field_name] = val
 
         if any(v is not None for v in supp1_data.values()):
-            stage = _find_stage(stage_map, building, PhaseType.SUPPLEMENT_1)
-            if stage is None:
-                stage = ReviewStage(
-                    building_id=building.id,
-                    phase=PhaseType.SUPPLEMENT_1,
-                    phase_order=1,
-                    **supp1_data,
+            stage = _find_stage(stage_map, building, PhaseType.SUPPLEMENT_1) if building else None
+            if not dry_run and building is not None:
+                if stage is None:
+                    stage = ReviewStage(
+                        building_id=building.id,
+                        phase=PhaseType.SUPPLEMENT_1,
+                        phase_order=1,
+                        **supp1_data,
+                    )
+                    db.add(stage)
+                    db.flush()
+                    stage_map[(building.id, PhaseType.SUPPLEMENT_1)] = stage
+                else:
+                    _apply_data(stage, supp1_data)
+                _transition_import_forward(
+                    db,
+                    building,
+                    to_phase="supplement_1",
+                    actor_user_id=actor_user_id,
                 )
-                db.add(stage)
-                db.flush()
-                stage_map[(building.id, PhaseType.SUPPLEMENT_1)] = stage
-            else:
-                _apply_data(stage, supp1_data)
-            _transition_import_forward(
-                db,
-                building,
-                to_phase="supplement_1",
-                actor_user_id=actor_user_id,
-            )
 
         _apply_final_result(
             db,
             result,
             building,
+            mgmt_no=mgmt_no,
             row_idx=row_idx,
             final_raw=_text_cell_value(row, columns["final_result"]),
             actor_user_id=actor_user_id,
+            dry_run=dry_run,
         )
 
         if is_new:
@@ -745,21 +779,22 @@ def import_ledger_unified(file_path: str | Path, db: Session, actor_user_id: int
         batch_count += 1
 
         # 500건마다 중간 커밋 (메모리 관리)
-        if batch_count % 500 == 0:
+        if not dry_run and batch_count % 500 == 0:
             db.commit()
 
     for row_idx, mgmt_no, row in supplement_rows:
         building = existing_map.get(mgmt_no)
         if building is None:
             _append_warning(result, f"{mgmt_no}: 통합 보완대장 행은 있으나 DB 건축물이 없습니다")
-            log_action(
-                db,
-                actor_user_id,
-                "ledger_supplement_building_missing",
-                "building",
-                None,
-                after_data={"mgmt_no": mgmt_no, "row": row_idx, "sheet": SUPPLEMENT_SHEET_NAME},
-            )
+            if not dry_run:
+                log_action(
+                    db,
+                    actor_user_id,
+                    "ledger_supplement_building_missing",
+                    "building",
+                    None,
+                    after_data={"mgmt_no": mgmt_no, "row": row_idx, "sheet": SUPPLEMENT_SHEET_NAME},
+                )
             continue
 
         for phase_no, col_letter in supplement_columns.items():
@@ -778,7 +813,9 @@ def import_ledger_unified(file_path: str | Path, db: Session, actor_user_id: int
                 column=col_letter,
                 excel_value=excel_value,
                 actor_user_id=actor_user_id,
+                dry_run=dry_run,
             )
 
-    db.commit()
+    if not dry_run:
+        db.commit()
     return result

@@ -57,6 +57,8 @@ type LedgerUploadResult = {
   warnings?: string[]
   warning_count?: number
   final_result_updated?: number
+  mode?: "validate" | "import"
+  format?: string
 }
 
 type FieldChange = {
@@ -152,6 +154,8 @@ export default function BuildingsPage() {
   const [isLoading, setIsLoading] = useState(true)
   const [uploadOpen, setUploadOpen] = useState(false)
   const [uploading, setUploading] = useState(false)
+  const [uploadAction, setUploadAction] = useState<"validate" | "import" | null>(null)
+  const [uploadFile, setUploadFile] = useState<File | null>(null)
   const [uploadResult, setUploadResult] = useState<LedgerUploadResult | null>(null)
   const [selectedBuildingIds, setSelectedBuildingIds] = useState<Set<number>>(() => new Set())
   const [bulkFinalizing, setBulkFinalizing] = useState(false)
@@ -290,20 +294,49 @@ export default function BuildingsPage() {
     })
   }, [selectableBuildings])
 
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleLedgerFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
-    if (!file) return
+    if (file) {
+      setUploadFile(file)
+      setUploadResult(null)
+    }
+    e.target.value = ""
+  }
+
+  const resetLedgerUpload = () => {
+    setUploadFile(null)
+    setUploadResult(null)
+    setUploadAction(null)
+    setUploading(false)
+  }
+
+  const processLedgerFile = async (action: "validate" | "import") => {
+    if (!uploadFile) return
+
+    if (action === "import") {
+      const warningCount = uploadResult?.mode === "validate" ? uploadResult.warning_count ?? 0 : 0
+      const confirmed = confirm(
+        warningCount > 0
+          ? `검증 알림 ${warningCount}건이 있습니다. 그래도 DB에 업로드 적용할까요?`
+          : "선택한 엑셀 내용을 DB에 업로드 적용할까요?"
+      )
+      if (!confirmed) return
+    }
 
     setUploading(true)
+    setUploadAction(action)
     setUploadResult(null)
     try {
       const formData = new FormData()
-      formData.append("file", file)
-      const { data: result } = await apiClient.post("/api/ledger/import", formData, {
+      formData.append("file", uploadFile)
+      const endpoint = action === "validate" ? "/api/ledger/validate" : "/api/ledger/import"
+      const { data: result } = await apiClient.post<LedgerUploadResult>(endpoint, formData, {
         headers: { "Content-Type": "multipart/form-data" },
       })
-      setUploadResult(result)
-      fetchBuildings()
+      setUploadResult({ ...result, mode: result.mode ?? action })
+      if (action === "import") {
+        fetchBuildings()
+      }
     } catch (err) {
       const axiosErr = err as {
         response?: { data?: { detail?: unknown } }
@@ -315,11 +348,11 @@ export default function BuildingsPage() {
           ? detail
           : Array.isArray(detail)
             ? detail.map((item) => String(item)).join(", ")
-            : axiosErr.message || "업로드 실패"
-      setUploadResult({ imported: 0, skipped: 0, error: message })
+            : axiosErr.message || (action === "validate" ? "검증 실패" : "업로드 실패")
+      setUploadResult({ imported: 0, skipped: 0, error: message, mode: action })
     } finally {
       setUploading(false)
-      e.target.value = ""
+      setUploadAction(null)
     }
   }
 
@@ -817,31 +850,77 @@ export default function BuildingsPage() {
             </Button>
           )}
           {canUploadLedger && (
-            <Dialog open={uploadOpen} onOpenChange={setUploadOpen}>
+            <Dialog open={uploadOpen} onOpenChange={(open) => {
+              setUploadOpen(open)
+              if (!open) resetLedgerUpload()
+            }}>
               <Button onClick={() => setUploadOpen(true)}>엑셀 업로드</Button>
               <DialogContent>
                 <DialogHeader>
-                  <DialogTitle>통합관리대장 엑셀 업로드</DialogTitle>
+                  <DialogTitle>통합관리대장 엑셀 검증/업로드</DialogTitle>
                 </DialogHeader>
                 <div className="space-y-4">
                   <p className="text-sm text-muted-foreground">
-                    통합관리대장 엑셀 파일(.xlsx)을 선택하여 데이터를 일괄 등록/갱신합니다.
-                    이미 등록된 관리번호는 최신 엑셀 내용으로 갱신됩니다.
+                    먼저 엑셀 파일을 선택한 뒤 검증만 실행하여 최종완료 반영 예정 건수와 불일치 알림을 확인하세요.
+                    DB 반영은 별도의 업로드 적용 버튼을 눌렀을 때만 실행됩니다.
                   </p>
                   <Input
                     type="file"
                     accept=".xlsx,.xls"
-                    onChange={handleFileUpload}
+                    onChange={handleLedgerFileChange}
                     disabled={uploading}
                   />
+                  {uploadFile && (
+                    <div className="flex items-center gap-3 rounded-md border p-3 text-sm">
+                      <FileSpreadsheet className="h-6 w-6 text-primary" />
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate font-medium">{uploadFile.name}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {(uploadFile.size / 1024 / 1024).toLocaleString(undefined, { maximumFractionDigits: 2 })} MB
+                        </p>
+                      </div>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={resetLedgerUpload}
+                        disabled={uploading}
+                      >
+                        변경
+                      </Button>
+                    </div>
+                  )}
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <Button
+                      variant="outline"
+                      onClick={() => processLedgerFile("validate")}
+                      disabled={!uploadFile || uploading}
+                      loading={uploading && uploadAction === "validate"}
+                      loadingText="검증 중..."
+                    >
+                      검증만 실행
+                    </Button>
+                    <Button
+                      onClick={() => processLedgerFile("import")}
+                      disabled={!uploadFile || uploading}
+                      loading={uploading && uploadAction === "import"}
+                      loadingText="업로드 중..."
+                    >
+                      DB 업로드 적용
+                    </Button>
+                  </div>
                   {uploading && (
-                    <p className="text-sm">업로드 및 처리 중...</p>
+                    <p className="text-sm">
+                      {uploadAction === "validate" ? "검증 중..." : "업로드 및 처리 중..."}
+                    </p>
                   )}
                   {uploadResult && (
                     <div className="rounded-md bg-muted p-3 text-sm">
-                      <p>신규 등록: <strong>{uploadResult.imported}건</strong></p>
-                      <p>기존 갱신: <strong>{uploadResult.updated ?? 0}건</strong></p>
-                      <p>최종완료 반영: <strong>{uploadResult.final_result_updated ?? 0}건</strong></p>
+                      <p className="font-medium">
+                        {uploadResult.mode === "validate" ? "검증 결과" : "업로드 결과"}
+                      </p>
+                      <p>신규 {uploadResult.mode === "validate" ? "예정" : "등록"}: <strong>{uploadResult.imported}건</strong></p>
+                      <p>기존 {uploadResult.mode === "validate" ? "갱신 예정" : "갱신"}: <strong>{uploadResult.updated ?? 0}건</strong></p>
+                      <p>최종완료 {uploadResult.mode === "validate" ? "반영 예정" : "반영"}: <strong>{uploadResult.final_result_updated ?? 0}건</strong></p>
                       <p>중복 스킵: {uploadResult.skipped}건</p>
                       {uploadResult.error && (
                         <p className="mt-2 text-destructive">{uploadResult.error}</p>

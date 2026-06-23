@@ -1,3 +1,5 @@
+import io
+
 from openpyxl import Workbook
 
 from engines.ledger_import_selection import import_ledger_selection
@@ -559,6 +561,136 @@ def test_import_ledger_unified_finalizes_from_result_report_and_warns_preliminar
     assert phase_log.from_phase == "preliminary"
     assert phase_log.to_phase == "completed"
     assert phase_log.trigger == "import"
+
+
+def test_import_ledger_unified_dry_run_does_not_change_db(
+    db_session,
+    tmp_path,
+):
+    building = Building(
+        mgmt_no="2026-9101",
+        building_name="기존 건물",
+        current_phase="preliminary",
+        final_result="pass",
+    )
+    db_session.add(building)
+    db_session.flush()
+    stage = ReviewStage(
+        building_id=building.id,
+        phase=PhaseType.PRELIMINARY,
+        phase_order=0,
+        result=ResultType.PASS,
+        review_opinion="기존 의견",
+    )
+    db_session.add(stage)
+    db_session.commit()
+
+    wb = Workbook()
+    supp_ws = wb.active
+    supp_ws.title = "통합 보완대장"
+    supp_ws["A4"] = "모니터링\n관리번호"
+
+    ws = wb.create_sheet("통합 관리대장")
+    ws["A4"] = "모니터링\n관리번호"
+    ws["C4"] = "건축구분"
+    ws["BQ3"] = "예비판정"
+    ws["BQ4"] = "검토자"
+    ws["BR4"] = "1차검토의견\n(기술사회)"
+    ws["BV4"] = "예비판정 결과   (관리원 입력)"
+    ws["BW4"] = "예비 검토의견"
+    ws["CW3"] = "결과보고"
+    ws["CW4"] = "최종\n판정결과"
+
+    ws["A5"] = "2026-9101"
+    ws["C5"] = "신축"
+    ws["BQ5"] = "홍길동"
+    ws["BR5"] = "재계산"
+    ws["BV5"] = "보완"
+    ws["BW5"] = "변경 예정 의견"
+    ws["CW5"] = "부적합"
+
+    path = tmp_path / "unified_dry_run.xlsx"
+    wb.save(path)
+
+    result = import_ledger_unified(path, db_session, dry_run=True)
+
+    assert result["mode"] == "validate"
+    assert result["updated"] == 1
+    assert result["final_result_updated"] == 1
+    assert result["warning_count"] == 2
+    assert any("반영 예정" in warning for warning in result["warnings"])
+
+    db_session.refresh(building)
+    db_session.refresh(stage)
+    assert building.current_phase == "preliminary"
+    assert building.final_result == "pass"
+    assert stage.result == ResultType.PASS
+    assert stage.review_opinion == "기존 의견"
+    assert db_session.query(AuditLog).count() == 0
+    assert db_session.query(PhaseTransitionLog).count() == 0
+
+
+def test_validate_ledger_endpoint_does_not_apply_changes(
+    client,
+    db_session,
+    make_user,
+):
+    _, headers = make_user(UserRole.CHIEF_SECRETARY)
+    building = Building(
+        mgmt_no="2026-9102",
+        current_phase="preliminary",
+        final_result="pass",
+    )
+    db_session.add(building)
+    db_session.flush()
+    db_session.add(ReviewStage(
+        building_id=building.id,
+        phase=PhaseType.PRELIMINARY,
+        phase_order=0,
+        result=ResultType.PASS,
+    ))
+    db_session.commit()
+
+    wb = Workbook()
+    supp_ws = wb.active
+    supp_ws.title = "통합 보완대장"
+    supp_ws["A4"] = "모니터링\n관리번호"
+    ws = wb.create_sheet("통합 관리대장")
+    ws["A4"] = "모니터링\n관리번호"
+    ws["C4"] = "건축구분"
+    ws["BQ3"] = "예비판정"
+    ws["BR4"] = "1차검토의견\n(기술사회)"
+    ws["BV4"] = "예비판정 결과   (관리원 입력)"
+    ws["BW4"] = "예비 검토의견"
+    ws["CW3"] = "결과보고"
+    ws["CW4"] = "최종\n판정결과"
+    ws["A5"] = "2026-9102"
+    ws["C5"] = "신축"
+    ws["BR5"] = "재계산"
+    ws["BV5"] = "보완"
+    ws["CW5"] = "부적합"
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    files = {
+        "file": (
+            "unified.xlsx",
+            buf,
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+    }
+
+    res = client.post("/api/ledger/validate", headers=headers, files=files)
+
+    assert res.status_code == 200
+    body = res.json()
+    assert body["mode"] == "validate"
+    assert body["updated"] == 1
+    assert body["final_result_updated"] == 1
+    db_session.refresh(building)
+    assert building.current_phase == "preliminary"
+    assert building.final_result == "pass"
 
 
 def test_import_ledger_unified_checks_supplement_sheet_results_against_db(

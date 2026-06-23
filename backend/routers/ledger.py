@@ -157,6 +157,51 @@ async def import_excel(
         tmp_path.unlink(missing_ok=True)
 
 
+@router.post("/validate")
+async def validate_excel(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(UserRole.CHIEF_SECRETARY)),
+):
+    """통합관리대장 엑셀 파일을 DB 반영 없이 검증한다."""
+    if not file.filename or not file.filename.endswith((".xlsx", ".xls")):
+        raise HTTPException(status_code=400, detail="엑셀 파일(.xlsx)만 업로드 가능합니다")
+
+    tmp_path = await stream_upload_to_tempfile(file, max_mb=20, suffix=".xlsx")
+
+    try:
+        fmt = _detect_format(tmp_path)
+        if fmt != "unified_new":
+            raise HTTPException(
+                status_code=400,
+                detail=f"검증은 통합 관리대장 신형 양식만 지원합니다. 감지된 형식: {fmt}",
+            )
+        result = import_ledger_unified(
+            tmp_path,
+            db,
+            actor_user_id=current_user.id,
+            dry_run=True,
+        )
+        result["format"] = fmt
+        return result
+    except HTTPException:
+        db.rollback()
+        raise
+    except InvalidPhaseTransition as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=f"단계 전환 규칙 위반: {exc}")
+    except Exception as exc:
+        db.rollback()
+        logger.exception("관리대장 검증 실패")
+        raise HTTPException(
+            status_code=500,
+            detail=f"관리대장 검증 실패: {type(exc).__name__}: {exc}",
+        )
+    finally:
+        db.rollback()
+        tmp_path.unlink(missing_ok=True)
+
+
 @router.get("/export")
 def export_excel(
     db: Session = Depends(get_db),
