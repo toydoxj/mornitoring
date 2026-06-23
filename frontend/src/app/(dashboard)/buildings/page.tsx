@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState, useMemo } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
-import { ArrowDown, ArrowUp, ArrowUpDown, CheckCircle2, FileSpreadsheet, Upload, X } from "lucide-react"
+import { AlertTriangle, ArrowDown, ArrowUp, ArrowUpDown, CheckCircle2, FileSpreadsheet, Upload, X } from "lucide-react"
 import {
   useReactTable,
   getCoreRowModel,
@@ -54,6 +54,9 @@ type LedgerUploadResult = {
   skipped: number
   errors?: string[]
   error?: string
+  warnings?: string[]
+  warning_count?: number
+  final_result_updated?: number
 }
 
 type FieldChange = {
@@ -838,12 +841,28 @@ export default function BuildingsPage() {
                     <div className="rounded-md bg-muted p-3 text-sm">
                       <p>신규 등록: <strong>{uploadResult.imported}건</strong></p>
                       <p>기존 갱신: <strong>{uploadResult.updated ?? 0}건</strong></p>
+                      <p>최종완료 반영: <strong>{uploadResult.final_result_updated ?? 0}건</strong></p>
                       <p>중복 스킵: {uploadResult.skipped}건</p>
                       {uploadResult.error && (
                         <p className="mt-2 text-destructive">{uploadResult.error}</p>
                       )}
                       {uploadResult.errors && uploadResult.errors.length > 0 && (
                         <p className="mt-2 text-destructive">{uploadResult.errors.join(", ")}</p>
+                      )}
+                      {uploadResult.warning_count !== undefined && uploadResult.warning_count > 0 && (
+                        <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 p-3 text-amber-900">
+                          <div className="flex items-center gap-2 font-medium">
+                            <AlertTriangle className="h-4 w-4" />
+                            <span>확인 필요 {uploadResult.warning_count}건</span>
+                          </div>
+                          {uploadResult.warnings && uploadResult.warnings.length > 0 && (
+                            <ul className="mt-2 max-h-52 list-disc space-y-1 overflow-y-auto pl-4">
+                              {uploadResult.warnings.map((warning, index) => (
+                                <li key={`${index}-${warning}`}>{warning}</li>
+                              ))}
+                            </ul>
+                          )}
+                        </div>
                       )}
                     </div>
                   )}

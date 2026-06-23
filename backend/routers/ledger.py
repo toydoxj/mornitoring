@@ -84,10 +84,6 @@ def _detect_format(file_path: Path) -> str:
             has_2025 = True
             continue
 
-        if _is_technical_ledger_sheet(sn, row3_values, row4_values):
-            wb.close()
-            return "technical"
-
         if "통합관리대장" in normalized_sheet_name:
             # 통합 관리대장 시트의 Row 4 A열 확인하여 신형/구형 구분
             row4_a = _normalize_excel_text(ws.cell(row=4, column=1).value)
@@ -95,6 +91,10 @@ def _detect_format(file_path: Path) -> str:
             if row4_a and "관리번호" in row4_a:
                 return "unified_new"  # 3차수 통합본 (Row4 헤더, Row5 데이터)
             return "unified_old"      # 기존 형식 (Row2 헤더, Row3 데이터)
+
+        if _is_technical_ledger_sheet(sn, row3_values, row4_values):
+            wb.close()
+            return "technical"
 
     wb.close()
     if has_2025:
@@ -127,6 +127,13 @@ async def import_excel(
         else:
             result = import_ledger(tmp_path, db, actor_user_id=current_user.id)
         summary = result if isinstance(result, dict) else {"result": str(result)}
+        if isinstance(result, dict) and (
+            result.get("imported")
+            or result.get("updated")
+            or result.get("final_result_updated")
+        ):
+            from routers.buildings import clear_stats_cache
+            clear_stats_cache()
         log_action(
             db, current_user.id, "upload", "ledger",
             after_data={"filename": file.filename, "format": fmt, **summary},

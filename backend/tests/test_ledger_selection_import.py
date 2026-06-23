@@ -2,7 +2,10 @@ from openpyxl import Workbook
 
 from engines.ledger_import_selection import import_ledger_selection
 from engines.ledger_import_technical import import_ledger_technical
+from engines.ledger_import_unified import import_ledger_unified
+from models.audit_log import AuditLog
 from models.building import Building
+from models.phase_transition_log import PhaseTransitionLog
 from models.review_opinion_detail import ReviewOpinionDetail
 from models.review_severity_summary import ReviewSeveritySummary
 from models.review_stage import PhaseType, ResultType, ReviewStage
@@ -135,6 +138,23 @@ def test_detect_format_technical_ledger_with_management_sheet_name(tmp_path):
     wb.save(path)
 
     assert _detect_format(path) == "technical"
+
+
+def test_detect_format_prefers_unified_for_integrated_management_sheet(tmp_path):
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "통합 관리대장"
+    ws["A3"] = "대상 건축물 개요(허가대장 DB)"
+    ws["BQ3"] = "예비판정"
+    ws["A4"] = "모니터링\n관리번호"
+    ws["C4"] = "건축구분"
+    ws["BV4"] = "예비판정 결과   (관리원 입력)"
+    ws["A5"] = "2026-0001"
+
+    path = tmp_path / "unified.xlsx"
+    wb.save(path)
+
+    assert _detect_format(path) == "unified_new"
 
 
 def test_import_ledger_technical_reads_2026_distribution_format(db_session, tmp_path):
@@ -464,3 +484,131 @@ def test_opinion_detail_severity_can_be_assigned_manually(
     assert stage.severity_l2_count == 0
     assert detail.severity == "NA"
     assert db_session.query(ReviewSeveritySummary).filter_by(stage_id=stage.id).count() == 0
+
+
+def test_import_ledger_unified_finalizes_from_result_report_and_warns_preliminary_mismatch(
+    db_session,
+    tmp_path,
+):
+    building = Building(
+        mgmt_no="2026-9001",
+        building_name="기존 건물",
+        current_phase="preliminary",
+        final_result="pass",
+    )
+    db_session.add(building)
+    db_session.flush()
+    stage = ReviewStage(
+        building_id=building.id,
+        phase=PhaseType.PRELIMINARY,
+        phase_order=0,
+        result=ResultType.PASS,
+        review_opinion="기존 의견",
+    )
+    db_session.add(stage)
+    db_session.commit()
+
+    wb = Workbook()
+    supp_ws = wb.active
+    supp_ws.title = "통합 보완대장"
+    supp_ws["A4"] = "모니터링\n관리번호"
+
+    ws = wb.create_sheet("통합 관리대장")
+    ws["A4"] = "모니터링\n관리번호"
+    ws["C4"] = "건축구분"
+    ws["BQ3"] = "예비판정"
+    ws["BQ4"] = "검토자"
+    ws["BX4"] = "1차검토의견\n(기술사회)"
+    ws["BY4"] = "예비판정 결과   (관리원 입력)"
+    ws["BZ4"] = "예비 검토의견"
+    ws["CY3"] = "결과보고"
+    ws["CY4"] = "최종\n판정결과"
+
+    ws["A5"] = "2026-9001"
+    ws["C5"] = "신축"
+    ws["BQ5"] = "홍길동"
+    ws["BX5"] = "재계산"
+    ws["BY5"] = "보완"
+    ws["BZ5"] = "변경된 예비 검토의견"
+    ws["CY5"] = "부적합"
+
+    path = tmp_path / "unified_shifted.xlsx"
+    wb.save(path)
+
+    result = import_ledger_unified(path, db_session)
+
+    assert result["imported"] == 0
+    assert result["updated"] == 1
+    assert result["final_result_updated"] == 1
+    assert result["warning_count"] == 2
+    assert any("BR 1차검토의견" in warning for warning in result["warnings"])
+    assert any("CW 최종완료 반영" in warning for warning in result["warnings"])
+
+    db_session.refresh(building)
+    db_session.refresh(stage)
+    assert building.current_phase == "completed"
+    assert building.final_result == "fail"
+    assert stage.result == ResultType.RECALCULATE
+    assert stage.review_opinion == "변경된 예비 검토의견"
+    assert stage.stage_remarks == "판정의견: 재계산\n관리원 입력 예비판정 결과: 보완"
+
+    actions = [row.action for row in db_session.query(AuditLog).order_by(AuditLog.id).all()]
+    assert "ledger_preliminary_result_mismatch" in actions
+    assert "ledger_final_result_update" in actions
+    phase_log = db_session.query(PhaseTransitionLog).filter_by(mgmt_no="2026-9001").one()
+    assert phase_log.from_phase == "preliminary"
+    assert phase_log.to_phase == "completed"
+    assert phase_log.trigger == "import"
+
+
+def test_import_ledger_unified_checks_supplement_sheet_results_against_db(
+    db_session,
+    tmp_path,
+):
+    building = Building(mgmt_no="2026-9002", current_phase="supplement_2")
+    db_session.add(building)
+    db_session.flush()
+    db_session.add_all([
+        ReviewStage(
+            building_id=building.id,
+            phase=PhaseType.SUPPLEMENT_1,
+            phase_order=1,
+            result=ResultType.PASS,
+        ),
+        ReviewStage(
+            building_id=building.id,
+            phase=PhaseType.SUPPLEMENT_2,
+            phase_order=2,
+            result=ResultType.RECALCULATE,
+        ),
+    ])
+    db_session.commit()
+
+    wb = Workbook()
+    supp_ws = wb.active
+    supp_ws.title = "통합 보완대장"
+    supp_ws["A4"] = "모니터링\n관리번호"
+    supp_ws["AO3"] = "1차"
+    supp_ws["AP4"] = "판정 결과\n(이의신청반영)"
+    supp_ws["AW3"] = "2차"
+    supp_ws["AX4"] = "판정 결과\n(이의신청반영)"
+    supp_ws["A5"] = "2026-9002"
+    supp_ws["AP5"] = "단순오류"
+    supp_ws["AX5"] = "보완"
+
+    ws = wb.create_sheet("통합 관리대장")
+    ws["A4"] = "모니터링\n관리번호"
+    ws["A5"] = "2026-9002"
+
+    path = tmp_path / "unified_supplement.xlsx"
+    wb.save(path)
+
+    result = import_ledger_unified(path, db_session)
+
+    assert result["imported"] == 0
+    assert result["updated"] == 1
+    assert result["warning_count"] == 1
+    assert "통합 보완대장 1차 판정결과 불일치" in result["warnings"][0]
+    log = db_session.query(AuditLog).filter_by(action="ledger_supplement_result_mismatch").one()
+    assert log.after_data["mgmt_no"] == "2026-9002"
+    assert log.after_data["phase"] == "supplement_1"
