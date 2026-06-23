@@ -268,6 +268,8 @@ class QualityCheckItem(BaseModel):
     building_name: str | None = None
     group_no: int | None = None
     reviewer_name: str | None = None
+    quality_categories: list[str]
+    severity_levels: list[str]
     detail_count: int
 
 
@@ -815,6 +817,12 @@ def _is_quality_check_target(detail: ReviewOpinionDetail) -> bool:
     return bool(match_opinion_quality(detail.content or ""))
 
 
+def _sorted_severity_levels(values: set[str]) -> list[str]:
+    """심각도 레이블은 L0~L4 순서를 유지한다."""
+    order = {label: idx for idx, label in enumerate(SEVERITY_LABELS)}
+    return sorted(values, key=lambda value: (order.get(value, len(order)), value))
+
+
 @router.get("/quality-checks", response_model=QualityCheckListResponse)
 def list_quality_checks(
     db: Session = Depends(get_db),
@@ -857,7 +865,8 @@ def list_quality_checks(
 
     item_map: dict[int, dict] = {}
     for detail, stage, building, assigned_group_no, assigned_name, actual_group_no in rows:
-        if not _is_quality_check_target(detail):
+        matches = match_opinion_quality(detail.content or "")
+        if not matches:
             continue
         reviewer_name = (stage.reviewer_name or "").strip()
         if not reviewer_name:
@@ -873,15 +882,21 @@ def list_quality_checks(
                 "building_name": building.building_name,
                 "group_no": group_no,
                 "reviewer_name": reviewer_name,
+                "quality_categories": set(),
+                "severity_levels": set(),
                 "detail_count": 0,
             },
         )
         item["detail_count"] = int(item["detail_count"]) + 1
+        item["quality_categories"].update(match.category for match in matches)
+        if detail.severity:
+            item["severity_levels"].add(detail.severity)
 
-    items = [
-        QualityCheckItem(**item)
-        for item in sorted(item_map.values(), key=lambda value: value["mgmt_no"])
-    ]
+    items = []
+    for item in sorted(item_map.values(), key=lambda value: value["mgmt_no"]):
+        item["quality_categories"] = sorted(item["quality_categories"])
+        item["severity_levels"] = _sorted_severity_levels(item["severity_levels"])
+        items.append(QualityCheckItem(**item))
     return QualityCheckListResponse(items=items, total=len(items))
 
 

@@ -832,6 +832,15 @@ def test_quality_checks_lists_only_flagged_l3_l4_targets(
             severity="L4",
             content="전이보 간격 확인 필요.",
         ),
+        ReviewOpinionDetail(
+            stage_id=stage.id,
+            phase="preliminary",
+            phase_group="preliminary",
+            row_number=34,
+            category="기타의견",
+            severity="L4",
+            content="황당한 구조계산서입니다.",
+        ),
     ])
     db_session.commit()
 
@@ -846,7 +855,9 @@ def test_quality_checks_lists_only_flagged_l3_l4_targets(
         "building_name": building.building_name,
         "group_no": 4,
         "reviewer_name": "품질검토자",
-        "detail_count": 1,
+        "quality_categories": ["감정적·비난성 표현", "과장 표현"],
+        "severity_levels": ["L3", "L4"],
+        "detail_count": 2,
     }]
 
 

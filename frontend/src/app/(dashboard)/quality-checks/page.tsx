@@ -29,6 +29,8 @@ interface QualityCheckItem {
   building_name: string | null
   group_no: number | null
   reviewer_name: string | null
+  quality_categories: string[]
+  severity_levels: string[]
   detail_count: number
 }
 
@@ -40,6 +42,10 @@ interface QualityCheckListResponse {
 interface QualityCheckResolveResponse {
   building_id: number
   updated_count: number
+}
+
+function formatList(values: string[]) {
+  return values.length > 0 ? values.join(", ") : "-"
 }
 
 export default function QualityChecksPage() {
@@ -122,19 +128,21 @@ export default function QualityChecksPage() {
               <TableHead className="min-w-[180px]">건물명</TableHead>
               <TableHead className="w-[90px] text-center">조</TableHead>
               <TableHead className="w-[140px]">검토위원</TableHead>
+              <TableHead className="min-w-[180px]">표현품질</TableHead>
+              <TableHead className="w-[120px] text-center">심각도</TableHead>
               <TableHead className="w-[110px] text-center">적합</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {isLoading ? (
               <TableRow>
-                <TableCell colSpan={6} className="h-32 text-center text-muted-foreground">
+                <TableCell colSpan={8} className="h-32 text-center text-muted-foreground">
                   불러오는 중...
                 </TableCell>
               </TableRow>
             ) : items.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={6} className="h-32 text-center text-muted-foreground">
+                <TableCell colSpan={8} className="h-32 text-center text-muted-foreground">
                   확인할 검토서가 없습니다.
                 </TableCell>
               </TableRow>
@@ -168,6 +176,12 @@ export default function QualityChecksPage() {
                         ({item.detail_count})
                       </span>
                     )}
+                  </TableCell>
+                  <TableCell className="whitespace-normal break-words text-sm">
+                    {formatList(item.quality_categories)}
+                  </TableCell>
+                  <TableCell className="text-center text-sm">
+                    {formatList(item.severity_levels)}
                   </TableCell>
                   <TableCell className="text-center">
                     <Button
