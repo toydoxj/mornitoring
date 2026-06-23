@@ -72,6 +72,12 @@ type ReviewUploadResult = {
   changes: FieldChange[]
 }
 
+const LEGACY_REVIEW_FORM_WARNING = "이전 양식으로 검토서가 작성되었습니다."
+
+function hasLegacyReviewFormWarning(result: ReviewUploadResult) {
+  return result.warnings.some((warning) => warning.trim() === LEGACY_REVIEW_FORM_WARNING)
+}
+
 type BulkFinalizePassResult = {
   applied: number
   skipped: number
@@ -477,6 +483,9 @@ export default function BuildingsPage() {
       setReviewUploadFile(null)
       setReviewInappropriateNeeded(effectiveInappropriateNeeded)
       if (result.success) {
+        if (hasLegacyReviewFormWarning(result)) {
+          alert(LEGACY_REVIEW_FORM_WARNING)
+        }
         fetchBuildings()
         setTimeout(() => {
           setReviewUploadTarget(null)

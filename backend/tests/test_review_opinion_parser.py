@@ -3,7 +3,7 @@
 from openpyxl import Workbook, load_workbook
 
 from engines.review_extractor import extract_review_data
-from engines.review_validator import validate_review_file
+from engines.review_validator import LEGACY_REVIEW_FORM_WARNING, validate_review_file
 
 
 def _make_workbook(path, *, missing_severity: bool = False) -> None:
@@ -159,6 +159,22 @@ def test_validate_review_file_accepts_supplement_common_procedure(tmp_path):
     assert result.is_valid is True
 
 
+def test_validate_review_file_accepts_filename_starting_with_mgmt_no(tmp_path):
+    path = tmp_path / "2026-0001.xlsm"
+    _make_workbook(path)
+
+    result = validate_review_file(
+        path,
+        filename="2026-0001 예비검토서.xlsm",
+        expected_mgmt_no="2026-0001",
+        submitter_name="이공우",
+        expected_phase="preliminary",
+    )
+
+    assert result.is_valid is True
+    assert result.mgmt_no == "2026-0001"
+
+
 def test_validate_review_file_rejects_wrong_supplement_procedure_suffix(tmp_path):
     path = tmp_path / "2026-0001.xlsm"
     _make_workbook(path)
@@ -256,6 +272,36 @@ def test_validate_review_file_rejects_non_pass_when_detail_is_empty(tmp_path):
 
     assert result.is_valid is False
     assert any("상세의견/심각도 기준 '적합'" in error for error in result.errors)
+
+
+def test_validate_review_file_allows_legacy_form_with_warning(tmp_path):
+    path = tmp_path / "2026-0001.xlsm"
+    _make_workbook(path)
+    _clear_detail_opinions(path)
+
+    wb = load_workbook(path)
+    ws = wb[wb.sheetnames[0]]
+    ws["H4"] = "재계산"
+    ws["B8"] = "1) 공법"
+    ws["B10"] = "3) 면진&제진"
+    ws["B11"] = "4) 특수전단벽"
+    ws["B12"] = "5) 무량판"
+    ws["B76"] = "기타의견"
+    wb.save(path)
+    wb.close()
+
+    result = validate_review_file(
+        path,
+        filename="2026-0001.xlsm",
+        expected_mgmt_no="2026-0001",
+        submitter_name="이공우",
+        expected_phase="preliminary",
+    )
+
+    assert result.is_valid is True
+    assert LEGACY_REVIEW_FORM_WARNING in result.warnings
+    assert result.extracted_data["is_legacy_form"] is True
+    assert any("상세의견/심각도 기준 '적합'" in warning for warning in result.warnings)
 
 
 def test_validate_review_file_rejects_non_recalculate_with_l3_or_l4(tmp_path):

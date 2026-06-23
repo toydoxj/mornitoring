@@ -35,6 +35,8 @@ from openpyxl import load_workbook
 from engines.review_opinion_parser import parse_review_opinions
 
 MGMT_NO_PATTERN = re.compile(r"^\d{4}-\d{4}$")
+MGMT_NO_FILENAME_PATTERN = re.compile(r"^(\d{4}-\d{4})(?:$|[\s_-].*)")
+LEGACY_REVIEW_FORM_WARNING = "이전 양식으로 검토서가 작성되었습니다."
 
 REVIEW_RESULT_ALIASES = {
     "적합": "적합",
@@ -139,13 +141,29 @@ def _normalized_review_result(value: str) -> str:
     return REVIEW_RESULT_ALIASES.get(value.strip(), value.strip())
 
 
+def _is_legacy_review_form(ws) -> bool:
+    """이전 검토서 양식의 고정 라벨 패턴을 감지한다."""
+    legacy_markers = {
+        "B8": "1) 공법",
+        "B10": "3) 면진&제진",
+        "B11": "4) 특수전단벽",
+        "B12": "5) 무량판",
+        "B76": "기타의견",
+    }
+    matched = sum(
+        1
+        for coord, expected in legacy_markers.items()
+        if _cell_str(ws, coord) == expected
+    )
+    return matched >= 2
+
+
 def extract_mgmt_no_from_filename(filename: str) -> str | None:
     """파일명에서 관리번호 추출 (예: 2025-0005.xlsm)"""
-    stem = Path(filename).stem
-    parts = stem.split("_")
-    candidate = parts[0].strip()
-    if MGMT_NO_PATTERN.match(candidate):
-        return candidate
+    stem = Path(filename).stem.strip()
+    match = MGMT_NO_FILENAME_PATTERN.match(stem)
+    if match:
+        return match.group(1)
     return None
 
 
@@ -183,7 +201,7 @@ def validate_review_file(
     if not file_mgmt_no:
         result.add_error(
             f"파일명에서 관리번호를 인식할 수 없습니다: '{filename}'. "
-            "파일명은 '관리번호.xlsm' 형식이어야 합니다. (예: 2025-0001.xlsm)"
+            "파일명은 관리번호로 시작해야 합니다. (예: 2025-0001.xlsm, 2025-0001 예비검토서.xlsm)"
         )
         return result
     result.mgmt_no = file_mgmt_no
@@ -211,6 +229,9 @@ def validate_review_file(
         result.add_warning(f"시트명이 '{sheet_name}'입니다. '검토서(1차)' 형식이어야 합니다.")
 
     ws = wb[sheet_name]
+    is_legacy_form = _is_legacy_review_form(ws)
+    if is_legacy_form:
+        result.add_warning(LEGACY_REVIEW_FORM_WARNING)
 
     # 2. 내부 관리번호 (C4) 확인
     internal_mgmt_no = _cell_str(ws, "C4")
@@ -285,10 +306,14 @@ def validate_review_file(
     normalized_review_result = _normalized_review_result(review_result_value)
     if normalized_review_result != expected_review_result:
         current_label = review_result_value or "빈값"
-        result.add_error(
+        message = (
             f"검토결과(H4)는 상세의견/심각도 기준 '{expected_review_result}'이어야 합니다. "
             f"현재 값: '{current_label}' ({expected_reason})"
         )
+        if is_legacy_form:
+            result.add_warning(message)
+        else:
+            result.add_error(message)
 
     if review_result_value == "적합":
         if defect_type_1 and defect_type_1 != "적합":
@@ -366,6 +391,7 @@ def validate_review_file(
         "type_high_rise": _cell_str(ws, "C15"),               # 고층
         "sheet_name": sheet_name,
         "sheet_count": len(wb.sheetnames),
+        "is_legacy_form": is_legacy_form,
     }
 
     # 제출전 확인 경고

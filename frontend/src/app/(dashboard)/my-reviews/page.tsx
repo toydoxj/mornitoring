@@ -62,6 +62,12 @@ interface UploadResult {
   changes: FieldChange[]
 }
 
+const LEGACY_REVIEW_FORM_WARNING = "이전 양식으로 검토서가 작성되었습니다."
+
+function hasLegacyReviewFormWarning(result: UploadResult) {
+  return result.warnings.some((warning) => warning.trim() === LEGACY_REVIEW_FORM_WARNING)
+}
+
 export default function MyReviewsPage() {
   const router = useRouter()
   const [data, setData] = useState<Building[]>([])
@@ -238,6 +244,9 @@ export default function MyReviewsPage() {
       setUploadFile(null)
       setInappropriateReviewNeeded(effectiveInappropriateReviewNeeded)
       if (result.success) {
+        if (hasLegacyReviewFormWarning(result)) {
+          alert(LEGACY_REVIEW_FORM_WARNING)
+        }
         fetchData()
         // 성공 알림을 1초간 보여준 뒤 다이얼로그 닫기
         setTimeout(() => {
