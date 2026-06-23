@@ -8,8 +8,8 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query
 from pydantic import BaseModel
-from sqlalchemy import func, or_
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy import and_, func, or_
+from sqlalchemy.orm import Session, aliased, selectinload
 from starlette.background import BackgroundTask
 from starlette.responses import FileResponse
 
@@ -25,6 +25,7 @@ from routers.auth import get_current_user, require_roles
 from engines.review_validator import validate_review_file
 from engines.review_extractor import extract_review_data
 from engines.opinion_text import clean_opinion_detail_content
+from engines.opinion_quality_analyzer import match_opinion_quality
 
 
 def _ensure_reviewer_can_access_building(
@@ -258,6 +259,26 @@ class OpinionDetailResponse(BaseModel):
 class OpinionDetailListResponse(BaseModel):
     items: list[OpinionDetailResponse]
     total: int
+
+
+class QualityCheckItem(BaseModel):
+    building_id: int
+    mgmt_no: str
+    full_address: str | None = None
+    building_name: str | None = None
+    group_no: int | None = None
+    reviewer_name: str | None = None
+    detail_count: int
+
+
+class QualityCheckListResponse(BaseModel):
+    items: list[QualityCheckItem]
+    total: int
+
+
+class QualityCheckResolveResponse(BaseModel):
+    building_id: int
+    updated_count: int
 
 
 class OpinionSeverityUpdate(BaseModel):
@@ -767,6 +788,142 @@ def _resolve_inappropriate_review_needed(
 ) -> bool:
     """부적정 사례 검토 필요 체크는 검토서 재업로드로 해제할 수 없게 보존."""
     return bool(requested_value or (stage and stage.inappropriate_review_needed))
+
+
+def _quality_check_base_query(db: Session, current_user: User):
+    """품질 문제 대상 + L3/L4 의견을 찾기 위한 기본 쿼리."""
+    query = (
+        db.query(ReviewOpinionDetail, ReviewStage, Building)
+        .join(ReviewStage, ReviewOpinionDetail.stage_id == ReviewStage.id)
+        .join(Building, ReviewStage.building_id == Building.id)
+        .filter(
+            ReviewOpinionDetail.severity.in_(("L3", "L4")),
+            or_(
+                ReviewOpinionDetail.quality_decision.is_(None),
+                ReviewOpinionDetail.quality_decision != "suitable",
+            ),
+        )
+    )
+    visibility = building_visibility_filter(current_user)
+    if visibility is not None:
+        query = query.filter(visibility)
+    return query
+
+
+def _is_quality_check_target(detail: ReviewOpinionDetail) -> bool:
+    """표현 품질 규칙에 실제로 걸린 상세 의견인지 확인한다."""
+    return bool(match_opinion_quality(detail.content or ""))
+
+
+@router.get("/quality-checks", response_model=QualityCheckListResponse)
+def list_quality_checks(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(
+        require_roles(
+            UserRole.TEAM_LEADER,
+            UserRole.CHIEF_SECRETARY,
+            UserRole.SECRETARY,
+        )
+    ),
+):
+    """품질 문제 대상이면서 심각도 L3/L4인 검토서 확인 목록."""
+    actual_user = aliased(User)
+    actual_reviewer = aliased(Reviewer)
+    rows = (
+        _quality_check_base_query(db, current_user)
+        .add_columns(
+            Reviewer.group_no.label("assigned_group_no"),
+            User.name.label("assigned_reviewer_name"),
+            actual_reviewer.group_no.label("actual_group_no"),
+        )
+        .outerjoin(Reviewer, Building.reviewer_id == Reviewer.id)
+        .outerjoin(User, Reviewer.user_id == User.id)
+        .outerjoin(
+            actual_user,
+            and_(
+                actual_user.name == ReviewStage.reviewer_name,
+                actual_user.role == UserRole.REVIEWER,
+            ),
+        )
+        .outerjoin(actual_reviewer, actual_reviewer.user_id == actual_user.id)
+        .order_by(
+            Building.mgmt_no,
+            ReviewStage.phase_order.desc(),
+            ReviewOpinionDetail.row_number,
+            ReviewOpinionDetail.id,
+        )
+        .all()
+    )
+
+    item_map: dict[int, dict] = {}
+    for detail, stage, building, assigned_group_no, assigned_name, actual_group_no in rows:
+        if not _is_quality_check_target(detail):
+            continue
+        reviewer_name = (stage.reviewer_name or "").strip()
+        if not reviewer_name:
+            reviewer_name = assigned_name or building.assigned_reviewer_name or None
+        group_no = actual_group_no if (stage.reviewer_name or "").strip() else assigned_group_no
+
+        item = item_map.setdefault(
+            building.id,
+            {
+                "building_id": building.id,
+                "mgmt_no": building.mgmt_no,
+                "full_address": _address_of(building),
+                "building_name": building.building_name,
+                "group_no": group_no,
+                "reviewer_name": reviewer_name,
+                "detail_count": 0,
+            },
+        )
+        item["detail_count"] = int(item["detail_count"]) + 1
+
+    items = [
+        QualityCheckItem(**item)
+        for item in sorted(item_map.values(), key=lambda value: value["mgmt_no"])
+    ]
+    return QualityCheckListResponse(items=items, total=len(items))
+
+
+@router.patch(
+    "/quality-checks/{building_id}/suitable",
+    response_model=QualityCheckResolveResponse,
+)
+def mark_quality_check_suitable(
+    building_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(
+        require_roles(
+            UserRole.TEAM_LEADER,
+            UserRole.CHIEF_SECRETARY,
+            UserRole.SECRETARY,
+        )
+    ),
+):
+    """해당 건물의 품질 문제 대상 L3/L4 상세 의견을 적합 처리한다."""
+    rows = (
+        _quality_check_base_query(db, current_user)
+        .filter(Building.id == building_id)
+        .all()
+    )
+    updated_count = 0
+    for detail, _stage, _building in rows:
+        if not _is_quality_check_target(detail):
+            continue
+        detail.quality_decision = "suitable"
+        updated_count += 1
+
+    if updated_count == 0:
+        raise HTTPException(status_code=404, detail="검토서 확인 대상을 찾을 수 없습니다")
+
+    from routers.buildings import clear_stats_cache
+
+    clear_stats_cache()
+    db.commit()
+    return QualityCheckResolveResponse(
+        building_id=building_id,
+        updated_count=updated_count,
+    )
 
 
 @router.get("/opinion-details", response_model=OpinionDetailListResponse)

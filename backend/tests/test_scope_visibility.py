@@ -777,6 +777,159 @@ def test_secretary_stats_keyword_excludes_other_group(
     assert "황당함" not in terms
 
 
+def test_quality_checks_lists_only_flagged_l3_l4_targets(
+    client, db_session, make_user, make_reviewer, make_building
+):
+    _, headers = make_user(UserRole.CHIEF_SECRETARY)
+    reviewer_user, reviewer, _ = make_reviewer()
+    reviewer_user.name = "품질검토자"
+    reviewer.group_no = 4
+    building = make_building(
+        reviewer_id=reviewer.id,
+        mgmt_no="QUAL-CHECK-001",
+    )
+    building.sido = "서울특별시"
+    building.sigungu = "강남구"
+    building.beopjeongdong = "역삼동"
+    building.main_lot_no = "10"
+    building.sub_lot_no = "2"
+    db_session.commit()
+
+    stage = ReviewStage(
+        building_id=building.id,
+        phase=PhaseType.PRELIMINARY,
+        phase_order=0,
+        reviewer_name="품질검토자",
+    )
+    db_session.add(stage)
+    db_session.commit()
+    db_session.refresh(stage)
+    db_session.add_all([
+        ReviewOpinionDetail(
+            stage_id=stage.id,
+            phase="preliminary",
+            phase_group="preliminary",
+            row_number=31,
+            category="기타의견",
+            severity="L3",
+            content="너무 황당한 구조계산서입니다.",
+        ),
+        ReviewOpinionDetail(
+            stage_id=stage.id,
+            phase="preliminary",
+            phase_group="preliminary",
+            row_number=32,
+            category="기타의견",
+            severity="L2",
+            content="너무 황당한 표현이지만 L3/L4가 아닙니다.",
+        ),
+        ReviewOpinionDetail(
+            stage_id=stage.id,
+            phase="preliminary",
+            phase_group="preliminary",
+            row_number=33,
+            category="기타의견",
+            severity="L4",
+            content="전이보 간격 확인 필요.",
+        ),
+    ])
+    db_session.commit()
+
+    res = client.get("/api/reviews/quality-checks", headers=headers)
+    assert res.status_code == 200
+    payload = res.json()
+    assert payload["total"] == 1
+    assert payload["items"] == [{
+        "building_id": building.id,
+        "mgmt_no": "QUAL-CHECK-001",
+        "full_address": "서울특별시 강남구 역삼동 10-2",
+        "building_name": building.building_name,
+        "group_no": 4,
+        "reviewer_name": "품질검토자",
+        "detail_count": 1,
+    }]
+
+
+def test_secretary_quality_checks_filters_by_group_and_mark_suitable(
+    client, db_session, make_user, make_reviewer, make_building
+):
+    sec, sec_h = make_user(UserRole.SECRETARY)
+    sec.group_no = 1
+    db_session.commit()
+    rev1_user, rev1, b1, rev2_user, rev2, b2 = _make_two_groups(
+        make_user, make_reviewer, make_building, db_session
+    )
+    rev1_user.name = "1조검토자"
+    rev2_user.name = "2조검토자"
+    db_session.commit()
+
+    stage1 = ReviewStage(
+        building_id=b1.id,
+        phase=PhaseType.PRELIMINARY,
+        phase_order=0,
+        reviewer_name="1조검토자",
+    )
+    stage2 = ReviewStage(
+        building_id=b2.id,
+        phase=PhaseType.PRELIMINARY,
+        phase_order=0,
+        reviewer_name="2조검토자",
+    )
+    db_session.add_all([stage1, stage2])
+    db_session.commit()
+    db_session.refresh(stage1)
+    db_session.refresh(stage2)
+    visible_detail = ReviewOpinionDetail(
+        stage_id=stage1.id,
+        phase="preliminary",
+        phase_group="preliminary",
+        row_number=31,
+        category="기타의견",
+        severity="L4",
+        content="황당한 구조계산서입니다.",
+    )
+    hidden_detail = ReviewOpinionDetail(
+        stage_id=stage2.id,
+        phase="preliminary",
+        phase_group="preliminary",
+        row_number=31,
+        category="기타의견",
+        severity="L4",
+        content="황당한 구조계산서입니다.",
+    )
+    db_session.add_all([visible_detail, hidden_detail])
+    db_session.commit()
+
+    before = client.get("/api/reviews/quality-checks", headers=sec_h)
+    assert before.status_code == 200
+    assert [item["mgmt_no"] for item in before.json()["items"]] == ["VIS-G1"]
+
+    hidden_res = client.patch(
+        f"/api/reviews/quality-checks/{b2.id}/suitable",
+        headers=sec_h,
+    )
+    assert hidden_res.status_code == 404
+
+    patch_res = client.patch(
+        f"/api/reviews/quality-checks/{b1.id}/suitable",
+        headers=sec_h,
+    )
+    assert patch_res.status_code == 200
+    assert patch_res.json() == {
+        "building_id": b1.id,
+        "updated_count": 1,
+    }
+
+    db_session.refresh(visible_detail)
+    db_session.refresh(hidden_detail)
+    assert visible_detail.quality_decision == "suitable"
+    assert hidden_detail.quality_decision == "unsuitable"
+
+    after = client.get("/api/reviews/quality-checks", headers=sec_h)
+    assert after.status_code == 200
+    assert after.json()["items"] == []
+
+
 # ===== 부적합 검토 (/api/reviews/inappropriate) =====
 
 def test_secretary_inappropriate_filters_by_group(

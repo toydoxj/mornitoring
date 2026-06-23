@@ -31,6 +31,7 @@ const NAV_ITEMS = [
   { href: "/review-files", label: "검토서 관리", roles: ["team_leader", "chief_secretary", "manager"] },
   { href: "/inquiries", label: "문의사항", roles: ["team_leader", "chief_secretary", "secretary", "manager"] },
   { href: "/inappropriate-review", label: "부적합 검토", roles: ["team_leader", "chief_secretary", "secretary", "manager"] },
+  { href: "/quality-checks", label: "검토서 확인", roles: ["team_leader", "chief_secretary", "secretary"] },
   { href: "/statistics", label: "통계자료", roles: ["team_leader", "chief_secretary", "secretary", "manager"] },
   { href: "/reminders", label: "리마인드", roles: ["team_leader", "chief_secretary", "secretary"] },
   { href: "/notifications", label: "알림 현황", roles: ["team_leader", "chief_secretary", "secretary"] },
