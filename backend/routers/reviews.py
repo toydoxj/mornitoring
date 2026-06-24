@@ -8,7 +8,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query
 from pydantic import BaseModel
-from sqlalchemy import and_, func, or_
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session, aliased, selectinload
 from starlette.background import BackgroundTask
 from starlette.responses import FileResponse
@@ -113,7 +113,6 @@ from services.phase_transition import (
 from services.scope import (
     building_visibility_filter,
     is_building_visible_to,
-    visible_building_ids_subquery,
 )
 
 router = APIRouter()
@@ -1544,9 +1543,71 @@ def _can_manage_inquiry(inquiry, current_user: User, db: Session) -> bool:
     if current_user.role in (UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY):
         return True
     if current_user.role == UserRole.SECRETARY:
+        if current_user.group_no is None:
+            return True
         building = db.query(Building).filter(Building.id == inquiry.building_id).first()
-        return bool(building and is_building_visible_to(current_user, building, db))
+        if building and is_building_visible_to(current_user, building, db):
+            return True
+        if getattr(inquiry, "mgmt_no", None):
+            mgmt_building = (
+                db.query(Building)
+                .filter(Building.mgmt_no == inquiry.mgmt_no)
+                .first()
+            )
+            if mgmt_building and is_building_visible_to(current_user, mgmt_building, db):
+                return True
+        if inquiry.submitter_id is not None:
+            return (
+                db.query(Reviewer.id)
+                .filter(
+                    Reviewer.user_id == inquiry.submitter_id,
+                    Reviewer.group_no == current_user.group_no,
+                )
+                .first()
+                is not None
+            )
+        return False
     return False
+
+
+def _inquiry_visibility_filter(current_user: User):
+    """문의 목록용 가시성 필터.
+
+    같은 조 간사는 현재 건물 담당자 기준뿐 아니라 문의 작성 검토위원의 조 기준도
+    함께 사용한다. 실제 운영에서는 관리번호/담당자 연결이 사후 보정될 수 있어서
+    building_id 하나만 보면 간사 문의함에서 누락될 수 있다.
+    """
+    from models.inquiry import Inquiry
+
+    if current_user.role in (
+        UserRole.TEAM_LEADER,
+        UserRole.CHIEF_SECRETARY,
+        UserRole.MANAGER,
+    ):
+        return None
+    if current_user.role == UserRole.SECRETARY:
+        if current_user.group_no is None:
+            return None
+        same_group_reviewer_ids = (
+            select(Reviewer.id).where(Reviewer.group_no == current_user.group_no)
+        )
+        same_group_reviewer_user_ids = (
+            select(Reviewer.user_id).where(Reviewer.group_no == current_user.group_no)
+        )
+        same_group_building_ids = (
+            select(Building.id)
+            .where(Building.reviewer_id.in_(same_group_reviewer_ids))
+        )
+        same_group_mgmt_nos = (
+            select(Building.mgmt_no)
+            .where(Building.reviewer_id.in_(same_group_reviewer_ids))
+        )
+        return or_(
+            Inquiry.building_id.in_(same_group_building_ids),
+            Inquiry.mgmt_no.in_(same_group_mgmt_nos),
+            Inquiry.submitter_id.in_(same_group_reviewer_user_ids),
+        )
+    return Inquiry.id.is_(None)
 
 
 @router.post("/inquiry")
@@ -1792,9 +1853,9 @@ def list_inquiries(
 
     query = db.query(Inquiry)
 
-    visible_ids = visible_building_ids_subquery(current_user)
-    if visible_ids is not None:
-        query = query.filter(Inquiry.building_id.in_(visible_ids))
+    visibility = _inquiry_visibility_filter(current_user)
+    if visibility is not None:
+        query = query.filter(visibility)
 
     if status_filter == "active":
         query = query.filter(Inquiry.status.in_([InquiryStatus.OPEN, InquiryStatus.ASKING_AGENCY]))

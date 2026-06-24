@@ -146,6 +146,30 @@ def test_secretary_inquiry_list_filters_by_group(
     assert "g2 inquiry" not in contents
 
 
+def test_secretary_inquiry_list_includes_same_group_submitter(
+    client, db_session, make_user, make_reviewer, make_building
+):
+    sec, sec_h = make_user(UserRole.SECRETARY, group_no=1)
+    reviewer_user, _same_group_reviewer, _ = make_reviewer(group_no=1)
+    _other_user, other_group_reviewer, _ = make_reviewer(group_no=2)
+    building = make_building(
+        reviewer_id=other_group_reviewer.id,
+        mgmt_no="INQ-SUBMITTER-GROUP-001",
+    )
+
+    db_session.add(Inquiry(
+        building_id=building.id, mgmt_no=building.mgmt_no, phase="preliminary",
+        submitter_id=reviewer_user.id, submitter_name=reviewer_user.name,
+        content="same group submitter inquiry", status=InquiryStatus.OPEN,
+    ))
+    db_session.commit()
+
+    res = client.get("/api/reviews/inquiries", headers=sec_h)
+    assert res.status_code == 200
+    contents = [i["content"] for i in res.json()["items"]]
+    assert "same group submitter inquiry" in contents
+
+
 # ===== 대시보드 통계 (/api/buildings/stats) =====
 
 def test_secretary_stats_total_excludes_other_group(

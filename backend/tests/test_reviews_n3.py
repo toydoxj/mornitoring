@@ -602,6 +602,45 @@ def test_other_group_secretary_cannot_delete_inquiry(
     assert res.status_code == 403
 
 
+def test_same_group_secretary_can_update_inquiry_by_submitter_group(
+    client, db_session, make_reviewer, make_building, make_user
+):
+    reviewer_user, _same_group_reviewer, _ = make_reviewer(group_no=2)
+    _other_user, other_group_reviewer, _ = make_reviewer(group_no=3)
+    _secretary, secretary_headers = make_user(
+        UserRole.SECRETARY,
+        name="group2-secretary",
+        email="group2-secretary@example.com",
+        group_no=2,
+    )
+    building = make_building(
+        reviewer_id=other_group_reviewer.id,
+        mgmt_no="INQ-SUBMITTER-MANAGE-001",
+    )
+    inquiry = Inquiry(
+        building_id=building.id,
+        mgmt_no=building.mgmt_no,
+        phase="preliminary",
+        submitter_id=reviewer_user.id,
+        submitter_name=reviewer_user.name,
+        content="same group submitter manage",
+    )
+    db_session.add(inquiry)
+    db_session.commit()
+    db_session.refresh(inquiry)
+
+    res = client.patch(
+        f"/api/reviews/inquiry/{inquiry.id}/content",
+        headers=secretary_headers,
+        json={"content": "updated by same group secretary"},
+    )
+    assert res.status_code == 200, res.text
+
+    db_session.expire_all()
+    refreshed = db_session.query(Inquiry).filter(Inquiry.id == inquiry.id).first()
+    assert refreshed.content == "updated by same group secretary"
+
+
 def test_other_group_secretary_cannot_update_inquiry_status(
     client, db_session, make_reviewer, make_building, make_user
 ):
