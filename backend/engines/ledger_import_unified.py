@@ -119,6 +119,15 @@ SUPPLEMENT_PHASES = {
     5: PhaseType.SUPPLEMENT_5,
 }
 
+PHASE_ORDER = {
+    PhaseType.PRELIMINARY: 0,
+    PhaseType.SUPPLEMENT_1: 1,
+    PhaseType.SUPPLEMENT_2: 2,
+    PhaseType.SUPPLEMENT_3: 3,
+    PhaseType.SUPPLEMENT_4: 4,
+    PhaseType.SUPPLEMENT_5: 5,
+}
+
 RESULT_LABELS = {
     ResultType.PASS: "적합",
     ResultType.SIMPLE_ERROR: "단순오류",
@@ -321,6 +330,16 @@ def _append_warning(result: dict, message: str) -> None:
         )
 
 
+def _append_check_update(result: dict, message: str) -> None:
+    result["check_updated"] += 1
+    if len(result["check_updates"]) < MAX_INLINE_WARNINGS:
+        result["check_updates"].append(message)
+    elif len(result["check_updates"]) == MAX_INLINE_WARNINGS:
+        result["check_updates"].append(
+            f"업데이트 항목이 {MAX_INLINE_WARNINGS}건을 초과하여 이후 항목은 감사 로그에서 확인해 주세요."
+        )
+
+
 def _find_stage(
     stage_map: dict[tuple[int, PhaseType], ReviewStage],
     building: Building,
@@ -497,6 +516,75 @@ def _warn_preliminary_mismatch(
     )
 
 
+def _apply_stage_result_check(
+    db: Session,
+    result: dict,
+    stage_map: dict[tuple[int, PhaseType], ReviewStage],
+    building: Building,
+    *,
+    phase: PhaseType,
+    sheet: str,
+    row_idx: int,
+    column: str,
+    excel_value: str | None,
+    actor_user_id: int | None,
+) -> None:
+    if not excel_value or _is_blank_marker(excel_value):
+        return
+
+    next_result = _parse_result(excel_value)
+    if next_result is None:
+        _append_warning(
+            result,
+            f"{building.mgmt_no}: {sheet} {column} 판정값을 해석할 수 없습니다 ({excel_value})",
+        )
+        return
+
+    stage = _find_stage(stage_map, building, phase)
+    before_result = stage.result if stage else None
+    if before_result == next_result:
+        return
+
+    if stage is None:
+        stage = ReviewStage(
+            building_id=building.id,
+            phase=phase,
+            phase_order=PHASE_ORDER[phase],
+        )
+        db.add(stage)
+        db.flush()
+        stage_map[(building.id, phase)] = stage
+
+    stage.result = next_result
+    before_label = _review_result_label(before_result) or "없음"
+    after_label = _review_result_label(next_result) or str(next_result.value)
+    log_action(
+        db,
+        actor_user_id,
+        "ledger_check_result_update",
+        "review_stage",
+        stage.id,
+        before_data={
+            "mgmt_no": building.mgmt_no,
+            "phase": phase.value,
+            "result": before_result.value if before_result else None,
+        },
+        after_data={
+            "mgmt_no": building.mgmt_no,
+            "phase": phase.value,
+            "row": row_idx,
+            "sheet": sheet,
+            "excel_column": column,
+            "excel_value": excel_value,
+            "result": next_result.value,
+        },
+    )
+    _append_check_update(
+        result,
+        f"{building.mgmt_no}: {phase.value} 판정 업데이트 ({before_label} → {after_label})",
+    )
+
+
 def _warn_supplement_mismatch(
     db: Session,
     result: dict,
@@ -550,6 +638,7 @@ def import_ledger_unified(
     actor_user_id: int | None = None,
     *,
     dry_run: bool = False,
+    checks_only: bool = False,
 ) -> dict:
     """통합 관리대장 시트를 DB에 import (일괄 처리 최적화)"""
     wb = load_workbook(str(file_path), data_only=True, read_only=True)
@@ -658,15 +747,50 @@ def import_ledger_unified(
         "errors": [],
         "warnings": [],
         "warning_count": 0,
+        "check_updates": [],
+        "check_updated": 0,
         "final_result_updated": 0,
         "sheet": ws.title,
         "supplement_sheet": supplement_ws.title if supplement_ws is not None else None,
-        "mode": "validate" if dry_run else "import",
+        "mode": "validate" if dry_run else "checks" if checks_only else "import",
     }
 
     # 3단계: 일괄 생성 (배치 커밋)
     batch_count = 0
     for row_idx, mgmt_no, row in rows_parsed:
+        building = existing_map.get(mgmt_no)
+        if checks_only:
+            if building is None:
+                result["skipped"] += 1
+                continue
+
+            _apply_stage_result_check(
+                db,
+                result,
+                stage_map,
+                building,
+                phase=PhaseType.PRELIMINARY,
+                sheet=SHEET_NAME,
+                row_idx=row_idx,
+                column=columns["preliminary_decision"],
+                excel_value=_text_cell_value(row, columns["preliminary_decision"]),
+                actor_user_id=actor_user_id,
+            )
+            _apply_final_result(
+                db,
+                result,
+                building,
+                mgmt_no=mgmt_no,
+                row_idx=row_idx,
+                final_raw=_text_cell_value(row, columns["final_result"]),
+                actor_user_id=actor_user_id,
+                dry_run=False,
+            )
+            batch_count += 1
+            if batch_count % 500 == 0:
+                db.commit()
+            continue
+
         # 건축물 기본정보
         building_data = {}
         for col_letter, field_name in BUILDING_COLUMN_MAP.items():
@@ -683,7 +807,6 @@ def import_ledger_unified(
         if reviewer_name:
             building_data["assigned_reviewer_name"] = str(reviewer_name).strip()
 
-        building = existing_map.get(mgmt_no)
         is_new = building is None
         if is_new:
             if not dry_run:
@@ -802,6 +925,20 @@ def import_ledger_unified(
             if not excel_value or _is_blank_marker(excel_value):
                 continue
             phase = SUPPLEMENT_PHASES[phase_no]
+            if checks_only:
+                _apply_stage_result_check(
+                    db,
+                    result,
+                    stage_map,
+                    building,
+                    phase=phase,
+                    sheet=SUPPLEMENT_SHEET_NAME,
+                    row_idx=row_idx,
+                    column=col_letter,
+                    excel_value=excel_value,
+                    actor_user_id=actor_user_id,
+                )
+                continue
             stage = _find_stage(stage_map, building, phase)
             _warn_supplement_mismatch(
                 db,

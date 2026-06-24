@@ -630,6 +630,87 @@ def test_import_ledger_unified_dry_run_does_not_change_db(
     assert db_session.query(PhaseTransitionLog).count() == 0
 
 
+def test_import_ledger_unified_checks_only_updates_checked_fields(
+    db_session,
+    tmp_path,
+):
+    building = Building(
+        mgmt_no="2026-9103",
+        building_name="기존 건물",
+        building_type="기존유형",
+        current_phase="supplement_1",
+        final_result=None,
+    )
+    db_session.add(building)
+    db_session.flush()
+    preliminary = ReviewStage(
+        building_id=building.id,
+        phase=PhaseType.PRELIMINARY,
+        phase_order=0,
+        result=ResultType.PASS,
+        review_opinion="기존 예비 의견",
+    )
+    supplement = ReviewStage(
+        building_id=building.id,
+        phase=PhaseType.SUPPLEMENT_1,
+        phase_order=1,
+        result=ResultType.PASS,
+        review_opinion="기존 보완 의견",
+    )
+    db_session.add_all([preliminary, supplement])
+    db_session.commit()
+
+    wb = Workbook()
+    supp_ws = wb.active
+    supp_ws.title = "통합 보완대장"
+    supp_ws["A4"] = "모니터링\n관리번호"
+    supp_ws["AO3"] = "1차"
+    supp_ws["AP4"] = "판정 결과\n(이의신청반영)"
+    supp_ws["A5"] = "2026-9103"
+    supp_ws["AP5"] = "단순오류"
+
+    ws = wb.create_sheet("통합 관리대장")
+    ws["A4"] = "모니터링\n관리번호"
+    ws["C4"] = "건축구분"
+    ws["BQ3"] = "예비판정"
+    ws["BQ4"] = "검토자"
+    ws["BR4"] = "1차검토의견\n(기술사회)"
+    ws["BV4"] = "예비판정 결과   (관리원 입력)"
+    ws["BW4"] = "예비 검토의견"
+    ws["CW3"] = "결과보고"
+    ws["CW4"] = "최종\n판정결과"
+
+    ws["A5"] = "2026-9103"
+    ws["C5"] = "변경유형"
+    ws["BQ5"] = "홍길동"
+    ws["BR5"] = "재계산"
+    ws["BV5"] = "보완"
+    ws["BW5"] = "변경하면 안 되는 예비 의견"
+    ws["CW5"] = "부적합"
+
+    path = tmp_path / "unified_checks_only.xlsx"
+    wb.save(path)
+
+    result = import_ledger_unified(path, db_session, checks_only=True)
+
+    assert result["mode"] == "checks"
+    assert result["check_updated"] == 2
+    assert result["final_result_updated"] == 1
+    db_session.refresh(building)
+    db_session.refresh(preliminary)
+    db_session.refresh(supplement)
+    assert building.building_type == "기존유형"
+    assert building.current_phase == "completed"
+    assert building.final_result == "fail"
+    assert preliminary.result == ResultType.RECALCULATE
+    assert preliminary.review_opinion == "기존 예비 의견"
+    assert supplement.result == ResultType.SIMPLE_ERROR
+    assert supplement.review_opinion == "기존 보완 의견"
+    actions = [row.action for row in db_session.query(AuditLog).order_by(AuditLog.id).all()]
+    assert actions.count("ledger_check_result_update") == 2
+    assert "ledger_final_result_update" in actions
+
+
 def test_validate_ledger_endpoint_does_not_apply_changes(
     client,
     db_session,
@@ -691,6 +772,76 @@ def test_validate_ledger_endpoint_does_not_apply_changes(
     db_session.refresh(building)
     assert building.current_phase == "preliminary"
     assert building.final_result == "pass"
+
+
+def test_apply_checks_endpoint_updates_only_checked_fields(
+    client,
+    db_session,
+    make_user,
+):
+    _, headers = make_user(UserRole.CHIEF_SECRETARY)
+    building = Building(
+        mgmt_no="2026-9104",
+        building_type="기존유형",
+        current_phase="preliminary",
+    )
+    db_session.add(building)
+    db_session.flush()
+    stage = ReviewStage(
+        building_id=building.id,
+        phase=PhaseType.PRELIMINARY,
+        phase_order=0,
+        result=ResultType.PASS,
+        review_opinion="기존 의견",
+    )
+    db_session.add(stage)
+    db_session.commit()
+
+    wb = Workbook()
+    supp_ws = wb.active
+    supp_ws.title = "통합 보완대장"
+    supp_ws["A4"] = "모니터링\n관리번호"
+    ws = wb.create_sheet("통합 관리대장")
+    ws["A4"] = "모니터링\n관리번호"
+    ws["C4"] = "건축구분"
+    ws["BQ3"] = "예비판정"
+    ws["BR4"] = "1차검토의견\n(기술사회)"
+    ws["BV4"] = "예비판정 결과   (관리원 입력)"
+    ws["BW4"] = "예비 검토의견"
+    ws["CW3"] = "결과보고"
+    ws["CW4"] = "최종\n판정결과"
+    ws["A5"] = "2026-9104"
+    ws["C5"] = "변경유형"
+    ws["BR5"] = "재계산"
+    ws["BV5"] = "보완"
+    ws["BW5"] = "변경하면 안 되는 의견"
+    ws["CW5"] = "부적합"
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    files = {
+        "file": (
+            "unified.xlsx",
+            buf,
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+    }
+
+    res = client.post("/api/ledger/apply-checks", headers=headers, files=files)
+
+    assert res.status_code == 200
+    body = res.json()
+    assert body["mode"] == "checks"
+    assert body["check_updated"] == 1
+    assert body["final_result_updated"] == 1
+    db_session.refresh(building)
+    db_session.refresh(stage)
+    assert building.building_type == "기존유형"
+    assert building.current_phase == "completed"
+    assert building.final_result == "fail"
+    assert stage.result == ResultType.RECALCULATE
+    assert stage.review_opinion == "기존 의견"
 
 
 def test_import_ledger_unified_checks_supplement_sheet_results_against_db(

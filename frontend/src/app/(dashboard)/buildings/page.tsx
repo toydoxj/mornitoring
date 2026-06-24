@@ -57,7 +57,9 @@ type LedgerUploadResult = {
   warnings?: string[]
   warning_count?: number
   final_result_updated?: number
-  mode?: "validate" | "import"
+  check_updated?: number
+  check_updates?: string[]
+  mode?: "validate" | "import" | "checks"
   format?: string
 }
 
@@ -154,7 +156,7 @@ export default function BuildingsPage() {
   const [isLoading, setIsLoading] = useState(true)
   const [uploadOpen, setUploadOpen] = useState(false)
   const [uploading, setUploading] = useState(false)
-  const [uploadAction, setUploadAction] = useState<"validate" | "import" | null>(null)
+  const [uploadAction, setUploadAction] = useState<"validate" | "checks" | "import" | null>(null)
   const [uploadFile, setUploadFile] = useState<File | null>(null)
   const [uploadResult, setUploadResult] = useState<LedgerUploadResult | null>(null)
   const [selectedBuildingIds, setSelectedBuildingIds] = useState<Set<number>>(() => new Set())
@@ -310,8 +312,16 @@ export default function BuildingsPage() {
     setUploading(false)
   }
 
-  const processLedgerFile = async (action: "validate" | "import") => {
+  const processLedgerFile = async (action: "validate" | "checks" | "import") => {
     if (!uploadFile) return
+
+    if (action === "checks") {
+      const confirmed = confirm(
+        "검증에서 확인된 판정/최종완료 항목만 업데이트할까요?\n" +
+          "건축물 기본정보와 검토의견 본문은 변경하지 않습니다."
+      )
+      if (!confirmed) return
+    }
 
     if (action === "import") {
       const warningCount = uploadResult?.mode === "validate" ? uploadResult.warning_count ?? 0 : 0
@@ -329,12 +339,17 @@ export default function BuildingsPage() {
     try {
       const formData = new FormData()
       formData.append("file", uploadFile)
-      const endpoint = action === "validate" ? "/api/ledger/validate" : "/api/ledger/import"
+      const endpoint =
+        action === "validate"
+          ? "/api/ledger/validate"
+          : action === "checks"
+            ? "/api/ledger/apply-checks"
+            : "/api/ledger/import"
       const { data: result } = await apiClient.post<LedgerUploadResult>(endpoint, formData, {
         headers: { "Content-Type": "multipart/form-data" },
       })
       setUploadResult({ ...result, mode: result.mode ?? action })
-      if (action === "import") {
+      if (action !== "validate") {
         fetchBuildings()
       }
     } catch (err) {
@@ -862,7 +877,7 @@ export default function BuildingsPage() {
                 <div className="space-y-4">
                   <p className="text-sm text-muted-foreground">
                     먼저 엑셀 파일을 선택한 뒤 검증만 실행하여 최종완료 반영 예정 건수와 불일치 알림을 확인하세요.
-                    DB 반영은 별도의 업로드 적용 버튼을 눌렀을 때만 실행됩니다.
+                    DB 반영은 검증 항목만 업데이트하거나 전체 업로드 적용 버튼을 눌렀을 때만 실행됩니다.
                   </p>
                   <Input
                     type="file"
@@ -889,7 +904,7 @@ export default function BuildingsPage() {
                       </Button>
                     </div>
                   )}
-                  <div className="grid gap-2 sm:grid-cols-2">
+                  <div className="grid gap-2 sm:grid-cols-3">
                     <Button
                       variant="outline"
                       onClick={() => processLedgerFile("validate")}
@@ -898,6 +913,15 @@ export default function BuildingsPage() {
                       loadingText="검증 중..."
                     >
                       검증만 실행
+                    </Button>
+                    <Button
+                      variant="secondary"
+                      onClick={() => processLedgerFile("checks")}
+                      disabled={!uploadFile || uploading || uploadResult?.mode !== "validate"}
+                      loading={uploading && uploadAction === "checks"}
+                      loadingText="업데이트 중..."
+                    >
+                      검증 항목만 업데이트
                     </Button>
                     <Button
                       onClick={() => processLedgerFile("import")}
@@ -910,17 +934,28 @@ export default function BuildingsPage() {
                   </div>
                   {uploading && (
                     <p className="text-sm">
-                      {uploadAction === "validate" ? "검증 중..." : "업로드 및 처리 중..."}
+                      {uploadAction === "validate"
+                        ? "검증 중..."
+                        : uploadAction === "checks"
+                          ? "검증 항목 업데이트 중..."
+                          : "업로드 및 처리 중..."}
                     </p>
                   )}
                   {uploadResult && (
                     <div className="rounded-md bg-muted p-3 text-sm">
                       <p className="font-medium">
-                        {uploadResult.mode === "validate" ? "검증 결과" : "업로드 결과"}
+                        {uploadResult.mode === "validate"
+                          ? "검증 결과"
+                          : uploadResult.mode === "checks"
+                            ? "검증 항목 업데이트 결과"
+                            : "업로드 결과"}
                       </p>
                       <p>신규 {uploadResult.mode === "validate" ? "예정" : "등록"}: <strong>{uploadResult.imported}건</strong></p>
                       <p>기존 {uploadResult.mode === "validate" ? "갱신 예정" : "갱신"}: <strong>{uploadResult.updated ?? 0}건</strong></p>
                       <p>최종완료 {uploadResult.mode === "validate" ? "반영 예정" : "반영"}: <strong>{uploadResult.final_result_updated ?? 0}건</strong></p>
+                      {uploadResult.mode === "checks" && (
+                        <p>판정 체크 항목 업데이트: <strong>{uploadResult.check_updated ?? 0}건</strong></p>
+                      )}
                       <p>중복 스킵: {uploadResult.skipped}건</p>
                       {uploadResult.error && (
                         <p className="mt-2 text-destructive">{uploadResult.error}</p>
@@ -941,6 +976,16 @@ export default function BuildingsPage() {
                               ))}
                             </ul>
                           )}
+                        </div>
+                      )}
+                      {uploadResult.mode === "checks" && uploadResult.check_updates && uploadResult.check_updates.length > 0 && (
+                        <div className="mt-3 rounded-md border border-green-200 bg-green-50 p-3 text-green-900">
+                          <p className="font-medium">업데이트 항목</p>
+                          <ul className="mt-2 max-h-52 list-disc space-y-1 overflow-y-auto pl-4">
+                            {uploadResult.check_updates.map((item, index) => (
+                              <li key={`${index}-${item}`}>{item}</li>
+                            ))}
+                          </ul>
                         </div>
                       )}
                     </div>

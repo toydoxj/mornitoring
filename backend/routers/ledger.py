@@ -202,6 +202,65 @@ async def validate_excel(
         tmp_path.unlink(missing_ok=True)
 
 
+@router.post("/apply-checks")
+async def apply_checked_items(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(UserRole.CHIEF_SECRETARY)),
+):
+    """검증에서 확인되는 판정/최종완료 체크 항목만 DB에 반영한다."""
+    if not file.filename or not file.filename.endswith((".xlsx", ".xls")):
+        raise HTTPException(status_code=400, detail="엑셀 파일(.xlsx)만 업로드 가능합니다")
+
+    tmp_path = await stream_upload_to_tempfile(file, max_mb=20, suffix=".xlsx")
+
+    try:
+        fmt = _detect_format(tmp_path)
+        if fmt != "unified_new":
+            raise HTTPException(
+                status_code=400,
+                detail=f"체크 항목 업데이트는 통합 관리대장 신형 양식만 지원합니다. 감지된 형식: {fmt}",
+            )
+        result = import_ledger_unified(
+            tmp_path,
+            db,
+            actor_user_id=current_user.id,
+            checks_only=True,
+        )
+        result["format"] = fmt
+        summary = result if isinstance(result, dict) else {"result": str(result)}
+        if (
+            result.get("check_updated")
+            or result.get("final_result_updated")
+        ):
+            from routers.buildings import clear_stats_cache
+            clear_stats_cache()
+        log_action(
+            db,
+            current_user.id,
+            "apply_checks",
+            "ledger",
+            after_data={"filename": file.filename, "format": fmt, **summary},
+        )
+        db.commit()
+        return result
+    except HTTPException:
+        db.rollback()
+        raise
+    except InvalidPhaseTransition as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=f"단계 전환 규칙 위반: {exc}")
+    except Exception as exc:
+        db.rollback()
+        logger.exception("관리대장 체크 항목 업데이트 실패")
+        raise HTTPException(
+            status_code=500,
+            detail=f"관리대장 체크 항목 업데이트 실패: {type(exc).__name__}: {exc}",
+        )
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+
 @router.get("/export")
 def export_excel(
     db: Session = Depends(get_db),
