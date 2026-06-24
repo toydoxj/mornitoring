@@ -895,3 +895,93 @@ def test_import_ledger_unified_checks_supplement_sheet_results_against_db(
     log = db_session.query(AuditLog).filter_by(action="ledger_supplement_result_mismatch").one()
     assert log.after_data["mgmt_no"] == "2026-9002"
     assert log.after_data["phase"] == "supplement_1"
+
+
+def test_import_ledger_unified_excludes_supplement_appeal_from_comparison(
+    db_session,
+    tmp_path,
+):
+    building = Building(mgmt_no="2026-9003", current_phase="supplement_1")
+    db_session.add(building)
+    db_session.flush()
+    db_session.add(ReviewStage(
+        building_id=building.id,
+        phase=PhaseType.SUPPLEMENT_1,
+        phase_order=1,
+        result=ResultType.PASS,
+    ))
+    db_session.commit()
+
+    wb = Workbook()
+    supp_ws = wb.active
+    supp_ws.title = "통합 보완대장"
+    supp_ws["A4"] = "모니터링\n관리번호"
+    supp_ws["AO3"] = "1차"
+    supp_ws["AP4"] = "판정 결과\n(이의신청반영)"
+    supp_ws["A5"] = "2026-9003"
+    supp_ws["AP5"] = "이의신청"
+
+    ws = wb.create_sheet("통합 관리대장")
+    ws["A4"] = "모니터링\n관리번호"
+    ws["A5"] = "2026-9003"
+
+    path = tmp_path / "unified_supplement_appeal.xlsx"
+    wb.save(path)
+
+    result = import_ledger_unified(path, db_session)
+
+    assert result["updated"] == 1
+    assert result["warning_count"] == 0
+    assert (
+        db_session.query(AuditLog)
+        .filter_by(action="ledger_supplement_result_mismatch")
+        .count()
+        == 0
+    )
+
+
+def test_import_ledger_unified_checks_only_excludes_supplement_appeal(
+    db_session,
+    tmp_path,
+):
+    building = Building(mgmt_no="2026-9004", current_phase="supplement_1")
+    db_session.add(building)
+    db_session.flush()
+    stage = ReviewStage(
+        building_id=building.id,
+        phase=PhaseType.SUPPLEMENT_1,
+        phase_order=1,
+        result=ResultType.PASS,
+    )
+    db_session.add(stage)
+    db_session.commit()
+
+    wb = Workbook()
+    supp_ws = wb.active
+    supp_ws.title = "통합 보완대장"
+    supp_ws["A4"] = "모니터링\n관리번호"
+    supp_ws["AO3"] = "1차"
+    supp_ws["AP4"] = "판정 결과\n(이의신청반영)"
+    supp_ws["A5"] = "2026-9004"
+    supp_ws["AP5"] = "이의신청"
+
+    ws = wb.create_sheet("통합 관리대장")
+    ws["A4"] = "모니터링\n관리번호"
+    ws["A5"] = "2026-9004"
+
+    path = tmp_path / "unified_checks_only_supplement_appeal.xlsx"
+    wb.save(path)
+
+    result = import_ledger_unified(path, db_session, checks_only=True)
+
+    db_session.refresh(stage)
+    assert result["mode"] == "checks"
+    assert result["check_updated"] == 0
+    assert result["warning_count"] == 0
+    assert stage.result == ResultType.PASS
+    assert (
+        db_session.query(AuditLog)
+        .filter_by(action="ledger_check_result_update")
+        .count()
+        == 0
+    )

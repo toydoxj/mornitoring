@@ -110,6 +110,7 @@ SUPPLEMENT_RESULT_COLUMNS = {
     4: "BN",
     5: "BV",
 }
+SUPPLEMENT_COMPARISON_EXCLUDED_VALUES = {"이의신청"}
 
 SUPPLEMENT_PHASES = {
     1: PhaseType.SUPPLEMENT_1,
@@ -191,6 +192,10 @@ def _normalize_excel_text(value) -> str:
 def _is_blank_marker(value) -> bool:
     text = _normalize_excel_text(value)
     return text in ("", "-", "X", "x")
+
+
+def _is_supplement_result_comparison_excluded(value) -> bool:
+    return _normalize_excel_text(value) in SUPPLEMENT_COMPARISON_EXCLUDED_VALUES
 
 
 def _to_float(val) -> float | None:
@@ -600,6 +605,8 @@ def _warn_supplement_mismatch(
 ) -> None:
     if not excel_value or _is_blank_marker(excel_value):
         return
+    if _is_supplement_result_comparison_excluded(excel_value):
+        return
     db_value = stage.result if stage else None
     excel_key = _review_result_key(excel_value)
     db_key = _review_result_key(db_value)
@@ -923,6 +930,8 @@ def import_ledger_unified(
         for phase_no, col_letter in supplement_columns.items():
             excel_value = _text_cell_value(row, col_letter)
             if not excel_value or _is_blank_marker(excel_value):
+                continue
+            if _is_supplement_result_comparison_excluded(excel_value):
                 continue
             phase = SUPPLEMENT_PHASES[phase_no]
             if checks_only:
