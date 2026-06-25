@@ -21,7 +21,10 @@ from engines.ledger_import_2025 import import_ledger_2025
 from engines.ledger_import_unified import import_ledger_unified
 from engines.ledger_import_technical import import_ledger_technical
 from engines.ledger_import_selection import import_ledger_selection
-from engines.ledger_phase_compare import compare_supplement_phase_with_db
+from engines.ledger_phase_compare import (
+    apply_final_results_from_ledger,
+    compare_supplement_phase_with_db,
+)
 from engines.ledger_export import export_ledger
 
 router = APIRouter()
@@ -40,13 +43,26 @@ class LedgerSupplementRoundStatus(BaseModel):
 
 class LedgerPhaseCompareItem(BaseModel):
     row_number: int
+    management_row_number: int | None = None
     mgmt_no: str
     building_id: int | None = None
     building_name: str | None = None
     reviewer_name: str | None = None
     excel_phase: str | None = None
     db_phase: str | None = None
-    status: Literal["matched", "mismatch", "missing_db", "excel_phase_missing"]
+    excel_final_result: str | None = None
+    excel_final_result_raw: str | None = None
+    db_final_result: str | None = None
+    final_result_status: Literal[
+        "matched",
+        "mismatch",
+        "missing_db",
+        "excel_final_result_missing",
+        "not_checked",
+    ]
+    final_result_matched: bool | None = None
+    final_result_column: str | None = None
+    status: Literal["matched", "mismatch", "missing_db", "excel_phase_missing", "not_checked"]
     matched: bool
     phase_gap: int | None = None
     phase_direction: Literal["same", "db_ahead", "excel_ahead", "unknown"]
@@ -59,13 +75,30 @@ class LedgerPhaseCompareItem(BaseModel):
 
 class LedgerPhaseCompareResponse(BaseModel):
     sheet: str
+    management_sheet: str | None = None
     total_rows: int
     compared: int
     matched: int
     mismatched: int
     missing_db: int
     excel_phase_missing: int
+    final_result_compared: int
+    final_result_matched: int
+    final_result_mismatched: int
+    final_result_missing_db: int
+    excel_final_result_missing: int
     items: list[LedgerPhaseCompareItem]
+
+
+class LedgerFinalResultApplyResponse(BaseModel):
+    sheet: str
+    final_result_column: str
+    total_rows: int
+    updated: int
+    matched: int
+    missing_db: int
+    excel_final_result_missing: int
+    warnings: list[str]
 
 
 def _normalize_excel_text(value) -> str:
@@ -339,6 +372,50 @@ async def compare_ledger_phase(
         )
     finally:
         db.rollback()
+        tmp_path.unlink(missing_ok=True)
+
+
+@router.post("/final-results/apply", response_model=LedgerFinalResultApplyResponse)
+async def apply_ledger_final_results(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(UserRole.CHIEF_SECRETARY)),
+):
+    """통합 관리대장 CW열 최종판정만 DB에 반영한다."""
+    if not file.filename or not file.filename.endswith((".xlsx", ".xls")):
+        raise HTTPException(status_code=400, detail="엑셀 파일(.xlsx)만 업로드 가능합니다")
+
+    tmp_path = await stream_upload_to_tempfile(file, max_mb=20, suffix=".xlsx")
+
+    try:
+        result = apply_final_results_from_ledger(
+            tmp_path,
+            db,
+            actor_user_id=current_user.id,
+        )
+        if result.get("updated"):
+            from routers.buildings import clear_stats_cache
+            clear_stats_cache()
+        log_action(
+            db,
+            current_user.id,
+            "apply_final_results",
+            "ledger",
+            after_data={"filename": file.filename, **result},
+        )
+        db.commit()
+        return result
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        db.rollback()
+        logger.exception("관리대장 최종판정 업데이트 실패")
+        raise HTTPException(
+            status_code=500,
+            detail=f"관리대장 최종판정 업데이트 실패: {type(exc).__name__}: {exc}",
+        )
+    finally:
         tmp_path.unlink(missing_ok=True)
 
 

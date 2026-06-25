@@ -6,6 +6,7 @@ import {
   CheckCircle2,
   Database,
   FileSpreadsheet,
+  RefreshCw,
   Search,
   Upload,
   XCircle,
@@ -23,9 +24,16 @@ import {
 } from "@/components/ui/table"
 import apiClient from "@/lib/api/client"
 import { cn } from "@/lib/utils"
-import { PHASE_LABELS } from "@/types"
+import { PHASE_LABELS, RESULT_LABELS } from "@/types"
+import { useAuthStore } from "@/stores/authStore"
 
-type CompareStatus = "matched" | "mismatch" | "missing_db" | "excel_phase_missing"
+type CompareStatus = "matched" | "mismatch" | "missing_db" | "excel_phase_missing" | "not_checked"
+type FinalResultStatus =
+  | "matched"
+  | "mismatch"
+  | "missing_db"
+  | "excel_final_result_missing"
+  | "not_checked"
 type PhaseDirection = "same" | "db_ahead" | "excel_ahead" | "unknown"
 type ViewMode = "issues" | "all" | "matched"
 
@@ -41,12 +49,19 @@ interface SupplementRoundStatus {
 
 interface LedgerPhaseCompareItem {
   row_number: number
+  management_row_number: number | null
   mgmt_no: string
   building_id: number | null
   building_name: string | null
   reviewer_name: string | null
   excel_phase: string | null
   db_phase: string | null
+  excel_final_result: string | null
+  excel_final_result_raw: string | null
+  db_final_result: string | null
+  final_result_status: FinalResultStatus
+  final_result_matched: boolean | null
+  final_result_column: string | null
   status: CompareStatus
   matched: boolean
   phase_gap: number | null
@@ -60,13 +75,27 @@ interface LedgerPhaseCompareItem {
 
 interface LedgerPhaseCompareResponse {
   sheet: string
+  management_sheet: string | null
   total_rows: number
   compared: number
   matched: number
   mismatched: number
   missing_db: number
   excel_phase_missing: number
+  final_result_compared: number
+  final_result_matched: number
+  final_result_mismatched: number
+  final_result_missing_db: number
+  excel_final_result_missing: number
   items: LedgerPhaseCompareItem[]
+}
+
+interface LedgerFinalResultApplyResponse {
+  updated: number
+  matched: number
+  missing_db: number
+  excel_final_result_missing: number
+  warnings: string[]
 }
 
 type ErrorWithResponse = {
@@ -79,6 +108,15 @@ const STATUS_LABELS: Record<CompareStatus, string> = {
   mismatch: "불일치",
   missing_db: "DB 없음",
   excel_phase_missing: "판단 불가",
+  not_checked: "-",
+}
+
+const FINAL_RESULT_STATUS_LABELS: Record<FinalResultStatus, string> = {
+  matched: "일치",
+  mismatch: "불일치",
+  missing_db: "DB 없음",
+  excel_final_result_missing: "엑셀 공란",
+  not_checked: "-",
 }
 
 const VIEW_MODE_LABELS: Record<ViewMode, string> = {
@@ -100,6 +138,11 @@ function getPhaseLabel(phase: string | null) {
   return PHASE_LABELS[phase] ?? phase
 }
 
+function getFinalResultLabel(result: string | null) {
+  if (!result) return "-"
+  return RESULT_LABELS[result] ?? result
+}
+
 function getStatusVariant(status: CompareStatus): "default" | "secondary" | "destructive" | "outline" {
   if (status === "matched") return "default"
   if (status === "mismatch") return "destructive"
@@ -107,8 +150,34 @@ function getStatusVariant(status: CompareStatus): "default" | "secondary" | "des
   return "outline"
 }
 
-function getRowClass(status: CompareStatus) {
-  if (status === "mismatch") return "bg-red-50/80 hover:bg-red-50"
+function getFinalResultVariant(
+  status: FinalResultStatus
+): "default" | "secondary" | "destructive" | "outline" {
+  if (status === "matched") return "default"
+  if (status === "mismatch") return "destructive"
+  if (status === "missing_db") return "secondary"
+  return "outline"
+}
+
+function isIssueItem(item: LedgerPhaseCompareItem) {
+  return (
+    item.status === "mismatch" ||
+    item.status === "missing_db" ||
+    item.status === "excel_phase_missing" ||
+    item.final_result_status === "mismatch" ||
+    item.final_result_status === "missing_db" ||
+    item.final_result_status === "excel_final_result_missing"
+  )
+}
+
+function getRowClass(item: LedgerPhaseCompareItem) {
+  if (item.status === "mismatch" || item.final_result_status === "mismatch") {
+    return "bg-red-50/80 hover:bg-red-50"
+  }
+  if (item.final_result_status === "excel_final_result_missing") {
+    return "bg-slate-50 hover:bg-slate-100"
+  }
+  const status = item.status
   if (status === "missing_db") return "bg-amber-50/80 hover:bg-amber-50"
   if (status === "excel_phase_missing") return "bg-slate-50 hover:bg-slate-100"
   return ""
@@ -181,24 +250,28 @@ function RoundMarkers({ rounds }: { rounds: SupplementRoundStatus[] }) {
 }
 
 export default function LedgerPhaseComparePage() {
+  const user = useAuthStore((state) => state.user)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [file, setFile] = useState<File | null>(null)
   const [result, setResult] = useState<LedgerPhaseCompareResponse | null>(null)
   const [isComparing, setIsComparing] = useState(false)
+  const [isApplyingFinalResults, setIsApplyingFinalResults] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [applyMessage, setApplyMessage] = useState<string | null>(null)
   const [viewMode, setViewMode] = useState<ViewMode>("issues")
   const [search, setSearch] = useState("")
+  const canApplyFinalResults = user?.role === "chief_secretary"
 
   const issueCount = result
-    ? result.mismatched + result.missing_db + result.excel_phase_missing
+    ? result.items.filter(isIssueItem).length
     : 0
 
   const filteredItems = useMemo(() => {
     if (!result) return []
     const query = search.trim().toLowerCase()
     return result.items.filter((item) => {
-      if (viewMode === "issues" && item.status === "matched") return false
-      if (viewMode === "matched" && item.status !== "matched") return false
+      if (viewMode === "issues" && !isIssueItem(item)) return false
+      if (viewMode === "matched" && isIssueItem(item)) return false
       if (!query) return true
 
       const values = [
@@ -207,6 +280,8 @@ export default function LedgerPhaseComparePage() {
         item.reviewer_name,
         getPhaseLabel(item.excel_phase),
         getPhaseLabel(item.db_phase),
+        getFinalResultLabel(item.excel_final_result),
+        getFinalResultLabel(item.db_final_result),
         item.evidence_label,
         item.evidence_column,
       ]
@@ -219,7 +294,38 @@ export default function LedgerPhaseComparePage() {
     setFile(selected)
     setResult(null)
     setError(null)
+    setApplyMessage(null)
     event.target.value = ""
+  }
+
+  const runCompare = async (targetFile: File) => {
+    setIsComparing(true)
+    setError(null)
+    setApplyMessage(null)
+    try {
+      const formData = new FormData()
+      formData.append("file", targetFile)
+      const { data } = await apiClient.post<LedgerPhaseCompareResponse>(
+        "/api/ledger/phase-compare",
+        formData,
+        { headers: { "Content-Type": "multipart/form-data" } }
+      )
+      setResult(data)
+      const hasIssues =
+        data.mismatched +
+        data.missing_db +
+        data.excel_phase_missing +
+        data.final_result_mismatched +
+        data.final_result_missing_db +
+        data.excel_final_result_missing >
+        0
+      setViewMode(hasIssues ? "issues" : "all")
+    } catch (err) {
+      setResult(null)
+      setError(getErrorMessage(err))
+    } finally {
+      setIsComparing(false)
+    }
   }
 
   const handleCompare = async () => {
@@ -227,24 +333,35 @@ export default function LedgerPhaseComparePage() {
       setError("비교할 엑셀 파일을 선택해주세요.")
       return
     }
+    await runCompare(file)
+  }
 
-    setIsComparing(true)
+  const handleApplyFinalResults = async () => {
+    if (!file || !result) return
+    const confirmed = window.confirm(
+      `최종판정 불일치 ${result.final_result_mismatched.toLocaleString()}건을 엑셀 CW열 기준으로 업데이트할까요?`
+    )
+    if (!confirmed) return
+
+    setIsApplyingFinalResults(true)
     setError(null)
+    setApplyMessage(null)
     try {
       const formData = new FormData()
       formData.append("file", file)
-      const { data } = await apiClient.post<LedgerPhaseCompareResponse>(
-        "/api/ledger/phase-compare",
+      const { data } = await apiClient.post<LedgerFinalResultApplyResponse>(
+        "/api/ledger/final-results/apply",
         formData,
         { headers: { "Content-Type": "multipart/form-data" } }
       )
-      setResult(data)
-      setViewMode(data.mismatched + data.missing_db + data.excel_phase_missing > 0 ? "issues" : "all")
+      await runCompare(file)
+      setApplyMessage(
+        `최종판정 ${data.updated.toLocaleString()}건을 업데이트했습니다.`
+      )
     } catch (err) {
-      setResult(null)
       setError(getErrorMessage(err))
     } finally {
-      setIsComparing(false)
+      setIsApplyingFinalResults(false)
     }
   }
 
@@ -254,7 +371,7 @@ export default function LedgerPhaseComparePage() {
         <div>
           <h1 className="text-2xl font-bold">통합관리대장 비교검토</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            통합 보완대장 기준 단계와 DB 현재 단계 비교
+            통합 보완대장 단계와 통합 관리대장 CW 최종판정 비교
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -283,6 +400,23 @@ export default function LedgerPhaseComparePage() {
             <FileSpreadsheet className="h-4 w-4" />
             비교 실행
           </Button>
+          <Button
+            type="button"
+            variant="secondary"
+            onClick={handleApplyFinalResults}
+            loading={isApplyingFinalResults}
+            loadingText="업데이트 중"
+            disabled={
+              !file ||
+              !result ||
+              result.final_result_mismatched === 0 ||
+              !canApplyFinalResults
+            }
+            title={!canApplyFinalResults ? "총괄간사만 업데이트할 수 있습니다." : undefined}
+          >
+            <RefreshCw className="h-4 w-4" />
+            최종판정 업데이트
+          </Button>
         </div>
       </div>
 
@@ -292,9 +426,10 @@ export default function LedgerPhaseComparePage() {
           <span className="truncate">{file?.name ?? "선택된 파일 없음"}</span>
         </div>
         {result && (
-          <div className="flex items-center gap-2 text-muted-foreground">
+          <div className="flex flex-wrap items-center gap-2 text-muted-foreground">
             <Database className="h-4 w-4" />
             <span>{result.sheet}</span>
+            {result.management_sheet && <span>/ {result.management_sheet}</span>}
           </div>
         )}
       </div>
@@ -306,14 +441,26 @@ export default function LedgerPhaseComparePage() {
         </div>
       )}
 
+      {applyMessage && (
+        <div className="flex items-start gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+          <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
+          <span>{applyMessage}</span>
+        </div>
+      )}
+
       {result && (
         <>
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-6">
             <SummaryStat label="전체" value={result.total_rows} tone="neutral" />
-            <SummaryStat label="일치" value={result.matched} tone="green" />
-            <SummaryStat label="불일치" value={result.mismatched} tone="red" />
+            <SummaryStat label="단계 일치" value={result.matched} tone="green" />
+            <SummaryStat label="단계 불일치" value={result.mismatched} tone="red" />
             <SummaryStat label="DB 없음" value={result.missing_db} tone="amber" />
             <SummaryStat label="판단 불가" value={result.excel_phase_missing} tone="slate" />
+            <SummaryStat
+              label="최종판정 불일치"
+              value={result.final_result_mismatched}
+              tone="red"
+            />
           </div>
 
           <div className="flex flex-col gap-3 rounded-lg border bg-white p-3 md:flex-row md:items-center md:justify-between">
@@ -356,72 +503,88 @@ export default function LedgerPhaseComparePage() {
               </Badge>
             </div>
 
-            <Table>
-              <TableHeader className="bg-muted/40">
-                <TableRow>
-                  <TableHead className="w-[92px]">상태</TableHead>
-                  <TableHead className="w-[64px] text-right">행</TableHead>
-                  <TableHead className="w-[120px]">관리번호</TableHead>
-                  <TableHead className="min-w-[180px]">건물명</TableHead>
-                  <TableHead className="w-[110px]">검토위원</TableHead>
-                  <TableHead className="w-[150px]">엑셀 단계</TableHead>
-                  <TableHead className="w-[150px]">DB 단계</TableHead>
-                  <TableHead className="min-w-[210px]">근거</TableHead>
-                  <TableHead className="min-w-[270px]">제출 흐름</TableHead>
-                  <TableHead className="w-[120px]">차이</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {filteredItems.length === 0 ? (
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader className="bg-muted/40">
                   <TableRow>
-                    <TableCell colSpan={10} className="h-24 text-center text-muted-foreground">
-                      표시할 결과가 없습니다.
-                    </TableCell>
+                    <TableHead className="w-[92px]">단계</TableHead>
+                    <TableHead className="w-[112px]">최종판정</TableHead>
+                    <TableHead className="w-[64px] text-right">행</TableHead>
+                    <TableHead className="w-[120px]">관리번호</TableHead>
+                    <TableHead className="min-w-[180px]">건물명</TableHead>
+                    <TableHead className="w-[110px]">검토위원</TableHead>
+                    <TableHead className="w-[150px]">엑셀 단계</TableHead>
+                    <TableHead className="w-[150px]">DB 단계</TableHead>
+                    <TableHead className="w-[140px]">엑셀 판정</TableHead>
+                    <TableHead className="w-[140px]">DB 판정</TableHead>
+                    <TableHead className="min-w-[210px]">근거</TableHead>
+                    <TableHead className="min-w-[270px]">제출 흐름</TableHead>
+                    <TableHead className="w-[120px]">차이</TableHead>
                   </TableRow>
-                ) : (
-                  filteredItems.map((item) => (
-                    <TableRow
-                      key={`${item.row_number}-${item.mgmt_no}`}
-                      className={getRowClass(item.status)}
-                    >
-                      <TableCell>
-                        <Badge variant={getStatusVariant(item.status)}>
-                          {STATUS_LABELS[item.status]}
-                        </Badge>
+                </TableHeader>
+                <TableBody>
+                  {filteredItems.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={13} className="h-24 text-center text-muted-foreground">
+                        표시할 결과가 없습니다.
                       </TableCell>
-                      <TableCell className="text-right tabular-nums">{item.row_number}</TableCell>
-                      <TableCell className="font-mono text-xs">{item.mgmt_no}</TableCell>
-                      <TableCell className="max-w-[240px] whitespace-normal">
-                        {item.building_name ?? "-"}
-                      </TableCell>
-                      <TableCell>{item.reviewer_name ?? "-"}</TableCell>
-                      <TableCell>{getPhaseLabel(item.excel_phase)}</TableCell>
-                      <TableCell>{getPhaseLabel(item.db_phase)}</TableCell>
-                      <TableCell className="whitespace-normal">
-                        {item.evidence_label && item.evidence_column ? (
-                          <div>
-                            <div className="font-medium">
-                              {item.evidence_label} ({item.evidence_column})
-                            </div>
-                            {item.evidence_value && (
-                              <div className="text-xs text-muted-foreground">
-                                {item.evidence_value}
-                              </div>
-                            )}
-                          </div>
-                        ) : (
-                          "-"
-                        )}
-                      </TableCell>
-                      <TableCell>
-                        <RoundMarkers rounds={item.rounds} />
-                      </TableCell>
-                      <TableCell>{getDirectionLabel(item)}</TableCell>
                     </TableRow>
-                  ))
-                )}
-              </TableBody>
-            </Table>
+                  ) : (
+                    filteredItems.map((item) => (
+                      <TableRow
+                        key={`${item.row_number}-${item.mgmt_no}`}
+                        className={getRowClass(item)}
+                      >
+                        <TableCell>
+                          <Badge variant={getStatusVariant(item.status)}>
+                            {STATUS_LABELS[item.status]}
+                          </Badge>
+                        </TableCell>
+                        <TableCell>
+                          {item.final_result_status === "not_checked" ? (
+                            "-"
+                          ) : (
+                            <Badge variant={getFinalResultVariant(item.final_result_status)}>
+                              {FINAL_RESULT_STATUS_LABELS[item.final_result_status]}
+                            </Badge>
+                          )}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">{item.row_number}</TableCell>
+                        <TableCell className="font-mono text-xs">{item.mgmt_no}</TableCell>
+                        <TableCell className="max-w-[240px] whitespace-normal">
+                          {item.building_name ?? "-"}
+                        </TableCell>
+                        <TableCell>{item.reviewer_name ?? "-"}</TableCell>
+                        <TableCell>{getPhaseLabel(item.excel_phase)}</TableCell>
+                        <TableCell>{getPhaseLabel(item.db_phase)}</TableCell>
+                        <TableCell>{getFinalResultLabel(item.excel_final_result)}</TableCell>
+                        <TableCell>{getFinalResultLabel(item.db_final_result)}</TableCell>
+                        <TableCell className="whitespace-normal">
+                          {item.evidence_label && item.evidence_column ? (
+                            <div>
+                              <div className="font-medium">
+                                {item.evidence_label} ({item.evidence_column})
+                              </div>
+                              {item.evidence_value && (
+                                <div className="text-xs text-muted-foreground">
+                                  {item.evidence_value}
+                                </div>
+                              )}
+                            </div>
+                          ) : (
+                            "-"
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          <RoundMarkers rounds={item.rounds} />
+                        </TableCell>
+                        <TableCell>{getDirectionLabel(item)}</TableCell>
+                      </TableRow>
+                    ))
+                  )}
+                </TableBody>
+              </Table>
+            </div>
           </div>
         </>
       )}
