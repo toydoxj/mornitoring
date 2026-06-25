@@ -1503,6 +1503,73 @@ def get_review_stages(
     return stages
 
 
+@router.delete("/stages/{stage_id}/opinion", response_model=ReviewStageResponse)
+def delete_review_stage_opinion(
+    stage_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(
+        require_roles(
+            UserRole.TEAM_LEADER,
+            UserRole.CHIEF_SECRETARY,
+            UserRole.SECRETARY,
+            UserRole.MANAGER,
+        )
+    ),
+):
+    """검토의견 본문과 상세의견/심각도 집계를 삭제한다."""
+    query = (
+        db.query(ReviewStage)
+        .join(Building, ReviewStage.building_id == Building.id)
+        .filter(ReviewStage.id == stage_id)
+    )
+    visibility = building_visibility_filter(current_user)
+    if visibility is not None:
+        query = query.filter(visibility)
+
+    stage = query.first()
+    if stage is None:
+        raise HTTPException(status_code=404, detail="검토 단계를 찾을 수 없습니다")
+
+    opinion_details_deleted = (
+        db.query(ReviewOpinionDetail)
+        .filter(ReviewOpinionDetail.stage_id == stage.id)
+        .delete(synchronize_session=False)
+    )
+    severity_summaries_deleted = (
+        db.query(ReviewSeveritySummary)
+        .filter(ReviewSeveritySummary.stage_id == stage.id)
+        .delete(synchronize_session=False)
+    )
+
+    stage.review_opinion = None
+    stage.severity_l0_count = 0
+    stage.severity_l1_count = 0
+    stage.severity_l2_count = 0
+    stage.severity_l3_count = 0
+    stage.severity_l4_count = 0
+
+    log_action(
+        db,
+        current_user.id,
+        "delete",
+        "review_opinion",
+        stage.id,
+        after_data={
+            "stage_id": stage.id,
+            "building_id": stage.building_id,
+            "opinion_details_deleted": int(opinion_details_deleted or 0),
+            "severity_summaries_deleted": int(severity_summaries_deleted or 0),
+        },
+    )
+
+    from routers.buildings import clear_stats_cache
+
+    clear_stats_cache()
+    db.commit()
+    db.refresh(stage)
+    return stage
+
+
 class InquiryCreateRequest(BaseModel):
     mgmt_no: str
     phase: str

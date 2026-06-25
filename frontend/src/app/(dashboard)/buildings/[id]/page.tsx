@@ -20,7 +20,7 @@ import { useAuthStore } from "@/stores/authStore"
 import type { Building, ReviewStage, PhaseType, ResultType, InappropriateDecisionType } from "@/types"
 import { PHASE_LABELS, RESULT_LABELS } from "@/types"
 import { AttachmentItem, type AttachmentDisplay } from "@/components/AttachmentItem"
-import { Paperclip, UserRound, X } from "lucide-react"
+import { Paperclip, Trash2, UserRound, X } from "lucide-react"
 import { getAdjacentManualPhases } from "@/lib/phases"
 
 interface InquiryAttachmentData extends AttachmentDisplay {
@@ -89,6 +89,7 @@ export default function BuildingDetailPage() {
   const [savingPhase, setSavingPhase] = useState(false)
   const [finalizingPass, setFinalizingPass] = useState(false)
   const [reviewerDialogOpen, setReviewerDialogOpen] = useState(false)
+  const [deletingOpinionStageId, setDeletingOpinionStageId] = useState<number | null>(null)
   const [reviewers, setReviewers] = useState<AssignmentReviewer[]>([])
   const [reviewerDraftId, setReviewerDraftId] = useState("")
   const [loadingReviewers, setLoadingReviewers] = useState(false)
@@ -341,6 +342,30 @@ export default function BuildingDetailPage() {
         (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
         ?? "변경 실패"
       alert(msg)
+    }
+  }
+
+  const handleDeleteReviewOpinion = async (stageId: number) => {
+    const confirmed = confirm(
+      "검토의견을 삭제하시겠습니까?\n상세의견과 심각도 집계도 함께 삭제됩니다."
+    )
+    if (!confirmed) return
+
+    setDeletingOpinionStageId(stageId)
+    try {
+      const { data } = await apiClient.delete<ReviewStage>(
+        `/api/reviews/stages/${stageId}/opinion`
+      )
+      setStages((prev) =>
+        prev.map((stage) => (stage.id === stageId ? data : stage))
+      )
+    } catch (err) {
+      const msg =
+        (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
+        ?? "검토의견 삭제에 실패했습니다"
+      alert(msg)
+    } finally {
+      setDeletingOpinionStageId(null)
     }
   }
 
@@ -697,7 +722,21 @@ export default function BuildingDetailPage() {
                       {/* 검토의견 */}
                       {stage.review_opinion && (
                         <div>
-                          <dt className="text-muted-foreground mb-1">검토의견</dt>
+                          <div className="mb-1 flex items-center justify-between gap-2">
+                            <dt className="text-muted-foreground">검토의견</dt>
+                            {canManage && (
+                              <Button
+                                size="xs"
+                                variant="destructive"
+                                onClick={() => handleDeleteReviewOpinion(stage.id)}
+                                loading={deletingOpinionStageId === stage.id}
+                                loadingText="삭제 중..."
+                              >
+                                <Trash2 className="h-3 w-3" />
+                                삭제
+                              </Button>
+                            )}
+                          </div>
                           <div className="rounded-md bg-muted p-3 text-sm whitespace-pre-wrap break-words max-h-60 overflow-y-auto">
                             {stage.review_opinion}
                           </div>
