@@ -53,6 +53,24 @@ def test_collect_targets_d_minus_1(db_session, make_reviewer):
     assert mgmts == ["R-0001"]
 
 
+def test_collect_targets_uses_business_today_by_default(
+    db_session, make_reviewer, monkeypatch
+):
+    _, reviewer, _ = make_reviewer()
+    today = date(2026, 6, 25)
+    monkeypatch.setattr("services.review_reminder.business_today", lambda: today)
+    _seed_stage(
+        db_session,
+        reviewer_id=reviewer.id,
+        mgmt_no="R-KST-001",
+        due=today + timedelta(days=1),
+    )
+
+    targets = collect_targets(db_session, "d_minus_1")
+
+    assert [t.mgmt_no for t in targets] == ["R-KST-001"]
+
+
 def test_collect_targets_overdue_excludes_submitted(db_session, make_reviewer):
     _, reviewer, _ = make_reviewer()
     today = date(2026, 4, 19)

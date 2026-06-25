@@ -19,6 +19,7 @@ from models.reviewer import Reviewer
 from models.user import User, UserRole
 from routers.auth import require_roles
 from services.audit import log_action
+from services.business_date import business_today
 from services.phase_transition import transition_phase
 from services.s3_storage import delete_file
 
@@ -381,7 +382,7 @@ def receive_documents(
     - 건물의 current_phase를 '_received' 상태로 업데이트
     - 검토위원 × 차수 조합별로 알림 데이터 생성
     """
-    received = body.received_date or date.today()
+    received = body.received_date or business_today()
     # 요청 예정일: 명시값 > 기본(접수일 + DEFAULT_DUE_DAYS)
     due_date = body.report_due_date or (received + timedelta(days=DEFAULT_DUE_DAYS))
     updated = 0

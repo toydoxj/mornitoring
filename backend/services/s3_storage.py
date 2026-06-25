@@ -1,6 +1,5 @@
 """AWS S3 파일 저장 서비스"""
 
-from datetime import date
 from functools import lru_cache
 from pathlib import Path
 from typing import BinaryIO
@@ -9,6 +8,7 @@ import boto3
 from botocore.exceptions import ClientError
 
 from config import settings
+from services.business_date import business_today
 
 
 @lru_cache(maxsize=1)
@@ -49,7 +49,7 @@ def upload_review_file(
     Returns:
         S3 key (파일 경로)
     """
-    today = date.today()
+    today = business_today()
     suffix = Path(original_filename).suffix
     phase_folder = PHASE_FOLDER_MAP.get(phase, phase)
     date_folder = today.strftime("%Y-%m-%d")

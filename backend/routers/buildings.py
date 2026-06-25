@@ -14,6 +14,7 @@ from models.reviewer import Reviewer
 from models.user import User, UserRole
 from routers.auth import get_current_user, require_roles
 from services.audit import log_action
+from services.business_date import business_today
 from services.related_tech import related_tech_coop_filter, related_tech_target_filter
 from services.scope import (
     building_visibility_filter,
@@ -1422,11 +1423,10 @@ def reviewer_schedule(
     오늘 기준 D-3/D-2/D-1/D-day/초과 카운트로 집계한다. D+4 이상 예정이거나 일정이 없는
     건은 in_progress 에만 합산된다. 미제출이 없는 검토위원도 모든 카운트 0으로 표시.
     """
-    from datetime import date
     from models.review_stage import ReviewStage
     from models.reviewer import Reviewer
 
-    today = date.today()
+    today = business_today()
 
     # 1) 활성 사용자 전체(팀장·총괄간사·간사·검토위원)를 0 초기화로 준비.
     #    간사(조 배정)는 같은 조 검토위원만 보도록 visibility 필터.
@@ -1572,7 +1572,6 @@ def my_stats(
     검토위원은 `reviewer_id`만 사용한다. 총괄간사는 실무상 직접 검토자로
     배정될 수 있으므로 자기 이름 배정 건도 포함한다.
     """
-    from datetime import date as _date
     from sqlalchemy import and_, func as sa_func, or_
     from models.review_stage import ReviewStage
 
@@ -1634,7 +1633,7 @@ def my_stats(
         "1일": 0, "2일": 0, "3일": 0, "4일": 0, "5일": 0,
         "6일": 0, "7일": 0, "1주": 0, "2주이상": 0,
     }
-    today = _date.today()
+    today = business_today()
     current_stage_match = or_(*[
         and_(Building.current_phase == received_phase, ReviewStage.phase == submit_phase)
         for received_phase, submit_phase in RECEIVED_TO_SUBMIT_PHASE.items()

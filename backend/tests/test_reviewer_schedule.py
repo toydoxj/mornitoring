@@ -9,6 +9,7 @@ from datetime import date, timedelta
 from models.building import Building
 from models.review_stage import ReviewStage, PhaseType
 from models.user import UserRole
+from services.business_date import business_today
 
 
 def _seed(
@@ -42,7 +43,7 @@ def _seed(
 def test_reviewer_schedule_buckets(client, db_session, make_user, make_reviewer):
     _, headers_admin = make_user(UserRole.CHIEF_SECRETARY, name="관리자")
     _, reviewer, _ = make_reviewer()
-    today = date.today()
+    today = business_today()
     _seed(db_session, reviewer.id, "S-001", today - timedelta(days=2))   # overdue
     _seed(db_session, reviewer.id, "S-002", today)                        # d_day
     _seed(db_session, reviewer.id, "S-003", today + timedelta(days=1))    # d_minus_1
@@ -62,13 +63,30 @@ def test_reviewer_schedule_buckets(client, db_session, make_user, make_reviewer)
     assert row["d_minus_3"] == 1
 
 
+def test_reviewer_schedule_uses_business_today(
+    client, db_session, make_user, make_reviewer, monkeypatch
+):
+    _, headers_admin = make_user(UserRole.CHIEF_SECRETARY, name="admin")
+    reviewer_user, reviewer, _ = make_reviewer()
+    today = date(2026, 6, 25)
+    monkeypatch.setattr("routers.buildings.business_today", lambda: today)
+    _seed(db_session, reviewer.id, "KST-DAY-001", today)
+
+    res = client.get("/api/buildings/reviewer-schedule", headers=headers_admin)
+
+    assert res.status_code == 200
+    row = next(r for r in res.json() if r["reviewer_user_id"] == reviewer_user.id)
+    assert row["d_day"] == 1
+    assert row["d_minus_1"] == 0
+
+
 def test_reviewer_schedule_excludes_assigned_pending_stage(
     client, db_session, make_user, make_reviewer
 ):
     """배정완료로 되돌린 건물의 과거 미제출 예정일은 일정관리에서 제외한다."""
     _, headers_admin = make_user(UserRole.CHIEF_SECRETARY, name="관리자")
     _, reviewer, _ = make_reviewer()
-    today = date.today()
+    today = business_today()
     _seed(db_session, reviewer.id, "S-RECEIVED", today + timedelta(days=1))
     _seed(
         db_session,
@@ -95,7 +113,7 @@ def test_reviewer_schedule_on_time_rate(client, db_session, make_user, make_revi
     """마감 경과 건 중 정시 제출 비율을 on_time_rate 로 노출한다."""
     _, headers_admin = make_user(UserRole.CHIEF_SECRETARY, name="관리자")
     _, reviewer, _ = make_reviewer()
-    today = date.today()
+    today = business_today()
     # 정시 제출 2건
     _seed(db_session, reviewer.id, "OT-001", today - timedelta(days=5),
           submitted=today - timedelta(days=6))
@@ -122,7 +140,7 @@ def test_reviewer_schedule_on_time_rate_null_when_nothing_due(
     """마감 경과 건이 하나도 없으면 on_time_rate 는 null."""
     _, headers_admin = make_user(UserRole.CHIEF_SECRETARY, name="관리자")
     _, reviewer, _ = make_reviewer()
-    today = date.today()
+    today = business_today()
     _seed(db_session, reviewer.id, "FT-001", today + timedelta(days=5))  # 미래만
 
     res = client.get("/api/buildings/reviewer-schedule", headers=headers_admin)
@@ -138,7 +156,7 @@ def test_reviewer_schedule_lists_all_active_users_even_when_idle(
     _, headers_admin = make_user(UserRole.CHIEF_SECRETARY, name="관리자")
     _busy_user, reviewer_busy, _ = make_reviewer()
     _idle_user, _reviewer_idle, _ = make_reviewer()
-    today = date.today()
+    today = business_today()
     _seed(db_session, reviewer_busy.id, "Z-0001", today + timedelta(days=1))
 
     res = client.get("/api/buildings/reviewer-schedule", headers=headers_admin)

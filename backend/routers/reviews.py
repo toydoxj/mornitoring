@@ -26,6 +26,7 @@ from engines.review_validator import validate_review_file
 from engines.review_extractor import extract_review_data
 from engines.opinion_text import clean_opinion_detail_content
 from engines.opinion_quality_analyzer import match_opinion_quality
+from services.business_date import business_today
 
 
 def _ensure_reviewer_can_access_building(
@@ -1167,7 +1168,7 @@ async def upload_review(
             # 기존 단계 업데이트 (재업로드)
             # 새 파일 업로드 전에 기존 S3 파일 삭제 (날짜 경로가 다르면 orphan 방지)
             old_s3_key = stage.s3_file_key
-            stage.report_submitted_at = date.today()
+            stage.report_submitted_at = business_today()
             stage.reviewer_name = submitted_reviewer_name
             if extracted["result"]:
                 stage.result = extracted["result"]
@@ -1198,7 +1199,7 @@ async def upload_review(
                 building_id=building.id,
                 phase=phase_type,
                 phase_order=phase_order,
-                report_submitted_at=date.today(),
+                report_submitted_at=business_today(),
                 reviewer_name=submitted_reviewer_name,
                 result=extracted["result"],
                 defect_type_1=extracted["defect_type_1"],

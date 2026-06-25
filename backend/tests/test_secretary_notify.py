@@ -6,11 +6,12 @@
 - collect_targets(sender=...): SECRETARY 의 자동 수집도 같은 조 검토위원만
 """
 
-from datetime import date, timedelta
+from datetime import timedelta
 
 from models.notification_log import NotificationLog
 from models.review_stage import PhaseType, ReviewStage
 from models.user import UserRole
+from services.business_date import business_today
 from services.review_reminder import collect_targets
 
 
@@ -126,7 +127,7 @@ def test_secretary_review_reminder_dry_run_filters_by_group(
         make_user, make_reviewer, make_building, db_session
     )
     # 양쪽 건물에 미제출 stage 생성
-    today = date.today()
+    today = business_today()
     db_session.add(ReviewStage(
         building_id=b_same.id, phase=PhaseType.PRELIMINARY, phase_order=0,
         report_due_date=today + timedelta(days=1),
@@ -160,7 +161,7 @@ def test_secretary_review_reminder_excludes_unassigned_reviewer(
     building = make_building(
         mgmt_no="REMINDER-UNASSIGNED", reviewer_id=unassigned_rev.id
     )
-    today = date.today()
+    today = business_today()
     db_session.add(ReviewStage(
         building_id=building.id, phase=PhaseType.PRELIMINARY, phase_order=0,
         report_due_date=today + timedelta(days=1),
@@ -333,7 +334,7 @@ def test_collect_targets_with_secretary_sender_filters(
     sec, _, same_user, other_user, b_same, b_other = _setup(
         make_user, make_reviewer, make_building, db_session
     )
-    today = date.today()
+    today = business_today()
     db_session.add(ReviewStage(
         building_id=b_same.id, phase=PhaseType.PRELIMINARY, phase_order=0,
         report_due_date=today + timedelta(days=2),

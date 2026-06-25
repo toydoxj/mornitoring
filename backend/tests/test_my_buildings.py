@@ -10,6 +10,7 @@ from datetime import date, timedelta
 from models.building import Building
 from models.review_stage import PhaseType, ResultType, ReviewStage
 from models.user import UserRole
+from services.business_date import business_today
 
 
 def test_my_reviews_returns_only_own_buildings(
@@ -225,13 +226,13 @@ def test_my_stats_counts_only_own_reviewer_id(
             building_id=b1.id,
             phase=PhaseType.PRELIMINARY,
             phase_order=0,
-            report_submitted_at=date.today(),
+            report_submitted_at=business_today(),
         ),
         ReviewStage(
             building_id=b2.id,
             phase=PhaseType.SUPPLEMENT_1,
             phase_order=1,
-            report_submitted_at=date.today(),
+            report_submitted_at=business_today(),
         ),
     ])
     db_session.commit()
@@ -256,7 +257,7 @@ def test_my_stats_schedule_excludes_assigned_pending_stage(
 ):
     """배정완료로 되돌린 건물의 과거 미제출 예정일은 미제출 일정에서 제외한다."""
     _, reviewer, headers = make_reviewer()
-    due = date.today() + timedelta(days=3)
+    due = business_today() + timedelta(days=3)
     received = make_building(reviewer_id=reviewer.id, mgmt_no="MY-SCH-RECEIVED")
     received.current_phase = "doc_received"
     assigned = make_building(reviewer_id=reviewer.id, mgmt_no="MY-SCH-ASSIGNED")
@@ -284,3 +285,27 @@ def test_my_stats_schedule_excludes_assigned_pending_stage(
     assert payload["need_review"] == 1
     assert payload["schedule_counts"]["in_progress"] == 1
     assert payload["schedule_counts"]["d_minus_3"] == 1
+
+
+def test_my_stats_schedule_uses_business_today(
+    client, db_session, make_reviewer, make_building, monkeypatch
+):
+    _, reviewer, headers = make_reviewer()
+    today = date(2026, 6, 25)
+    monkeypatch.setattr("routers.buildings.business_today", lambda: today)
+    building = make_building(reviewer_id=reviewer.id, mgmt_no="MY-KST-DAY-001")
+    building.current_phase = "doc_received"
+    db_session.add(ReviewStage(
+        building_id=building.id,
+        phase=PhaseType.PRELIMINARY,
+        phase_order=0,
+        report_due_date=today,
+    ))
+    db_session.commit()
+
+    res = client.get("/api/buildings/my-stats", headers=headers)
+
+    assert res.status_code == 200
+    payload = res.json()
+    assert payload["schedule_counts"]["d_day"] == 1
+    assert payload["schedule_counts"]["d_minus_1"] == 0

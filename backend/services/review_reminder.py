@@ -23,6 +23,7 @@ from models.notification_log import NotificationLog
 from models.review_stage import ReviewStage
 from models.reviewer import Reviewer
 from models.user import User
+from services.business_date import business_today
 from services.kakao import (
     ensure_valid_token,
     send_message_to_friends,
@@ -74,7 +75,7 @@ def collect_targets(
     """
     from services.scope import building_visibility_filter
 
-    anchor = today or date.today()
+    anchor = today or business_today()
     base_query = (
         db.query(ReviewStage, Building, Reviewer, User)
         .join(Building, ReviewStage.building_id == Building.id)
@@ -136,7 +137,7 @@ def _compose_message(
     targets: list[ReminderTarget],
     today: date | None = None,
 ) -> tuple[str, str]:
-    reference = today or date.today()
+    reference = today or business_today()
     if trigger == "d_minus_1":
         title = "검토서 요청 D-1 안내"
         lead = "검토서 제출 예정일이 내일입니다."

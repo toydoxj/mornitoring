@@ -5,7 +5,7 @@
 - 이력이 없는 stage 재접수는 doc_received_at만 갱신되고 부수효과가 없어야 한다.
 """
 
-from datetime import date, timedelta
+from datetime import timedelta
 
 from models.audit_log import AuditLog
 from models.inappropriate_note import InappropriateNote
@@ -13,6 +13,7 @@ from models.review_opinion_detail import ReviewOpinionDetail
 from models.review_severity_summary import ReviewSeveritySummary
 from models.review_stage import PhaseType, ResultType, ReviewStage
 from models.user import UserRole
+from services.business_date import business_today
 
 
 def _admin_headers(make_user):
@@ -27,7 +28,7 @@ def test_re_receive_clears_submitted_review(
     building = make_building(mgmt_no="RE-0001")
 
     # 검토서 제출까지 끝난 예비검토 stage를 강제로 만든다.
-    submitted_at = date.today() - timedelta(days=3)
+    submitted_at = business_today() - timedelta(days=3)
     stage = ReviewStage(
         building_id=building.id,
         phase=PhaseType.PRELIMINARY,
@@ -97,8 +98,8 @@ def test_re_receive_clears_submitted_review(
     assert refreshed.s3_file_key is None
     assert refreshed.inappropriate_review_needed is False
     # 도서 접수 정보는 갱신
-    assert refreshed.doc_received_at == date.today()
-    assert refreshed.report_due_date == date.today() + timedelta(days=14)
+    assert refreshed.doc_received_at == business_today()
+    assert refreshed.report_due_date == business_today() + timedelta(days=14)
 
     # InappropriateNote 자식 행도 함께 정리
     notes_left = (
@@ -143,8 +144,8 @@ def test_re_receive_without_history_does_not_log_reset(
         building_id=building.id,
         phase=PhaseType.PRELIMINARY,
         phase_order=0,
-        doc_received_at=date.today() - timedelta(days=5),
-        report_due_date=date.today() + timedelta(days=9),
+        doc_received_at=business_today() - timedelta(days=5),
+        report_due_date=business_today() + timedelta(days=9),
     )
     db_session.add(stage)
     building.current_phase = "doc_received"
@@ -176,8 +177,8 @@ def test_re_receive_clears_only_inappropriate_note(
         building_id=building.id,
         phase=PhaseType.PRELIMINARY,
         phase_order=0,
-        doc_received_at=date.today() - timedelta(days=5),
-        report_due_date=date.today() + timedelta(days=9),
+        doc_received_at=business_today() - timedelta(days=5),
+        report_due_date=business_today() + timedelta(days=9),
     )
     db_session.add(stage)
     db_session.commit()
@@ -216,8 +217,8 @@ def test_re_receive_clears_objection_only_history(
         building_id=building.id,
         phase=PhaseType.PRELIMINARY,
         phase_order=0,
-        doc_received_at=date.today() - timedelta(days=5),
-        report_due_date=date.today() + timedelta(days=9),
+        doc_received_at=business_today() - timedelta(days=5),
+        report_due_date=business_today() + timedelta(days=9),
         objection_filed=True,
         objection_content="이의 본문",
         objection_reason="사유",
@@ -252,8 +253,8 @@ def test_re_receive_clears_only_severity_summary_history(
         building_id=building.id,
         phase=PhaseType.PRELIMINARY,
         phase_order=0,
-        doc_received_at=date.today() - timedelta(days=5),
-        report_due_date=date.today() + timedelta(days=9),
+        doc_received_at=business_today() - timedelta(days=5),
+        report_due_date=business_today() + timedelta(days=9),
     )
     db_session.add(stage)
     db_session.commit()
@@ -303,8 +304,8 @@ def test_re_receive_clears_only_opinion_detail_history(
         building_id=building.id,
         phase=PhaseType.PRELIMINARY,
         phase_order=0,
-        doc_received_at=date.today() - timedelta(days=5),
-        report_due_date=date.today() + timedelta(days=9),
+        doc_received_at=business_today() - timedelta(days=5),
+        report_due_date=business_today() + timedelta(days=9),
     )
     db_session.add(stage)
     db_session.commit()
@@ -364,9 +365,9 @@ def test_re_receive_survives_s3_delete_exception(
         building_id=building.id,
         phase=PhaseType.PRELIMINARY,
         phase_order=0,
-        doc_received_at=date.today() - timedelta(days=5),
-        report_due_date=date.today() + timedelta(days=9),
-        report_submitted_at=date.today() - timedelta(days=2),
+        doc_received_at=business_today() - timedelta(days=5),
+        report_due_date=business_today() + timedelta(days=9),
+        report_submitted_at=business_today() - timedelta(days=2),
         s3_file_key="reviews/preliminary/2026/04/RE-0005.xlsm",
     )
     db_session.add(stage)
