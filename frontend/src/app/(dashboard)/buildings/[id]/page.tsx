@@ -53,10 +53,12 @@ export default function BuildingDetailPage() {
     safeReturnTo ? safeReturnTo :
     from === "my-reviews" ? "/my-reviews" :
     from === "inquiries" ? "/inquiries" :
+    from === "ledger-phase-compare" ? "/ledger-phase-compare" :
     defaultBackPath
   const backLabel =
     from === "my-reviews" ? "← 내 검토 대상" :
     from === "inquiries" ? "← 문의사항" :
+    from === "ledger-phase-compare" ? "← 비교검토" :
     defaultBackLabel
   const [building, setBuilding] = useState<Building | null>(null)
   const [stages, setStages] = useState<ReviewStage[]>([])

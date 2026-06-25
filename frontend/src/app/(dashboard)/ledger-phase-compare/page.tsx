@@ -1,5 +1,6 @@
 "use client"
 
+import Link from "next/link"
 import { useMemo, useRef, useState } from "react"
 import {
   AlertTriangle,
@@ -550,7 +551,18 @@ export default function LedgerPhaseComparePage() {
                           )}
                         </TableCell>
                         <TableCell className="text-right tabular-nums">{item.row_number}</TableCell>
-                        <TableCell className="font-mono text-xs">{item.mgmt_no}</TableCell>
+                        <TableCell className="font-mono text-xs">
+                          {item.building_id ? (
+                            <Link
+                              href={`/buildings/${item.building_id}?from=ledger-phase-compare`}
+                              className="font-semibold text-primary underline-offset-4 hover:underline"
+                            >
+                              {item.mgmt_no}
+                            </Link>
+                          ) : (
+                            item.mgmt_no
+                          )}
+                        </TableCell>
                         <TableCell className="max-w-[240px] whitespace-normal">
                           {item.building_name ?? "-"}
                         </TableCell>
