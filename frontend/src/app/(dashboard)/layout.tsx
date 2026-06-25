@@ -26,6 +26,7 @@ const NAV_ITEMS = [
   { href: "/reviewer-manual", label: "매뉴얼", roles: ["manager", "reviewer"] },
   { href: "/checklist", label: "상세체크리스트", roles: ["team_leader", "chief_secretary", "secretary", "manager", "reviewer"] },
   { href: "/buildings", label: "통합관리대장", roles: ["team_leader", "chief_secretary", "secretary", "manager"] },
+  { href: "/ledger-phase-compare", label: "대장 비교검토", roles: ["team_leader", "chief_secretary", "secretary", "manager"] },
   { href: "/distribution", label: "도서접수/배포", roles: ["team_leader", "chief_secretary"] },
   { href: "/my-reviews", label: "내 검토 대상", roles: ["chief_secretary", "secretary", "reviewer"] },
   { href: "/review-files", label: "검토서 관리", roles: ["team_leader", "chief_secretary", "manager"] },

@@ -2,8 +2,10 @@
 
 import logging
 from pathlib import Path
+from typing import Literal
 
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException
+from pydantic import BaseModel
 from fastapi.responses import StreamingResponse
 from openpyxl import load_workbook
 from sqlalchemy.orm import Session
@@ -19,10 +21,51 @@ from engines.ledger_import_2025 import import_ledger_2025
 from engines.ledger_import_unified import import_ledger_unified
 from engines.ledger_import_technical import import_ledger_technical
 from engines.ledger_import_selection import import_ledger_selection
+from engines.ledger_phase_compare import compare_supplement_phase_with_db
 from engines.ledger_export import export_ledger
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+class LedgerSupplementRoundStatus(BaseModel):
+    round: int
+    doc_column: str
+    report_column: str
+    doc_submitted: bool
+    report_submitted: bool
+    doc_value: str | None = None
+    report_value: str | None = None
+
+
+class LedgerPhaseCompareItem(BaseModel):
+    row_number: int
+    mgmt_no: str
+    building_id: int | None = None
+    building_name: str | None = None
+    reviewer_name: str | None = None
+    excel_phase: str | None = None
+    db_phase: str | None = None
+    status: Literal["matched", "mismatch", "missing_db", "excel_phase_missing"]
+    matched: bool
+    phase_gap: int | None = None
+    phase_direction: Literal["same", "db_ahead", "excel_ahead", "unknown"]
+    evidence_round: int | None = None
+    evidence_column: str | None = None
+    evidence_value: str | None = None
+    evidence_label: str | None = None
+    rounds: list[LedgerSupplementRoundStatus]
+
+
+class LedgerPhaseCompareResponse(BaseModel):
+    sheet: str
+    total_rows: int
+    compared: int
+    matched: int
+    mismatched: int
+    missing_db: int
+    excel_phase_missing: int
+    items: list[LedgerPhaseCompareItem]
 
 
 def _normalize_excel_text(value) -> str:
@@ -258,6 +301,44 @@ async def apply_checked_items(
             detail=f"관리대장 체크 항목 업데이트 실패: {type(exc).__name__}: {exc}",
         )
     finally:
+        tmp_path.unlink(missing_ok=True)
+
+
+@router.post("/phase-compare", response_model=LedgerPhaseCompareResponse)
+async def compare_ledger_phase(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(
+        require_roles(
+            UserRole.TEAM_LEADER,
+            UserRole.CHIEF_SECRETARY,
+            UserRole.SECRETARY,
+            UserRole.MANAGER,
+        )
+    ),
+):
+    """통합 보완대장 제출 열 기준 단계와 DB 현재 단계를 비교한다."""
+    if not file.filename or not file.filename.endswith((".xlsx", ".xls")):
+        raise HTTPException(status_code=400, detail="엑셀 파일(.xlsx)만 업로드 가능합니다")
+
+    tmp_path = await stream_upload_to_tempfile(file, max_mb=20, suffix=".xlsx")
+
+    try:
+        return compare_supplement_phase_with_db(
+            tmp_path,
+            db,
+            current_user=current_user,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        logger.exception("관리대장 단계 비교 실패")
+        raise HTTPException(
+            status_code=500,
+            detail=f"관리대장 단계 비교 실패: {type(exc).__name__}: {exc}",
+        )
+    finally:
+        db.rollback()
         tmp_path.unlink(missing_ok=True)
 
 
