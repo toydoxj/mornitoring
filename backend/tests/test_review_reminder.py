@@ -21,18 +21,25 @@ def _seed_stage(
     mgmt_no: str,
     due: date,
     submitted: bool = False,
+    current_phase: str = "doc_received",
+    phase: PhaseType = PhaseType.PRELIMINARY,
 ) -> Building:
     b = Building(
         mgmt_no=mgmt_no,
         reviewer_id=reviewer_id,
         assigned_reviewer_name="assigned",
+        current_phase=current_phase,
     )
     db_session.add(b)
     db_session.flush()
     db_session.add(ReviewStage(
         building_id=b.id,
-        phase=PhaseType.PRELIMINARY,
-        phase_order=0,
+        phase=phase,
+        phase_order=(
+            0
+            if phase == PhaseType.PRELIMINARY
+            else int(phase.value.rsplit("_", 1)[1])
+        ),
         doc_received_at=due - timedelta(days=14),
         report_due_date=due,
         report_submitted_at=due if submitted else None,
@@ -118,6 +125,41 @@ def test_collect_targets_within_3_days_includes_overdue_and_future(db_session, m
 
     mgmts = sorted(t.mgmt_no for t in collect_targets(db_session, "within_3_days", today=today))
     assert mgmts == ["W-001", "W-002", "W-003"]
+
+
+def test_collect_targets_excludes_due_when_current_phase_is_not_pending(
+    db_session, make_reviewer
+):
+    """제출 단계로 넘어간 건물의 남은 예정일은 리마인드 대상에서 제외한다."""
+    _, reviewer, _ = make_reviewer()
+    today = date(2026, 4, 19)
+    _seed_stage(
+        db_session,
+        reviewer_id=reviewer.id,
+        mgmt_no="2026-0277",
+        due=today + timedelta(days=1),
+        current_phase="preliminary",
+    )
+
+    targets = collect_targets(db_session, "within_n_days", today=today, days_ahead=3)
+    assert [t.mgmt_no for t in targets] == []
+
+
+def test_collect_targets_excludes_mismatched_stage_phase(db_session, make_reviewer):
+    """현재 접수 단계와 다른 차수의 오래된 예정일은 리마인드 대상에서 제외한다."""
+    _, reviewer, _ = make_reviewer()
+    today = date(2026, 4, 19)
+    _seed_stage(
+        db_session,
+        reviewer_id=reviewer.id,
+        mgmt_no="STALE-SUP-1",
+        due=today + timedelta(days=1),
+        current_phase="doc_received",
+        phase=PhaseType.SUPPLEMENT_1,
+    )
+
+    targets = collect_targets(db_session, "within_n_days", today=today, days_ahead=3)
+    assert [t.mgmt_no for t in targets] == []
 
 
 @pytest.mark.asyncio

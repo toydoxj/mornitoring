@@ -14,13 +14,14 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from typing import Literal
 
+from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
 from config import settings
 from logging_config import log_event
 from models.building import Building
 from models.notification_log import NotificationLog
-from models.review_stage import ReviewStage
+from models.review_stage import PhaseType, ReviewStage
 from models.reviewer import Reviewer
 from models.user import User
 from services.business_date import business_today
@@ -41,6 +42,15 @@ _ROUND_LABEL: dict[str, str] = {
     "supplement_3": "3차 보완",
     "supplement_4": "4차 보완",
     "supplement_5": "5차 보완",
+}
+
+_RECEIVED_TO_SUBMIT_PHASE: dict[str, PhaseType] = {
+    "doc_received": PhaseType.PRELIMINARY,
+    "supplement_1_received": PhaseType.SUPPLEMENT_1,
+    "supplement_2_received": PhaseType.SUPPLEMENT_2,
+    "supplement_3_received": PhaseType.SUPPLEMENT_3,
+    "supplement_4_received": PhaseType.SUPPLEMENT_4,
+    "supplement_5_received": PhaseType.SUPPLEMENT_5,
 }
 
 
@@ -84,6 +94,13 @@ def collect_targets(
         .filter(
             ReviewStage.report_submitted_at.is_(None),
             ReviewStage.report_due_date.isnot(None),
+            or_(*[
+                and_(
+                    Building.current_phase == received_phase,
+                    ReviewStage.phase == submit_phase,
+                )
+                for received_phase, submit_phase in _RECEIVED_TO_SUBMIT_PHASE.items()
+            ]),
             User.is_active.is_(True),
         )
     )
