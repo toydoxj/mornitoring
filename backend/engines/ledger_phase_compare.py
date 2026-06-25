@@ -263,6 +263,10 @@ def _final_result_status(
     return "mismatch"
 
 
+def _should_skip_phase_check(building: Building | None, final_status: str) -> bool:
+    return bool(building and building.current_phase == "completed" and final_status == "matched")
+
+
 def _reviewer_name(building: Building) -> str | None:
     if building.reviewer and building.reviewer.user:
         return building.reviewer.user.name
@@ -446,20 +450,8 @@ def compare_supplement_phase_with_db(
         row = phase_row_map.get(mgmt_no)
         building = building_map.get(mgmt_no)
         excel_phase = row["phase"] if row and isinstance(row["phase"], str) else None
-        status = _status_for(building, excel_phase) if row else "not_checked"
         db_phase = building.current_phase if building else None
         gap = _phase_gap(db_phase, excel_phase)
-
-        if status == "matched":
-            summary["matched"] += 1
-            summary["compared"] += 1
-        elif status == "mismatch":
-            summary["mismatched"] += 1
-            summary["compared"] += 1
-        elif status == "missing_db":
-            summary["missing_db"] += 1
-        elif status == "excel_phase_missing":
-            summary["excel_phase_missing"] += 1
 
         final_row = final_result_rows.get(mgmt_no)
         excel_final_result = (
@@ -483,6 +475,21 @@ def compare_supplement_phase_with_db(
         elif final_status == "excel_final_result_missing":
             summary["excel_final_result_missing"] += 1
 
+        status = _status_for(building, excel_phase) if row else "not_checked"
+        if status == "mismatch" and _should_skip_phase_check(building, final_status):
+            status = "completed_final_matched"
+
+        if status in ("matched", "completed_final_matched"):
+            summary["matched"] += 1
+            summary["compared"] += 1
+        elif status == "mismatch":
+            summary["mismatched"] += 1
+            summary["compared"] += 1
+        elif status == "missing_db":
+            summary["missing_db"] += 1
+        elif status == "excel_phase_missing":
+            summary["excel_phase_missing"] += 1
+
         items.append(
             {
                 "row_number": row["row_number"] if row else final_row["management_row_number"],
@@ -500,7 +507,7 @@ def compare_supplement_phase_with_db(
                 "final_result_matched": final_status == "matched" if final_status != "not_checked" else None,
                 "final_result_column": final_row["final_result_column"] if final_row else None,
                 "status": status,
-                "matched": status == "matched",
+                "matched": status in ("matched", "completed_final_matched"),
                 "phase_gap": gap,
                 "phase_direction": _phase_direction(gap),
                 "evidence_round": row["evidence_round"] if row else None,

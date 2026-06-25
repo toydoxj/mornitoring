@@ -28,7 +28,13 @@ import { cn } from "@/lib/utils"
 import { PHASE_LABELS, RESULT_LABELS } from "@/types"
 import { useAuthStore } from "@/stores/authStore"
 
-type CompareStatus = "matched" | "mismatch" | "missing_db" | "excel_phase_missing" | "not_checked"
+type CompareStatus =
+  | "matched"
+  | "completed_final_matched"
+  | "mismatch"
+  | "missing_db"
+  | "excel_phase_missing"
+  | "not_checked"
 type FinalResultStatus =
   | "matched"
   | "mismatch"
@@ -106,6 +112,7 @@ type ErrorWithResponse = {
 
 const STATUS_LABELS: Record<CompareStatus, string> = {
   matched: "일치",
+  completed_final_matched: "완료 일치",
   mismatch: "불일치",
   missing_db: "DB 없음",
   excel_phase_missing: "판단 불가",
@@ -145,7 +152,7 @@ function getFinalResultLabel(result: string | null) {
 }
 
 function getStatusVariant(status: CompareStatus): "default" | "secondary" | "destructive" | "outline" {
-  if (status === "matched") return "default"
+  if (status === "matched" || status === "completed_final_matched") return "default"
   if (status === "mismatch") return "destructive"
   if (status === "missing_db") return "secondary"
   return "outline"
@@ -185,6 +192,7 @@ function getRowClass(item: LedgerPhaseCompareItem) {
 }
 
 function getDirectionLabel(item: LedgerPhaseCompareItem) {
+  if (item.status === "completed_final_matched") return "최종판정 일치"
   if (item.phase_direction === "same") return "동일"
   if (item.phase_gap === null) return "-"
   const step = Math.abs(item.phase_gap)

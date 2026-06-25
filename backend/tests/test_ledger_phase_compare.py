@@ -55,6 +55,10 @@ def test_compare_supplement_phase_with_db_detects_match_and_mismatch(
     mismatched.current_phase = "supplement_1_received"
     mismatched.final_result = None
 
+    completed = make_building(mgmt_no="2026-0004")
+    completed.current_phase = "completed"
+    completed.final_result = "fail"
+
     db_session.commit()
 
     path = tmp_path / "phase_compare.xlsx"
@@ -65,20 +69,22 @@ def test_compare_supplement_phase_with_db_detects_match_and_mismatch(
             {"A": "2026-0002", "S": date(2026, 4, 1), "AV": date(2026, 4, 5)},
             {"A": "2026-9999", "S": date(2026, 4, 1)},
             {"A": "2026-0003"},
+            {"A": "2026-0004", "S": date(2026, 4, 1), "AV": date(2026, 4, 5)},
         ],
         management_rows=[
             {"A": "2026-0001", "CW": "적합"},
             {"A": "2026-0002", "CW": "부적합"},
+            {"A": "2026-0004", "CW": "부적합"},
         ],
     )
 
     result = compare_supplement_phase_with_db(path, db_session, current_user=user)
 
-    assert result["total_rows"] == 4
-    assert result["matched"] == 1
+    assert result["total_rows"] == 5
+    assert result["matched"] == 2
     assert result["mismatched"] == 1
     assert result["missing_db"] == 2
-    assert result["final_result_matched"] == 1
+    assert result["final_result_matched"] == 2
     assert result["final_result_mismatched"] == 1
 
     items = {item["mgmt_no"]: item for item in result["items"]}
@@ -96,6 +102,12 @@ def test_compare_supplement_phase_with_db_detects_match_and_mismatch(
     assert items["2026-0002"]["final_result_column"] == "CW"
 
     assert items["2026-9999"]["status"] == "missing_db"
+
+    assert items["2026-0004"]["status"] == "completed_final_matched"
+    assert items["2026-0004"]["matched"] is True
+    assert items["2026-0004"]["db_phase"] == "completed"
+    assert items["2026-0004"]["excel_phase"] == "supplement_1"
+    assert items["2026-0004"]["excel_final_result"] == "fail"
 
 
 def test_phase_compare_endpoint_returns_summary(

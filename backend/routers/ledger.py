@@ -62,7 +62,14 @@ class LedgerPhaseCompareItem(BaseModel):
     ]
     final_result_matched: bool | None = None
     final_result_column: str | None = None
-    status: Literal["matched", "mismatch", "missing_db", "excel_phase_missing", "not_checked"]
+    status: Literal[
+        "matched",
+        "completed_final_matched",
+        "mismatch",
+        "missing_db",
+        "excel_phase_missing",
+        "not_checked",
+    ]
     matched: bool
     phase_gap: int | None = None
     phase_direction: Literal["same", "db_ahead", "excel_ahead", "unknown"]
