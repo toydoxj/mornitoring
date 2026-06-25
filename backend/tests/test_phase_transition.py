@@ -291,6 +291,8 @@ def test_assignments_assign_logs_initial(
     assert res.status_code == 200, res.text
     db_session.refresh(b)
     assert b.current_phase == "assigned"
+    assert b.reviewer_id == reviewer.id
+    assert b.assigned_reviewer_name == reviewer.user.name
 
     log = (
         db_session.query(PhaseTransitionLog)

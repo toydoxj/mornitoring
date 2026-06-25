@@ -67,8 +67,11 @@ def assign_reviewer(
     reviewer = db.query(Reviewer).filter(Reviewer.id == body.reviewer_id).first()
     if not reviewer:
         raise HTTPException(status_code=404, detail="검토위원을 찾을 수 없습니다")
+    if not reviewer.user:
+        raise HTTPException(status_code=400, detail="검토위원 사용자 정보가 없습니다")
 
     building.reviewer_id = reviewer.id
+    building.assigned_reviewer_name = reviewer.user.name
     if not building.current_phase:
         # 매트릭스 #1: 신규 배정 시 INITIAL → "assigned"
         from services.phase_transition import transition_phase
@@ -76,6 +79,8 @@ def assign_reviewer(
             db, building, to_phase="assigned", trigger="initial",
             actor_user_id=current_user.id,
         )
+    from routers.buildings import clear_stats_cache
+    clear_stats_cache()
     db.commit()
     return {"message": f"관리번호 {building.mgmt_no}에 검토위원이 배정되었습니다"}
 

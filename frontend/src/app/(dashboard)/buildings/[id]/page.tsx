@@ -28,6 +28,13 @@ interface InquiryAttachmentData extends AttachmentDisplay {
   kind: "question" | "reply"
 }
 
+interface AssignmentReviewer {
+  id: number
+  user_id: number
+  user_name: string
+  group_no: number | null
+}
+
 const RESULT_VARIANT: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
   pass: "default",
   pass_supplement: "default",
@@ -82,9 +89,15 @@ export default function BuildingDetailPage() {
   const [savingPhase, setSavingPhase] = useState(false)
   const [finalizingPass, setFinalizingPass] = useState(false)
   const [reviewerDialogOpen, setReviewerDialogOpen] = useState(false)
+  const [reviewers, setReviewers] = useState<AssignmentReviewer[]>([])
+  const [reviewerDraftId, setReviewerDraftId] = useState("")
+  const [loadingReviewers, setLoadingReviewers] = useState(false)
+  const [savingReviewer, setSavingReviewer] = useState(false)
+  const [reviewerError, setReviewerError] = useState<string | null>(null)
 
   const canManage = user && ["team_leader", "chief_secretary", "secretary"].includes(user.role)
   const canChangePhase = user && ["team_leader", "chief_secretary"].includes(user.role)
+  const canChangeReviewer = user?.role === "chief_secretary"
   const isAssigned =
     !!user &&
     !!building &&
@@ -135,6 +148,44 @@ export default function BuildingDetailPage() {
       setPhaseEditOpen(true)
     }
   }, [isLoading, building, editPhaseParam, canChangePhase])
+
+  useEffect(() => {
+    if (!reviewerDialogOpen || !canChangeReviewer || !building) return
+
+    let canceled = false
+    setReviewerDraftId(building.reviewer_id ? String(building.reviewer_id) : "")
+    setReviewerError(null)
+    setLoadingReviewers(true)
+
+    apiClient
+      .get<AssignmentReviewer[]>("/api/assignments/reviewers")
+      .then(({ data }) => {
+        if (canceled) return
+        const activeReviewers = data
+          .filter((reviewer) => reviewer.user_name.trim().length > 0)
+          .sort((a, b) => {
+            const groupA = a.group_no ?? 999
+            const groupB = b.group_no ?? 999
+            if (groupA !== groupB) return groupA - groupB
+            return a.user_name.localeCompare(b.user_name, "ko-KR")
+          })
+        setReviewers(activeReviewers)
+      })
+      .catch((err) => {
+        if (canceled) return
+        const msg =
+          (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
+          ?? "검토위원 목록 조회 실패"
+        setReviewerError(msg)
+      })
+      .finally(() => {
+        if (!canceled) setLoadingReviewers(false)
+      })
+
+    return () => {
+      canceled = true
+    }
+  }, [reviewerDialogOpen, canChangeReviewer, building])
 
   interface NoteItem {
     id: number
@@ -244,6 +295,35 @@ export default function BuildingDetailPage() {
       alert(msg)
     } finally {
       setFinalizingPass(false)
+    }
+  }
+
+  const handleSaveReviewer = async () => {
+    if (!building) return
+    const reviewerId = Number(reviewerDraftId)
+    if (!Number.isInteger(reviewerId) || reviewerId <= 0) {
+      alert("교체할 검토자를 선택해주세요")
+      return
+    }
+
+    setSavingReviewer(true)
+    setReviewerError(null)
+    try {
+      await apiClient.post("/api/assignments/assign", {
+        building_id: building.id,
+        reviewer_id: reviewerId,
+      })
+      const { data } = await apiClient.get<Building>(`/api/buildings/${building.id}`)
+      setBuilding(data)
+      setReviewerDialogOpen(false)
+    } catch (err) {
+      const msg =
+        (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
+        ?? "검토자 교체 실패"
+      setReviewerError(msg)
+      alert(msg)
+    } finally {
+      setSavingReviewer(false)
     }
   }
 
@@ -466,22 +546,37 @@ export default function BuildingDetailPage() {
             <InfoItem label="내진등급" value={building.seismic_level} />
             <InfoItem
               label="검토자"
-              value={reviewerDisplayName ? (
-                reviewerDetail ? (
+              value={
+                canChangeReviewer ? (
                   <Button
                     type="button"
                     variant="link"
                     className="h-auto gap-1 p-0 text-sm font-medium"
                     onClick={() => setReviewerDialogOpen(true)}
-                    aria-label={`${reviewerDisplayName} 검토자 정보 보기`}
+                    aria-label={`${reviewerDisplayName ?? "미배정"} 검토자 교체`}
                   >
                     <UserRound className="h-3.5 w-3.5" />
-                    <span>{reviewerDisplayName}</span>
+                    <span>{reviewerDisplayName ?? "미배정"}</span>
                   </Button>
+                ) : reviewerDisplayName ? (
+                  reviewerDetail ? (
+                    <Button
+                      type="button"
+                      variant="link"
+                      className="h-auto gap-1 p-0 text-sm font-medium"
+                      onClick={() => setReviewerDialogOpen(true)}
+                      aria-label={`${reviewerDisplayName} 검토자 정보 보기`}
+                    >
+                      <UserRound className="h-3.5 w-3.5" />
+                      <span>{reviewerDisplayName}</span>
+                    </Button>
+                  ) : (
+                    reviewerDisplayName
+                  )
                 ) : (
-                  reviewerDisplayName
+                  null
                 )
-              ) : null}
+              }
             />
           </div>
 
@@ -926,25 +1021,85 @@ export default function BuildingDetailPage() {
         </DialogContent>
       </Dialog>
 
-      {/* 검토자 정보 */}
-      <Dialog open={reviewerDialogOpen} onOpenChange={setReviewerDialogOpen}>
+      {/* 검토자 정보/교체 */}
+      <Dialog
+        open={reviewerDialogOpen}
+        onOpenChange={(open) => {
+          if (!savingReviewer) setReviewerDialogOpen(open)
+        }}
+      >
         <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle>검토자 정보</DialogTitle>
+            <DialogTitle>{canChangeReviewer ? "검토자 교체" : "검토자 정보"}</DialogTitle>
           </DialogHeader>
-          {reviewerDetail && (
-            <div className="grid grid-cols-[84px_1fr] gap-x-3 gap-y-2 text-sm">
-              <span className="text-muted-foreground">이름</span>
-              <span className="font-medium">{reviewerDetail.name}</span>
-              <span className="text-muted-foreground">조</span>
-              <span className="font-medium">
-                {reviewerDetail.group_no ? `${reviewerDetail.group_no}조` : "-"}
-              </span>
-              <span className="text-muted-foreground">이메일주소</span>
-              <span className="break-all font-medium">{reviewerDetail.email || "-"}</span>
-              <span className="text-muted-foreground">전화번호</span>
-              <span className="font-medium">{reviewerDetail.phone || "-"}</span>
-            </div>
+          <div className="space-y-4">
+            {reviewerDetail ? (
+              <div className="grid grid-cols-[84px_1fr] gap-x-3 gap-y-2 text-sm">
+                <span className="text-muted-foreground">이름</span>
+                <span className="font-medium">{reviewerDetail.name}</span>
+                <span className="text-muted-foreground">조</span>
+                <span className="font-medium">
+                  {reviewerDetail.group_no ? `${reviewerDetail.group_no}조` : "-"}
+                </span>
+                <span className="text-muted-foreground">이메일주소</span>
+                <span className="break-all font-medium">{reviewerDetail.email || "-"}</span>
+                <span className="text-muted-foreground">전화번호</span>
+                <span className="font-medium">{reviewerDetail.phone || "-"}</span>
+              </div>
+            ) : (
+              <div className="grid grid-cols-[84px_1fr] gap-x-3 gap-y-2 text-sm">
+                <span className="text-muted-foreground">현재</span>
+                <span className="font-medium">{reviewerDisplayName ?? "미배정"}</span>
+              </div>
+            )}
+
+            {canChangeReviewer && (
+              <>
+                <Separator />
+                <div className="space-y-2">
+                  <Label htmlFor="reviewer-select">교체할 검토자</Label>
+                  <select
+                    id="reviewer-select"
+                    className="w-full rounded-md border px-3 py-2 text-sm"
+                    value={reviewerDraftId}
+                    onChange={(e) => setReviewerDraftId(e.target.value)}
+                    disabled={loadingReviewers || savingReviewer}
+                  >
+                    <option value="">
+                      {loadingReviewers ? "불러오는 중..." : "검토자를 선택해주세요"}
+                    </option>
+                    {reviewers.map((reviewer) => (
+                      <option key={reviewer.id} value={reviewer.id}>
+                        {reviewer.group_no ? `${reviewer.group_no}조 · ` : ""}
+                        {reviewer.user_name}
+                      </option>
+                    ))}
+                  </select>
+                  {reviewerError && (
+                    <p className="text-sm text-destructive">{reviewerError}</p>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+          {canChangeReviewer && (
+            <DialogFooter>
+              <Button
+                variant="outline"
+                onClick={() => setReviewerDialogOpen(false)}
+                disabled={savingReviewer}
+              >
+                취소
+              </Button>
+              <Button
+                onClick={handleSaveReviewer}
+                loading={savingReviewer}
+                loadingText="저장 중..."
+                disabled={loadingReviewers || !reviewerDraftId}
+              >
+                저장
+              </Button>
+            </DialogFooter>
           )}
         </DialogContent>
       </Dialog>
