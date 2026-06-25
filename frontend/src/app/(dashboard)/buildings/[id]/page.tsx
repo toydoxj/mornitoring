@@ -345,24 +345,22 @@ export default function BuildingDetailPage() {
     }
   }
 
-  const handleDeleteReviewOpinion = async (stageId: number) => {
+  const handleDeleteReviewHistory = async (stageId: number) => {
     const confirmed = confirm(
-      "검토의견을 삭제하시겠습니까?\n상세의견과 심각도 집계도 함께 삭제됩니다."
+      "이 검토 이력을 삭제하시겠습니까?\n제출일, 검토자, 판정결과, 검토의견, 상세의견, 첨부 검토서 이력이 모두 삭제됩니다."
     )
     if (!confirmed) return
 
     setDeletingOpinionStageId(stageId)
     try {
-      const { data } = await apiClient.delete<ReviewStage>(
-        `/api/reviews/stages/${stageId}/opinion`
-      )
+      await apiClient.delete(`/api/reviews/stages/${stageId}`)
       setStages((prev) =>
-        prev.map((stage) => (stage.id === stageId ? data : stage))
+        prev.filter((stage) => stage.id !== stageId)
       )
     } catch (err) {
       const msg =
         (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
-        ?? "검토의견 삭제에 실패했습니다"
+        ?? "검토 이력 삭제에 실패했습니다"
       alert(msg)
     } finally {
       setDeletingOpinionStageId(null)
@@ -728,7 +726,7 @@ export default function BuildingDetailPage() {
                               <Button
                                 size="xs"
                                 variant="destructive"
-                                onClick={() => handleDeleteReviewOpinion(stage.id)}
+                                onClick={() => handleDeleteReviewHistory(stage.id)}
                                 loading={deletingOpinionStageId === stage.id}
                                 loadingText="삭제 중..."
                               >

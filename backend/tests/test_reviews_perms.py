@@ -5,6 +5,7 @@ REVIEWER가 본인 담당 외 건물의 stages/inquiries/download에 접근하�
 
 from datetime import date
 
+from models.inappropriate_note import InappropriateNote
 from models.review_opinion_detail import ReviewOpinionDetail
 from models.review_severity_summary import ReviewSeveritySummary
 from models.review_stage import PhaseType, ReviewStage
@@ -74,59 +75,69 @@ def test_reviewer_can_get_stages_of_own_building(
     assert items[0]["building_id"] == own.id
 
 
-def test_chief_secretary_can_delete_review_opinion_and_related_rows(
+def test_chief_secretary_can_delete_review_stage_history_and_related_rows(
     client, db_session, make_user, make_building
 ):
     _, headers = make_user(UserRole.CHIEF_SECRETARY)
-    building = make_building(mgmt_no="DELETE-OPINION-001")
+    building = make_building(mgmt_no="DELETE-STAGE-001")
     stage = ReviewStage(
         building_id=building.id,
         phase=PhaseType.PRELIMINARY,
         phase_order=0,
-        review_opinion="삭제할 검토의견",
+        review_opinion="review opinion to delete",
         severity_l2_count=1,
         severity_l4_count=1,
     )
     db_session.add(stage)
     db_session.flush()
+    db_session.add(InappropriateNote(
+        stage_id=stage.id,
+        author_id=1,
+        author_name="secretary",
+        content="note to delete",
+    ))
     db_session.add(ReviewOpinionDetail(
         stage_id=stage.id,
         phase=PhaseType.PRELIMINARY.value,
         phase_group="preliminary",
         row_number=1,
-        category="구조계산서",
+        category="structure",
         severity="L4",
-        content="상세 검토의견",
+        content="detail opinion",
     ))
     db_session.add(ReviewSeveritySummary(
         stage_id=stage.id,
-        category="구조계산서",
+        category="structure",
         severity="L4",
         count=1,
     ))
     db_session.commit()
+    stage_id = stage.id
 
-    res = client.delete(f"/api/reviews/stages/{stage.id}/opinion", headers=headers)
+    res = client.delete(f"/api/reviews/stages/{stage_id}", headers=headers)
 
     assert res.status_code == 200
     payload = res.json()
-    assert payload["review_opinion"] is None
-    assert payload["severity_l2_count"] == 0
-    assert payload["severity_l4_count"] == 0
+    assert payload["stage_id"] == stage_id
+    assert payload["building_id"] == building.id
 
-    db_session.refresh(stage)
-    assert stage.review_opinion is None
-    assert stage.severity_l2_count == 0
-    assert stage.severity_l4_count == 0
+    db_session.expire_all()
+    assert db_session.get(ReviewStage, stage_id) is None
+    assert (
+        db_session.query(InappropriateNote)
+        .filter(InappropriateNote.stage_id == stage_id)
+        .count()
+        == 0
+    )
     assert (
         db_session.query(ReviewOpinionDetail)
-        .filter(ReviewOpinionDetail.stage_id == stage.id)
+        .filter(ReviewOpinionDetail.stage_id == stage_id)
         .count()
         == 0
     )
     assert (
         db_session.query(ReviewSeveritySummary)
-        .filter(ReviewSeveritySummary.stage_id == stage.id)
+        .filter(ReviewSeveritySummary.stage_id == stage_id)
         .count()
         == 0
     )

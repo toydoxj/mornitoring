@@ -1503,8 +1503,8 @@ def get_review_stages(
     return stages
 
 
-@router.delete("/stages/{stage_id}/opinion", response_model=ReviewStageResponse)
-def delete_review_stage_opinion(
+@router.delete("/stages/{stage_id}")
+def delete_review_stage(
     stage_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(
@@ -1516,7 +1516,7 @@ def delete_review_stage_opinion(
         )
     ),
 ):
-    """검토의견 본문과 상세의견/심각도 집계를 삭제한다."""
+    """검토 단계 이력 전체를 삭제한다."""
     query = (
         db.query(ReviewStage)
         .join(Building, ReviewStage.building_id == Building.id)
@@ -1530,6 +1530,23 @@ def delete_review_stage_opinion(
     if stage is None:
         raise HTTPException(status_code=404, detail="검토 단계를 찾을 수 없습니다")
 
+    from models.inappropriate_note import InappropriateNote
+
+    stage_phase = stage.phase.value if hasattr(stage.phase, "value") else str(stage.phase)
+    stage_building_id = stage.building_id
+    old_s3_key = stage.s3_file_key
+    s3_deleted = False
+    if old_s3_key:
+        try:
+            s3_deleted = delete_file(old_s3_key)
+        except Exception:
+            s3_deleted = False
+
+    inappropriate_notes_deleted = (
+        db.query(InappropriateNote)
+        .filter(InappropriateNote.stage_id == stage.id)
+        .delete(synchronize_session=False)
+    )
     opinion_details_deleted = (
         db.query(ReviewOpinionDetail)
         .filter(ReviewOpinionDetail.stage_id == stage.id)
@@ -1541,33 +1558,35 @@ def delete_review_stage_opinion(
         .delete(synchronize_session=False)
     )
 
-    stage.review_opinion = None
-    stage.severity_l0_count = 0
-    stage.severity_l1_count = 0
-    stage.severity_l2_count = 0
-    stage.severity_l3_count = 0
-    stage.severity_l4_count = 0
-
     log_action(
         db,
         current_user.id,
         "delete",
-        "review_opinion",
+        "review_stage",
         stage.id,
         after_data={
             "stage_id": stage.id,
-            "building_id": stage.building_id,
+            "building_id": stage_building_id,
+            "phase": stage_phase,
+            "s3_file_key": old_s3_key,
+            "s3_deleted": s3_deleted,
+            "inappropriate_notes_deleted": int(inappropriate_notes_deleted or 0),
             "opinion_details_deleted": int(opinion_details_deleted or 0),
             "severity_summaries_deleted": int(severity_summaries_deleted or 0),
         },
     )
+    db.delete(stage)
 
     from routers.buildings import clear_stats_cache
 
     clear_stats_cache()
     db.commit()
-    db.refresh(stage)
-    return stage
+    return {
+        "stage_id": stage_id,
+        "building_id": stage_building_id,
+        "phase": stage_phase,
+        "s3_deleted": s3_deleted,
+    }
 
 
 class InquiryCreateRequest(BaseModel):
