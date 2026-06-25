@@ -128,6 +128,8 @@ def test_secretary_review_reminder_dry_run_filters_by_group(
     )
     # 양쪽 건물에 미제출 stage 생성
     today = business_today()
+    b_same.current_phase = "doc_received"
+    b_other.current_phase = "doc_received"
     db_session.add(ReviewStage(
         building_id=b_same.id, phase=PhaseType.PRELIMINARY, phase_order=0,
         report_due_date=today + timedelta(days=1),
@@ -161,6 +163,7 @@ def test_secretary_review_reminder_excludes_unassigned_reviewer(
     building = make_building(
         mgmt_no="REMINDER-UNASSIGNED", reviewer_id=unassigned_rev.id
     )
+    building.current_phase = "doc_received"
     today = business_today()
     db_session.add(ReviewStage(
         building_id=building.id, phase=PhaseType.PRELIMINARY, phase_order=0,
@@ -335,6 +338,8 @@ def test_collect_targets_with_secretary_sender_filters(
         make_user, make_reviewer, make_building, db_session
     )
     today = business_today()
+    b_same.current_phase = "doc_received"
+    b_other.current_phase = "doc_received"
     db_session.add(ReviewStage(
         building_id=b_same.id, phase=PhaseType.PRELIMINARY, phase_order=0,
         report_due_date=today + timedelta(days=2),
