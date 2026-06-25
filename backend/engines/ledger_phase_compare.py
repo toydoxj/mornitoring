@@ -82,6 +82,7 @@ FINAL_RESULT_MAP = {
     "부적합미회신": "fail_no_response",
     "대상제외": "excluded",
 }
+FINAL_RESULT_EXCLUDED_VALUES = {"차수이관"}
 
 
 def _normalize_text(value) -> str:
@@ -143,6 +144,8 @@ def _parse_final_result(value) -> str | None:
     if text is None:
         return None
     normalized = _normalize_text(text)
+    if normalized in FINAL_RESULT_EXCLUDED_VALUES:
+        return None
     return FINAL_RESULT_MAP.get(normalized, text)
 
 

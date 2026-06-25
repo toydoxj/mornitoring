@@ -150,6 +150,9 @@ def test_apply_final_results_from_ledger_updates_only_mismatched_final_result(
     matched = make_building(mgmt_no="2026-0202")
     matched.current_phase = "supplement_1"
     matched.final_result = "fail"
+    transfer = make_building(mgmt_no="2026-0203")
+    transfer.current_phase = "preliminary"
+    transfer.final_result = None
     db_session.commit()
 
     path = tmp_path / "final_result_apply.xlsx"
@@ -159,6 +162,7 @@ def test_apply_final_results_from_ledger_updates_only_mismatched_final_result(
         management_rows=[
             {"A": "2026-0201", "CW": "부적합"},
             {"A": "2026-0202", "CW": "부적합"},
+            {"A": "2026-0203", "CW": "차수이관"},
             {"A": "2026-9999", "CW": "적합"},
         ],
     )
@@ -173,13 +177,17 @@ def test_apply_final_results_from_ledger_updates_only_mismatched_final_result(
     assert result["updated"] == 1
     assert result["matched"] == 1
     assert result["missing_db"] == 1
+    assert result["excel_final_result_missing"] == 1
 
     db_session.refresh(building)
     db_session.refresh(matched)
+    db_session.refresh(transfer)
     assert building.final_result == "fail"
     assert building.current_phase == "completed"
     assert matched.final_result == "fail"
     assert matched.current_phase == "supplement_1"
+    assert transfer.final_result is None
+    assert transfer.current_phase == "preliminary"
 
     phase_log = db_session.query(PhaseTransitionLog).filter_by(mgmt_no="2026-0201").one()
     assert phase_log.from_phase == "supplement_2"

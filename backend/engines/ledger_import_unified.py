@@ -144,6 +144,7 @@ FINAL_RESULT_MAP = {
     "부적합(미회신)": "fail_no_response",
     "대상제외": "excluded",
 }
+FINAL_RESULT_EXCLUDED_VALUES = {"차수이관"}
 
 
 def _cell_value(row: tuple, col_letter: str):
@@ -277,6 +278,8 @@ def _parse_final_result(val) -> str | None:
     if _is_blank_marker(text):
         return None
     normalized = _normalize_excel_text(text)
+    if normalized in FINAL_RESULT_EXCLUDED_VALUES:
+        return None
     return FINAL_RESULT_MAP.get(normalized, text)
 
 

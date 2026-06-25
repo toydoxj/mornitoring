@@ -116,7 +116,7 @@ const FINAL_RESULT_STATUS_LABELS: Record<FinalResultStatus, string> = {
   matched: "일치",
   mismatch: "불일치",
   missing_db: "DB 없음",
-  excel_final_result_missing: "엑셀 공란",
+  excel_final_result_missing: "제외/공란",
   not_checked: "-",
 }
 
