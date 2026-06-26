@@ -28,11 +28,13 @@ interface InquiryAttachmentData extends AttachmentDisplay {
   kind: "question" | "reply"
 }
 
-interface AssignmentReviewer {
-  id: number
+interface ReviewerOption {
+  reviewer_id: number
   user_id: number
-  user_name: string
+  name: string
   group_no: number | null
+  email: string | null
+  phone: string | null
 }
 
 const RESULT_VARIANT: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
@@ -90,7 +92,7 @@ export default function BuildingDetailPage() {
   const [finalizingPass, setFinalizingPass] = useState(false)
   const [reviewerDialogOpen, setReviewerDialogOpen] = useState(false)
   const [deletingOpinionStageId, setDeletingOpinionStageId] = useState<number | null>(null)
-  const [reviewers, setReviewers] = useState<AssignmentReviewer[]>([])
+  const [reviewers, setReviewers] = useState<ReviewerOption[]>([])
   const [reviewerDraftId, setReviewerDraftId] = useState("")
   const [loadingReviewers, setLoadingReviewers] = useState(false)
   const [savingReviewer, setSavingReviewer] = useState(false)
@@ -159,16 +161,16 @@ export default function BuildingDetailPage() {
     setLoadingReviewers(true)
 
     apiClient
-      .get<AssignmentReviewer[]>("/api/assignments/reviewers")
+      .get<ReviewerOption[]>("/api/buildings/reviewer-options")
       .then(({ data }) => {
         if (canceled) return
         const activeReviewers = data
-          .filter((reviewer) => reviewer.user_name.trim().length > 0)
+          .filter((reviewer) => reviewer.name.trim().length > 0)
           .sort((a, b) => {
             const groupA = a.group_no ?? 999
             const groupB = b.group_no ?? 999
             if (groupA !== groupB) return groupA - groupB
-            return a.user_name.localeCompare(b.user_name, "ko-KR")
+            return a.name.localeCompare(b.name, "ko-KR")
           })
         setReviewers(activeReviewers)
       })
@@ -310,11 +312,10 @@ export default function BuildingDetailPage() {
     setSavingReviewer(true)
     setReviewerError(null)
     try {
-      await apiClient.post("/api/assignments/assign", {
-        building_id: building.id,
-        reviewer_id: reviewerId,
-      })
-      const { data } = await apiClient.get<Building>(`/api/buildings/${building.id}`)
+      const { data } = await apiClient.patch<Building>(
+        `/api/buildings/${building.id}`,
+        { reviewer_id: reviewerId }
+      )
       setBuilding(data)
       setReviewerDialogOpen(false)
     } catch (err) {
@@ -494,6 +495,8 @@ export default function BuildingDetailPage() {
     user?.role === "chief_secretary" &&
     !building.final_result &&
     latestResultStage?.result === "pass"
+  const currentReviewerDraftId = building.reviewer_id ? String(building.reviewer_id) : ""
+  const reviewerDraftChanged = reviewerDraftId !== currentReviewerDraftId
 
   return (
     <div className="space-y-6">
@@ -1106,9 +1109,10 @@ export default function BuildingDetailPage() {
                       {loadingReviewers ? "불러오는 중..." : "검토자를 선택해주세요"}
                     </option>
                     {reviewers.map((reviewer) => (
-                      <option key={reviewer.id} value={reviewer.id}>
+                      <option key={reviewer.reviewer_id} value={reviewer.reviewer_id}>
                         {reviewer.group_no ? `${reviewer.group_no}조 · ` : ""}
-                        {reviewer.user_name}
+                        {reviewer.name}
+                        {reviewer.email ? ` · ${reviewer.email}` : ""}
                       </option>
                     ))}
                   </select>
@@ -1132,7 +1136,12 @@ export default function BuildingDetailPage() {
                 onClick={handleSaveReviewer}
                 loading={savingReviewer}
                 loadingText="저장 중..."
-                disabled={loadingReviewers || !reviewerDraftId}
+                disabled={
+                  savingReviewer ||
+                  loadingReviewers ||
+                  !reviewerDraftId ||
+                  !reviewerDraftChanged
+                }
               >
                 저장
               </Button>

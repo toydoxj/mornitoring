@@ -134,6 +134,15 @@ class ReviewerDetailResponse(BaseModel):
     phone: str | None = None
 
 
+class ReviewerOptionResponse(BaseModel):
+    reviewer_id: int
+    user_id: int
+    name: str
+    group_no: int | None = None
+    email: str | None = None
+    phone: str | None = None
+
+
 class BuildingResponse(BaseModel):
     id: int
     mgmt_no: str
@@ -300,6 +309,35 @@ def _to_response(building: Building, registered_names: set[str]) -> dict:
     data.setdefault("latest_inappropriate", False)
     data.setdefault("report_due_date", None)
     return data
+
+
+def _validate_assignable_reviewer(
+    reviewer_id: int,
+    current_user: User,
+    db: Session,
+) -> Reviewer:
+    reviewer = (
+        db.query(Reviewer)
+        .join(User, Reviewer.user_id == User.id)
+        .filter(
+            Reviewer.id == reviewer_id,
+            User.role == UserRole.REVIEWER,
+            User.is_active.is_(True),
+        )
+        .first()
+    )
+    if reviewer is None:
+        raise HTTPException(status_code=404, detail="등록된 검토자를 찾을 수 없습니다")
+
+    user_visibility = visible_reviewer_user_ids(current_user)
+    if (
+        user_visibility is not None
+        and not db.query(User.id)
+        .filter(User.id == reviewer.user_id, user_visibility)
+        .first()
+    ):
+        raise HTTPException(status_code=403, detail="선택할 수 없는 검토자입니다")
+    return reviewer
 
 
 SEVERITY_LABELS = ("L0", "L1", "L2", "L3", "L4")
@@ -1376,6 +1414,45 @@ def get_reviewer_names(
     return [n[0] for n in names]
 
 
+@router.get("/reviewer-options", response_model=list[ReviewerOptionResponse])
+def get_reviewer_options(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(
+        require_roles(
+            UserRole.TEAM_LEADER,
+            UserRole.CHIEF_SECRETARY,
+            UserRole.SECRETARY,
+        )
+    ),
+):
+    """상세 화면에서 검토자 변경 시 선택할 수 있는 등록 검토위원 목록."""
+    user_visibility = visible_reviewer_user_ids(current_user)
+    query = (
+        db.query(Reviewer)
+        .join(User, Reviewer.user_id == User.id)
+        .filter(User.role == UserRole.REVIEWER, User.is_active.is_(True))
+    )
+    if user_visibility is not None:
+        query = query.filter(user_visibility)
+    reviewers = (
+        query
+        .order_by(Reviewer.group_no.asc().nulls_last(), User.name.asc(), Reviewer.id.asc())
+        .all()
+    )
+    return [
+        ReviewerOptionResponse(
+            reviewer_id=reviewer.id,
+            user_id=reviewer.user.id,
+            name=reviewer.user.name,
+            group_no=reviewer.group_no,
+            email=reviewer.user.email,
+            phone=reviewer.user.phone,
+        )
+        for reviewer in reviewers
+        if reviewer.user is not None
+    ]
+
+
 @router.post("", response_model=BuildingResponse, status_code=201)
 def create_building(
     body: BuildingCreate,
@@ -1916,8 +1993,50 @@ def update_building(
         raise HTTPException(status_code=404, detail="건축물을 찾을 수 없습니다")
 
     update_data = body.model_dump(exclude_unset=True)
+    reviewer_id_provided = "reviewer_id" in update_data
+    new_reviewer: Reviewer | None = None
+    if reviewer_id_provided:
+        new_reviewer_id = update_data.pop("reviewer_id")
+        if new_reviewer_id is None:
+            building.reviewer_id = None
+            building.assigned_reviewer_name = None
+        else:
+            new_reviewer = _validate_assignable_reviewer(
+                new_reviewer_id,
+                current_user,
+                db,
+            )
+            building.reviewer_id = new_reviewer.id
+            building.assigned_reviewer_name = new_reviewer.user.name
+
     for key, value in update_data.items():
         setattr(building, key, value)
+
+    if reviewer_id_provided and not building.current_phase and building.reviewer_id:
+        from services.phase_transition import transition_phase
+
+        transition_phase(
+            db,
+            building,
+            to_phase="assigned",
+            trigger="initial",
+            actor_user_id=current_user.id,
+        )
+
+    if reviewer_id_provided:
+        clear_stats_cache()
+        log_action(
+            db,
+            current_user.id,
+            "change_reviewer",
+            "building",
+            building.id,
+            after_data={
+                "mgmt_no": building.mgmt_no,
+                "reviewer_id": building.reviewer_id,
+                "reviewer_name": new_reviewer.user.name if new_reviewer else None,
+            },
+        )
 
     db.commit()
     db.refresh(building)
