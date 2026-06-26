@@ -26,6 +26,7 @@ type OpinionSeverity = "NA" | SeverityLabel
 type ReportMaxLabel = "pass" | SeverityLabel
 type OpinionQualityDecision = "suitable" | "unsuitable"
 type SortDirection = "asc" | "desc"
+type SeverityTableSortKey<TLabel extends string> = "label" | "total" | TLabel
 type ReviewerSortKey =
   | "group_no"
   | "name"
@@ -90,6 +91,11 @@ interface ReviewerPhaseStat {
 
 interface ReviewerSortState {
   key: ReviewerSortKey
+  direction: SortDirection
+}
+
+interface SeverityTableSortState<TLabel extends string> {
+  key: SeverityTableSortKey<TLabel>
   direction: SortDirection
 }
 
@@ -1176,6 +1182,7 @@ function SeverityStatsView({
             getColumnLabel={(label) => label}
             getLabel={(row) => row.category}
             emptyText="분류별 심각도 집계가 없습니다."
+            enableSorting
           />
         </section>
 
@@ -1242,6 +1249,7 @@ function SeverityTable<
   getColumnLabel,
   getLabel,
   emptyText,
+  enableSorting = false,
 }: {
   labels: TLabel[]
   labelHeader: string
@@ -1249,9 +1257,27 @@ function SeverityTable<
   getColumnLabel: (label: TLabel) => string
   getLabel: (row: TRow) => string
   emptyText: string
+  enableSorting?: boolean
 }) {
+  const [sortState, setSortState] = useState<SeverityTableSortState<TLabel>>({
+    key: "total",
+    direction: "desc",
+  })
+
   if (rows.length === 0) {
     return <EmptyMessage>{emptyText}</EmptyMessage>
+  }
+
+  const sortedRows = enableSorting
+    ? [...rows].sort((a, b) => compareSeverityRows(a, b, sortState, getLabel))
+    : rows
+  const handleSort = (key: SeverityTableSortKey<TLabel>) => {
+    setSortState((current) => {
+      if (current.key === key) {
+        return { key, direction: current.direction === "asc" ? "desc" : "asc" }
+      }
+      return { key, direction: key === "label" ? "asc" : "desc" }
+    })
   }
 
   return (
@@ -1259,17 +1285,51 @@ function SeverityTable<
       <Table>
         <TableHeader>
           <TableRow>
-            <TableHead>{labelHeader}</TableHead>
+            {enableSorting ? (
+              <SeveritySortableHead
+                sortKey="label"
+                sortState={sortState}
+                onSort={handleSort}
+                align="left"
+              >
+                {labelHeader}
+              </SeveritySortableHead>
+            ) : (
+              <TableHead>{labelHeader}</TableHead>
+            )}
             {labels.map((label) => (
-              <TableHead key={label} className="w-[70px] text-center">
-                {getColumnLabel(label)}
-              </TableHead>
+              enableSorting ? (
+                <SeveritySortableHead
+                  key={label}
+                  sortKey={label}
+                  sortState={sortState}
+                  onSort={handleSort}
+                  className="w-[70px] text-center"
+                >
+                  {getColumnLabel(label)}
+                </SeveritySortableHead>
+              ) : (
+                <TableHead key={label} className="w-[70px] text-center">
+                  {getColumnLabel(label)}
+                </TableHead>
+              )
             ))}
-            <TableHead className="w-[80px] text-center">합계</TableHead>
+            {enableSorting ? (
+              <SeveritySortableHead
+                sortKey="total"
+                sortState={sortState}
+                onSort={handleSort}
+                className="w-[80px] text-center"
+              >
+                합계
+              </SeveritySortableHead>
+            ) : (
+              <TableHead className="w-[80px] text-center">합계</TableHead>
+            )}
           </TableRow>
         </TableHeader>
         <TableBody>
-          {rows.map((row, index) => (
+          {sortedRows.map((row, index) => (
             <TableRow key={`${getLabel(row)}-${index}`}>
               <TableCell className="min-w-[220px] font-medium">
                 {getLabel(row)}
@@ -1303,6 +1363,82 @@ function SeverityTable<
       </Table>
     </div>
   )
+}
+
+function SeveritySortableHead<TLabel extends string>({
+  sortKey,
+  sortState,
+  onSort,
+  children,
+  align = "center",
+  className = "",
+}: {
+  sortKey: SeverityTableSortKey<TLabel>
+  sortState: SeverityTableSortState<TLabel>
+  onSort: (key: SeverityTableSortKey<TLabel>) => void
+  children: ReactNode
+  align?: "left" | "center" | "right"
+  className?: string
+}) {
+  const isActive = sortState.key === sortKey
+  const Icon = isActive ? (sortState.direction === "asc" ? ArrowUp : ArrowDown) : ArrowUpDown
+  const ariaSort = isActive
+    ? sortState.direction === "asc"
+      ? "ascending"
+      : "descending"
+    : "none"
+  const justifyClass = {
+    left: "justify-start",
+    center: "justify-center",
+    right: "justify-end",
+  }[align]
+
+  return (
+    <TableHead aria-sort={ariaSort} className={className}>
+      <button
+        type="button"
+        className={`inline-flex w-full items-center gap-1 ${justifyClass} rounded px-1 py-1 text-sm font-medium hover:bg-muted`}
+        onClick={() => onSort(sortKey)}
+      >
+        <span>{children}</span>
+        <Icon className="h-3.5 w-3.5 text-muted-foreground" aria-hidden />
+      </button>
+    </TableHead>
+  )
+}
+
+function compareSeverityRows<
+  TLabel extends string,
+  TRow extends { counts: Record<TLabel, number>; total: number },
+>(
+  a: TRow,
+  b: TRow,
+  sortState: SeverityTableSortState<TLabel>,
+  getLabel: (row: TRow) => string,
+) {
+  const aValue = getSeveritySortValue(a, sortState.key, getLabel)
+  const bValue = getSeveritySortValue(b, sortState.key, getLabel)
+  const direction = sortState.direction === "asc" ? 1 : -1
+  const primary =
+    typeof aValue === "string" || typeof bValue === "string"
+      ? REVIEWER_NAME_COLLATOR.compare(String(aValue), String(bValue))
+      : aValue - bValue
+
+  if (primary !== 0) return primary * direction
+  return REVIEWER_NAME_COLLATOR.compare(getLabel(a), getLabel(b))
+}
+
+function getSeveritySortValue<
+  TLabel extends string,
+  TRow extends { counts: Record<TLabel, number>; total: number },
+>(
+  row: TRow,
+  key: SeverityTableSortKey<TLabel>,
+  getLabel: (row: TRow) => string,
+) {
+  if (key === "label") return getLabel(row)
+  if (key === "total") return row.total
+  return row.counts[key] ?? 0
 }
 
 function KeywordStatsView({
