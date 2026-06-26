@@ -288,6 +288,75 @@ def test_stats_splits_uploaded_reports_and_deleted_submissions(
     assert body["deleted_submitted_reports_supplement"] == 1
 
 
+def test_stats_reviewer_status_counts_documents_reports_and_results(
+    client, db_session, make_user, make_reviewer, make_building
+):
+    _, headers = make_user(UserRole.CHIEF_SECRETARY)
+    reviewer_user, reviewer, _ = make_reviewer(group_no=3)
+    first = make_building(mgmt_no="REV-STAT-001", reviewer_id=reviewer.id)
+    second = make_building(mgmt_no="REV-STAT-002", reviewer_id=reviewer.id)
+    first.assigned_reviewer_name = reviewer_user.name
+    second.assigned_reviewer_name = reviewer_user.name
+
+    db_session.add_all([
+        ReviewStage(
+            building_id=first.id,
+            phase=PhaseType.PRELIMINARY,
+            phase_order=0,
+            doc_received_at=date(2026, 6, 1),
+            report_submitted_at=date(2026, 6, 3),
+            result=ResultType.PASS,
+        ),
+        ReviewStage(
+            building_id=second.id,
+            phase=PhaseType.PRELIMINARY,
+            phase_order=0,
+            doc_received_at=date(2026, 6, 2),
+        ),
+        ReviewStage(
+            building_id=first.id,
+            phase=PhaseType.SUPPLEMENT_1,
+            phase_order=1,
+            doc_received_at=date(2026, 6, 10),
+            report_submitted_at=date(2026, 6, 12),
+            result=ResultType.SIMPLE_ERROR,
+        ),
+        ReviewStage(
+            building_id=second.id,
+            phase=PhaseType.SUPPLEMENT_1,
+            phase_order=1,
+            doc_received_at=date(2026, 6, 11),
+            report_submitted_at=date(2026, 6, 13),
+            result=ResultType.RECALCULATE,
+        ),
+        ReviewStage(
+            building_id=second.id,
+            phase=PhaseType.SUPPLEMENT_2,
+            phase_order=2,
+            doc_received_at=date(2026, 6, 14),
+            result=ResultType.PASS,
+        ),
+    ])
+    db_session.commit()
+
+    res = client.get("/api/buildings/stats", headers=headers)
+
+    assert res.status_code == 200
+    reviewer_stats = res.json()["reviewer_stats"]
+    row = next(item for item in reviewer_stats if item["name"] == reviewer_user.name)
+    assert row["group_no"] == 3
+    assert row["preliminary"] == {
+        "doc_received": 2,
+        "report_submitted": 1,
+        "results": {"pass": 1, "simple_error": 0, "recalculate": 0},
+    }
+    assert row["supplement"] == {
+        "doc_received": 3,
+        "report_submitted": 2,
+        "results": {"pass": 0, "simple_error": 1, "recalculate": 1},
+    }
+
+
 def test_stats_returns_regional_building_stats_with_total_row(
     client, db_session, make_user, make_building
 ):

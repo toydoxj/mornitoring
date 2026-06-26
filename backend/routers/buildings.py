@@ -664,11 +664,18 @@ def get_stats(
     preliminary = phase_counts.get("preliminary", 0)
     supplement = sum(v for k, v in phase_counts.items() if k.startswith("supplement"))
 
+    reviewer_name_expr = sa_func.coalesce(User.name, Building.assigned_reviewer_name)
+    reviewer_assigned_filter = or_(
+        Building.reviewer_id.isnot(None),
+        Building.assigned_reviewer_name.isnot(None),
+    )
+
     # 3) 위원별 기본 집계
     reviewer_stats_raw = (
         _scoped(
             db.query(
-                Building.assigned_reviewer_name,
+                reviewer_name_expr.label("name"),
+                sa_func.min(Reviewer.group_no).label("group_no"),
                 sa_func.count(Building.id).label("total"),
                 sa_func.count(Building.id).filter(Building.current_phase == "doc_received").label("doc_received"),
                 sa_func.count(Building.id).filter(Building.final_result.isnot(None)).label("completed"),
@@ -681,12 +688,122 @@ def get_stats(
                     (Building.is_quasi_multi_use == True)
                 ).label("high_risk"),
             )
-            .filter(Building.assigned_reviewer_name.isnot(None))
+            .outerjoin(Reviewer, Building.reviewer_id == Reviewer.id)
+            .outerjoin(User, Reviewer.user_id == User.id)
+            .filter(reviewer_assigned_filter)
         )
-        .group_by(Building.assigned_reviewer_name)
-        .order_by(Building.assigned_reviewer_name)
+        .group_by(reviewer_name_expr)
         .all()
     )
+
+    supplement_phases = (
+        PhaseType.SUPPLEMENT_1,
+        PhaseType.SUPPLEMENT_2,
+        PhaseType.SUPPLEMENT_3,
+        PhaseType.SUPPLEMENT_4,
+        PhaseType.SUPPLEMENT_5,
+    )
+    preliminary_phase_filter = ReviewStage.phase == PhaseType.PRELIMINARY
+    supplement_phase_filter = ReviewStage.phase.in_(supplement_phases)
+    submitted_filter = ReviewStage.report_submitted_at.isnot(None)
+    reviewer_stage_stats_raw = (
+        _scoped_by_building_id(
+            db.query(
+                reviewer_name_expr.label("name"),
+                sa_func.count(ReviewStage.id).filter(
+                    and_(
+                        preliminary_phase_filter,
+                        ReviewStage.doc_received_at.isnot(None),
+                    )
+                ).label("preliminary_doc_received"),
+                sa_func.count(ReviewStage.id).filter(
+                    and_(preliminary_phase_filter, submitted_filter)
+                ).label("preliminary_report_submitted"),
+                sa_func.count(ReviewStage.id).filter(
+                    and_(
+                        preliminary_phase_filter,
+                        submitted_filter,
+                        ReviewStage.result == ResultType.PASS,
+                    )
+                ).label("preliminary_pass"),
+                sa_func.count(ReviewStage.id).filter(
+                    and_(
+                        preliminary_phase_filter,
+                        submitted_filter,
+                        ReviewStage.result == ResultType.SIMPLE_ERROR,
+                    )
+                ).label("preliminary_simple_error"),
+                sa_func.count(ReviewStage.id).filter(
+                    and_(
+                        preliminary_phase_filter,
+                        submitted_filter,
+                        ReviewStage.result == ResultType.RECALCULATE,
+                    )
+                ).label("preliminary_recalculate"),
+                sa_func.count(ReviewStage.id).filter(
+                    and_(
+                        supplement_phase_filter,
+                        ReviewStage.doc_received_at.isnot(None),
+                    )
+                ).label("supplement_doc_received"),
+                sa_func.count(ReviewStage.id).filter(
+                    and_(supplement_phase_filter, submitted_filter)
+                ).label("supplement_report_submitted"),
+                sa_func.count(ReviewStage.id).filter(
+                    and_(
+                        supplement_phase_filter,
+                        submitted_filter,
+                        ReviewStage.result == ResultType.PASS,
+                    )
+                ).label("supplement_pass"),
+                sa_func.count(ReviewStage.id).filter(
+                    and_(
+                        supplement_phase_filter,
+                        submitted_filter,
+                        ReviewStage.result == ResultType.SIMPLE_ERROR,
+                    )
+                ).label("supplement_simple_error"),
+                sa_func.count(ReviewStage.id).filter(
+                    and_(
+                        supplement_phase_filter,
+                        submitted_filter,
+                        ReviewStage.result == ResultType.RECALCULATE,
+                    )
+                ).label("supplement_recalculate"),
+            )
+            .join(Building, ReviewStage.building_id == Building.id)
+            .outerjoin(Reviewer, Building.reviewer_id == Reviewer.id)
+            .outerjoin(User, Reviewer.user_id == User.id)
+            .filter(reviewer_assigned_filter),
+            ReviewStage.building_id,
+        )
+        .group_by(reviewer_name_expr)
+        .all()
+    )
+    reviewer_stage_stats_by_name: dict[str, dict[str, object]] = {}
+    for row in reviewer_stage_stats_raw:
+        if not row.name:
+            continue
+        reviewer_stage_stats_by_name[row.name] = {
+            "preliminary": {
+                "doc_received": row.preliminary_doc_received or 0,
+                "report_submitted": row.preliminary_report_submitted or 0,
+                "results": {
+                    "pass": row.preliminary_pass or 0,
+                    "simple_error": row.preliminary_simple_error or 0,
+                    "recalculate": row.preliminary_recalculate or 0,
+                },
+            },
+            "supplement": {
+                "doc_received": row.supplement_doc_received or 0,
+                "report_submitted": row.supplement_report_submitted or 0,
+                "results": {
+                    "pass": row.supplement_pass or 0,
+                    "simple_error": row.supplement_simple_error or 0,
+                    "recalculate": row.supplement_recalculate or 0,
+                },
+            },
+        }
 
     # 4) 위원별 doc_received 상태 건물 중 예비검토서 제출/미제출 수 (LEFT JOIN 1회)
     # - building당 (phase=PRELIMINARY, submitted_at NOT NULL) review_stage 최대 1건이라는 도메인
@@ -694,10 +811,12 @@ def get_stats(
     received_stats_raw = (
         _scoped(
             db.query(
-                Building.assigned_reviewer_name,
+                reviewer_name_expr.label("name"),
                 sa_func.count(Building.id).label("received"),
                 sa_func.count(ReviewStage.id).label("received_submitted"),
             )
+            .outerjoin(Reviewer, Building.reviewer_id == Reviewer.id)
+            .outerjoin(User, Reviewer.user_id == User.id)
             .outerjoin(
                 ReviewStage,
                 and_(
@@ -708,10 +827,10 @@ def get_stats(
             )
             .filter(
                 Building.current_phase == "doc_received",
-                Building.assigned_reviewer_name.isnot(None),
+                reviewer_assigned_filter,
             )
         )
-        .group_by(Building.assigned_reviewer_name)
+        .group_by(reviewer_name_expr)
         .all()
     )
     received_by_reviewer: dict[str, tuple[int, int]] = {
@@ -720,21 +839,47 @@ def get_stats(
     }
 
     reviewer_stats = []
-    for name, total_count, doc_count, comp_count, total_area, area_over_1000, high_risk in reviewer_stats_raw:
+    empty_reviewer_stage_stats = {
+        "preliminary": {
+            "doc_received": 0,
+            "report_submitted": 0,
+            "results": {"pass": 0, "simple_error": 0, "recalculate": 0},
+        },
+        "supplement": {
+            "doc_received": 0,
+            "report_submitted": 0,
+            "results": {"pass": 0, "simple_error": 0, "recalculate": 0},
+        },
+    }
+    for row in reviewer_stats_raw:
+        if not row.name:
+            continue
+        name = row.name
         received_total, submitted_count = received_by_reviewer.get(name, (0, 0))
         not_submitted_count = received_total - submitted_count
+        stage_stats = reviewer_stage_stats_by_name.get(name, empty_reviewer_stage_stats)
 
         reviewer_stats.append({
             "name": name,
-            "total": total_count,
-            "total_area": float(total_area or 0),
-            "area_over_1000": area_over_1000 or 0,
-            "high_risk": high_risk or 0,
-            "doc_received": doc_count,
+            "group_no": row.group_no,
+            "total": row.total or 0,
+            "total_area": float(row.total_area or 0),
+            "area_over_1000": row.area_over_1000 or 0,
+            "high_risk": row.high_risk or 0,
+            "doc_received": row.doc_received or 0,
             "submitted": submitted_count,
             "not_submitted": not_submitted_count,
-            "completed": comp_count,
+            "completed": row.completed or 0,
+            "preliminary": stage_stats["preliminary"],
+            "supplement": stage_stats["supplement"],
         })
+    reviewer_stats.sort(
+        key=lambda row: (
+            row["group_no"] is None,
+            row["group_no"] or 0,
+            str(row["name"]),
+        )
+    )
 
     related_tech_coop_target_filter = related_tech_target_filter()
     related_tech_coop_input_filter = related_tech_coop_filter()

@@ -16,7 +16,7 @@ import {
 } from "@/components/ui/table"
 import apiClient from "@/lib/api/client"
 import { useAuthStore } from "@/stores/authStore"
-import { RESULT_LABELS, type PhaseType } from "@/types"
+import { RESULT_LABELS, type PhaseType, type ResultType } from "@/types"
 
 type ActiveTab = "reviewer" | "regional" | "severity" | "keyword" | "quality" | "opinion"
 type RegionalTab = "area" | "floors" | "risk" | "drawing_creator"
@@ -49,6 +49,7 @@ type DrawingCreatorStatKey =
 
 interface ReviewerStat {
   name: string
+  group_no: number | null
   total: number
   total_area: number
   area_over_1000: number
@@ -57,6 +58,14 @@ interface ReviewerStat {
   submitted: number
   not_submitted: number
   completed: number
+  preliminary: ReviewerPhaseStat
+  supplement: ReviewerPhaseStat
+}
+
+interface ReviewerPhaseStat {
+  doc_received: number
+  report_submitted: number
+  results: Record<ResultType, number>
 }
 
 type RegionalStatRow<T extends string> = {
@@ -257,6 +266,7 @@ const RESULT_BADGE_VARIANT: Record<string, "default" | "secondary" | "destructiv
   simple_error: "secondary",
   recalculate: "destructive",
 }
+const REVIEW_RESULT_KEYS: ResultType[] = ["pass", "simple_error", "recalculate"]
 
 const REPORT_MAX_STYLE: Record<ReportMaxLabel, string> = {
   pass: "border-emerald-200 bg-emerald-50 text-emerald-700",
@@ -471,26 +481,74 @@ function ReviewerStatsTable({
   }
 
   return (
-    <div className="max-h-[70vh] overflow-y-auto rounded-md border">
-      <Table>
+    <div className="max-h-[70vh] overflow-auto rounded-md border">
+      <Table className="min-w-[1180px]">
         <TableHeader>
           <TableRow>
-            <TableHead>검토위원</TableHead>
-            <TableHead className="w-[70px] text-center">배정</TableHead>
-            <TableHead className="w-[100px] text-right">연면적 합</TableHead>
-            <TableHead className="w-[80px] text-center">1000㎡ 이상</TableHead>
-            <TableHead className="w-[70px] text-center">고위험</TableHead>
-            <TableHead className="w-[70px] text-center">배포</TableHead>
-            <TableHead className="w-[70px] text-center">제출</TableHead>
-            <TableHead className="w-[70px] text-center">미제출</TableHead>
-            <TableHead className="w-[70px] text-center">완료</TableHead>
+            <TableHead rowSpan={2} className="w-[64px] text-center">조</TableHead>
+            <TableHead rowSpan={2} className="min-w-[120px]">이름</TableHead>
+            <TableHead colSpan={5} className="border-l text-center">예비</TableHead>
+            <TableHead colSpan={5} className="border-l text-center">보완</TableHead>
+            <TableHead colSpan={5} className="border-l text-center">요약</TableHead>
+          </TableRow>
+          <TableRow>
+            <TableHead className="border-l text-center">예비도서</TableHead>
+            <TableHead className="text-center">예비검토서</TableHead>
+            {REVIEW_RESULT_KEYS.map((result) => (
+              <TableHead key={`preliminary-${result}`} className="text-center">
+                {RESULT_LABELS[result]}
+              </TableHead>
+            ))}
+            <TableHead className="border-l text-center">보완도서</TableHead>
+            <TableHead className="text-center">보완검토서</TableHead>
+            {REVIEW_RESULT_KEYS.map((result) => (
+              <TableHead key={`supplement-${result}`} className="text-center">
+                {RESULT_LABELS[result]}
+              </TableHead>
+            ))}
+            <TableHead className="border-l text-center">배정</TableHead>
+            <TableHead className="text-right">연면적 합</TableHead>
+            <TableHead className="text-center">1000㎡ 이상</TableHead>
+            <TableHead className="text-center">고위험</TableHead>
+            <TableHead className="text-center">완료</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
           {rows.map((row) => (
-            <TableRow key={row.name}>
+            <TableRow key={`${row.group_no ?? "none"}-${row.name}`}>
+              <TableCell className="text-center">
+                {row.group_no ? `${row.group_no}조` : "-"}
+              </TableCell>
               <TableCell className="font-medium">{row.name}</TableCell>
-              <TableCell className="text-center">{row.total}</TableCell>
+              <TableCell className="border-l text-center">
+                {row.preliminary.doc_received}
+              </TableCell>
+              <TableCell className="text-center">
+                <ReviewerCountBadge value={row.preliminary.report_submitted} />
+              </TableCell>
+              {REVIEW_RESULT_KEYS.map((result) => (
+                <TableCell key={`preliminary-${row.name}-${result}`} className="text-center">
+                  <ReviewerResultBadge
+                    result={result}
+                    value={row.preliminary.results[result]}
+                  />
+                </TableCell>
+              ))}
+              <TableCell className="border-l text-center">
+                {row.supplement.doc_received}
+              </TableCell>
+              <TableCell className="text-center">
+                <ReviewerCountBadge value={row.supplement.report_submitted} />
+              </TableCell>
+              {REVIEW_RESULT_KEYS.map((result) => (
+                <TableCell key={`supplement-${row.name}-${result}`} className="text-center">
+                  <ReviewerResultBadge
+                    result={result}
+                    value={row.supplement.results[result]}
+                  />
+                </TableCell>
+              ))}
+              <TableCell className="border-l text-center">{row.total}</TableCell>
               <TableCell className="text-right font-mono text-sm">
                 {row.total_area.toLocaleString(undefined, { maximumFractionDigits: 0 })}
               </TableCell>
@@ -504,15 +562,6 @@ function ReviewerStatsTable({
                   <Badge variant="destructive">{row.high_risk}</Badge>
                 ) : "0"}
               </TableCell>
-              <TableCell className="text-center">{row.doc_received}</TableCell>
-              <TableCell className="text-center">
-                {row.submitted > 0 ? <Badge>{row.submitted}</Badge> : "0"}
-              </TableCell>
-              <TableCell className="text-center">
-                {row.not_submitted > 0 ? (
-                  <Badge variant="destructive">{row.not_submitted}</Badge>
-                ) : "0"}
-              </TableCell>
               <TableCell className="text-center">{row.completed}</TableCell>
             </TableRow>
           ))}
@@ -520,6 +569,22 @@ function ReviewerStatsTable({
       </Table>
     </div>
   )
+}
+
+function ReviewerCountBadge({ value }: { value: number }) {
+  return value > 0 ? <Badge>{value}</Badge> : "0"
+}
+
+function ReviewerResultBadge({
+  result,
+  value,
+}: {
+  result: ResultType
+  value: number
+}) {
+  return value > 0 ? (
+    <Badge variant={RESULT_BADGE_VARIANT[result]}>{value}</Badge>
+  ) : "0"
 }
 
 function RegionalStatsView({
