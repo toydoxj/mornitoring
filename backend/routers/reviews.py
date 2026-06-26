@@ -793,13 +793,12 @@ def _resolve_inappropriate_review_needed(
 
 
 def _quality_check_base_query(db: Session, current_user: User):
-    """품질 문제 대상 + L3/L4 의견을 찾기 위한 기본 쿼리."""
+    """검토서 확인 대상 후보가 되는 미처리 상세 의견 기본 쿼리."""
     query = (
         db.query(ReviewOpinionDetail, ReviewStage, Building)
         .join(ReviewStage, ReviewOpinionDetail.stage_id == ReviewStage.id)
         .join(Building, ReviewStage.building_id == Building.id)
         .filter(
-            ReviewOpinionDetail.severity.in_(("L3", "L4")),
             or_(
                 ReviewOpinionDetail.quality_decision.is_(None),
                 ReviewOpinionDetail.quality_decision != "suitable",
@@ -813,8 +812,10 @@ def _quality_check_base_query(db: Session, current_user: User):
 
 
 def _is_quality_check_target(detail: ReviewOpinionDetail) -> bool:
-    """표현 품질 규칙에 실제로 걸린 상세 의견인지 확인한다."""
-    return bool(match_opinion_quality(detail.content or ""))
+    """심각도 L3/L4 또는 표현 품질 규칙에 걸린 상세 의견인지 확인한다."""
+    return detail.severity in ("L3", "L4") or bool(
+        match_opinion_quality(detail.content or "")
+    )
 
 
 def _sorted_severity_levels(values: set[str]) -> list[str]:
@@ -834,7 +835,7 @@ def list_quality_checks(
         )
     ),
 ):
-    """품질 문제 대상이면서 심각도 L3/L4인 검토서 확인 목록."""
+    """심각도 L3/L4 또는 표현 품질 문제 대상인 검토서 확인 목록."""
     actual_user = aliased(User)
     actual_reviewer = aliased(Reviewer)
     rows = (
@@ -866,7 +867,8 @@ def list_quality_checks(
     item_map: dict[int, dict] = {}
     for detail, stage, building, assigned_group_no, assigned_name, actual_group_no in rows:
         matches = match_opinion_quality(detail.content or "")
-        if not matches:
+        is_severity_target = detail.severity in ("L3", "L4")
+        if not (is_severity_target or matches):
             continue
         reviewer_name = (stage.reviewer_name or "").strip()
         if not reviewer_name:
@@ -915,7 +917,7 @@ def mark_quality_check_suitable(
         )
     ),
 ):
-    """해당 건물의 품질 문제 대상 L3/L4 상세 의견을 적합 처리한다."""
+    """해당 건물의 검토서 확인 대상 상세 의견을 적합 처리한다."""
     rows = (
         _quality_check_base_query(db, current_user)
         .filter(Building.id == building_id)

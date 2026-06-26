@@ -870,7 +870,7 @@ def test_secretary_stats_keyword_excludes_other_group(
     assert "황당함" not in terms
 
 
-def test_quality_checks_lists_only_flagged_l3_l4_targets(
+def test_quality_checks_lists_unresolved_l3_l4_or_quality_targets(
     client, db_session, make_user, make_reviewer, make_building
 ):
     _, headers = make_user(UserRole.CHIEF_SECRETARY)
@@ -934,6 +934,15 @@ def test_quality_checks_lists_only_flagged_l3_l4_targets(
             severity="L4",
             content="황당한 구조계산서입니다.",
         ),
+        ReviewOpinionDetail(
+            stage_id=stage.id,
+            phase="preliminary",
+            phase_group="preliminary",
+            row_number=35,
+            category="기타의견",
+            severity="L2",
+            content="전이보 간격 확인 필요.",
+        ),
     ])
     db_session.commit()
 
@@ -949,8 +958,8 @@ def test_quality_checks_lists_only_flagged_l3_l4_targets(
         "group_no": 4,
         "reviewer_name": "품질검토자",
         "quality_categories": ["감정적·비난성 표현", "과장 표현"],
-        "severity_levels": ["L3", "L4"],
-        "detail_count": 2,
+        "severity_levels": ["L2", "L3", "L4"],
+        "detail_count": 4,
     }]
 
 
@@ -990,7 +999,7 @@ def test_secretary_quality_checks_filters_by_group_and_mark_suitable(
         row_number=31,
         category="기타의견",
         severity="L4",
-        content="황당한 구조계산서입니다.",
+        content="전이보 간격 확인 필요.",
     )
     hidden_detail = ReviewOpinionDetail(
         stage_id=stage2.id,

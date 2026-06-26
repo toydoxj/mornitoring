@@ -104,7 +104,7 @@ export default function QualityChecksPage() {
         <div>
           <h1 className="text-2xl font-bold">검토서 확인</h1>
           <p className="text-sm text-muted-foreground">
-            품질 문제 대상 표현이 있고 심각도 L3/L4로 지정된 검토서 {total.toLocaleString()}건
+            심각도 L3/L4 또는 표현 품질 점검 대상 검토서 {total.toLocaleString()}건
           </p>
         </div>
         <Button
@@ -209,7 +209,7 @@ export default function QualityChecksPage() {
           <DialogHeader>
             <DialogTitle>적합으로 변경하시겠습니까?</DialogTitle>
             <DialogDescription>
-              {resolveTarget?.mgmt_no} 검토서의 품질 확인 대상을 적합으로 처리합니다.
+              {resolveTarget?.mgmt_no} 검토서의 확인 대상을 적합으로 처리합니다.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
