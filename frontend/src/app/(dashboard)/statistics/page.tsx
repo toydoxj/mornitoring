@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState, type ReactNode } from "react"
 import { useRouter } from "next/navigation"
+import { ArrowDown, ArrowUp, ArrowUpDown } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -24,6 +25,25 @@ type SeverityLabel = "L0" | "L1" | "L2" | "L3" | "L4"
 type OpinionSeverity = "NA" | SeverityLabel
 type ReportMaxLabel = "pass" | SeverityLabel
 type OpinionQualityDecision = "suitable" | "unsuitable"
+type SortDirection = "asc" | "desc"
+type ReviewerSortKey =
+  | "group_no"
+  | "name"
+  | "preliminary_doc_received"
+  | "preliminary_report_submitted"
+  | "preliminary_pass_rate"
+  | "preliminary_simple_error_rate"
+  | "preliminary_recalculate_rate"
+  | "supplement_doc_received"
+  | "supplement_report_submitted"
+  | "supplement_pass_rate"
+  | "supplement_simple_error_rate"
+  | "supplement_recalculate_rate"
+  | "total"
+  | "total_area"
+  | "area_over_1000"
+  | "high_risk"
+  | "completed"
 type AreaStatKey =
   | "area_0_300"
   | "area_300_600"
@@ -66,6 +86,11 @@ interface ReviewerPhaseStat {
   doc_received: number
   report_submitted: number
   results: Record<ResultType, number>
+}
+
+interface ReviewerSortState {
+  key: ReviewerSortKey
+  direction: SortDirection
 }
 
 type RegionalStatRow<T extends string> = {
@@ -267,6 +292,22 @@ const RESULT_BADGE_VARIANT: Record<string, "default" | "secondary" | "destructiv
   recalculate: "destructive",
 }
 const REVIEW_RESULT_KEYS: ResultType[] = ["pass", "simple_error", "recalculate"]
+const REVIEWER_RESULT_SORT_KEYS: Record<"preliminary" | "supplement", Record<ResultType, ReviewerSortKey>> = {
+  preliminary: {
+    pass: "preliminary_pass_rate",
+    simple_error: "preliminary_simple_error_rate",
+    recalculate: "preliminary_recalculate_rate",
+  },
+  supplement: {
+    pass: "supplement_pass_rate",
+    simple_error: "supplement_simple_error_rate",
+    recalculate: "supplement_recalculate_rate",
+  },
+}
+const REVIEWER_NAME_COLLATOR = new Intl.Collator("ko-KR", {
+  numeric: true,
+  sensitivity: "base",
+})
 
 const REPORT_MAX_STYLE: Record<ReportMaxLabel, string> = {
   pass: "border-emerald-200 bg-emerald-50 text-emerald-700",
@@ -473,6 +514,19 @@ function ReviewerStatsTable({
   isLoading: boolean
   rows: ReviewerStat[]
 }) {
+  const [sortState, setSortState] = useState<ReviewerSortState>({
+    key: "group_no",
+    direction: "asc",
+  })
+
+  const sortedRows = [...rows].sort((a, b) => compareReviewerRows(a, b, sortState))
+  const handleSort = (key: ReviewerSortKey) => {
+    setSortState((current) => ({
+      key,
+      direction: current.key === key && current.direction === "asc" ? "desc" : "asc",
+    }))
+  }
+
   if (isLoading) {
     return <LoadingMessage />
   }
@@ -485,36 +539,129 @@ function ReviewerStatsTable({
       <Table className="min-w-[1180px]">
         <TableHeader>
           <TableRow>
-            <TableHead rowSpan={2} className="w-[64px] text-center">조</TableHead>
-            <TableHead rowSpan={2} className="min-w-[120px]">이름</TableHead>
+            <ReviewerSortableHead
+              rowSpan={2}
+              sortKey="group_no"
+              sortState={sortState}
+              onSort={handleSort}
+              className="w-[64px] text-center"
+            >
+              조
+            </ReviewerSortableHead>
+            <ReviewerSortableHead
+              rowSpan={2}
+              sortKey="name"
+              sortState={sortState}
+              onSort={handleSort}
+              align="left"
+              className="min-w-[120px]"
+            >
+              이름
+            </ReviewerSortableHead>
             <TableHead colSpan={5} className="border-l text-center">예비</TableHead>
             <TableHead colSpan={5} className="border-l text-center">보완</TableHead>
             <TableHead colSpan={5} className="border-l text-center">요약</TableHead>
           </TableRow>
           <TableRow>
-            <TableHead className="border-l text-center">예비도서</TableHead>
-            <TableHead className="text-center">예비검토서</TableHead>
+            <ReviewerSortableHead
+              sortKey="preliminary_doc_received"
+              sortState={sortState}
+              onSort={handleSort}
+              className="border-l text-center"
+            >
+              예비도서
+            </ReviewerSortableHead>
+            <ReviewerSortableHead
+              sortKey="preliminary_report_submitted"
+              sortState={sortState}
+              onSort={handleSort}
+              className="text-center"
+            >
+              예비검토서
+            </ReviewerSortableHead>
             {REVIEW_RESULT_KEYS.map((result) => (
-              <TableHead key={`preliminary-${result}`} className="text-center">
+              <ReviewerSortableHead
+                key={`preliminary-${result}`}
+                sortKey={REVIEWER_RESULT_SORT_KEYS.preliminary[result]}
+                sortState={sortState}
+                onSort={handleSort}
+                className="text-center"
+              >
                 {RESULT_LABELS[result]}
-              </TableHead>
+              </ReviewerSortableHead>
             ))}
-            <TableHead className="border-l text-center">보완도서</TableHead>
-            <TableHead className="text-center">보완검토서</TableHead>
+            <ReviewerSortableHead
+              sortKey="supplement_doc_received"
+              sortState={sortState}
+              onSort={handleSort}
+              className="border-l text-center"
+            >
+              보완도서
+            </ReviewerSortableHead>
+            <ReviewerSortableHead
+              sortKey="supplement_report_submitted"
+              sortState={sortState}
+              onSort={handleSort}
+              className="text-center"
+            >
+              보완검토서
+            </ReviewerSortableHead>
             {REVIEW_RESULT_KEYS.map((result) => (
-              <TableHead key={`supplement-${result}`} className="text-center">
+              <ReviewerSortableHead
+                key={`supplement-${result}`}
+                sortKey={REVIEWER_RESULT_SORT_KEYS.supplement[result]}
+                sortState={sortState}
+                onSort={handleSort}
+                className="text-center"
+              >
                 {RESULT_LABELS[result]}
-              </TableHead>
+              </ReviewerSortableHead>
             ))}
-            <TableHead className="border-l text-center">배정</TableHead>
-            <TableHead className="text-right">연면적 합</TableHead>
-            <TableHead className="text-center">1000㎡ 이상</TableHead>
-            <TableHead className="text-center">고위험</TableHead>
-            <TableHead className="text-center">완료</TableHead>
+            <ReviewerSortableHead
+              sortKey="total"
+              sortState={sortState}
+              onSort={handleSort}
+              className="border-l text-center"
+            >
+              배정
+            </ReviewerSortableHead>
+            <ReviewerSortableHead
+              sortKey="total_area"
+              sortState={sortState}
+              onSort={handleSort}
+              align="right"
+              className="text-right"
+            >
+              연면적 합
+            </ReviewerSortableHead>
+            <ReviewerSortableHead
+              sortKey="area_over_1000"
+              sortState={sortState}
+              onSort={handleSort}
+              className="text-center"
+            >
+              1000㎡ 이상
+            </ReviewerSortableHead>
+            <ReviewerSortableHead
+              sortKey="high_risk"
+              sortState={sortState}
+              onSort={handleSort}
+              className="text-center"
+            >
+              고위험
+            </ReviewerSortableHead>
+            <ReviewerSortableHead
+              sortKey="completed"
+              sortState={sortState}
+              onSort={handleSort}
+              className="text-center"
+            >
+              완료
+            </ReviewerSortableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
-          {rows.map((row) => (
+          {sortedRows.map((row) => (
             <TableRow key={`${row.group_no ?? "none"}-${row.name}`}>
               <TableCell className="text-center">
                 {row.group_no ? `${row.group_no}조` : "-"}
@@ -528,9 +675,10 @@ function ReviewerStatsTable({
               </TableCell>
               {REVIEW_RESULT_KEYS.map((result) => (
                 <TableCell key={`preliminary-${row.name}-${result}`} className="text-center">
-                  <ReviewerResultBadge
+                  <ReviewerResultRateBadge
                     result={result}
-                    value={row.preliminary.results[result]}
+                    count={row.preliminary.results[result]}
+                    denominator={row.preliminary.report_submitted}
                   />
                 </TableCell>
               ))}
@@ -542,9 +690,10 @@ function ReviewerStatsTable({
               </TableCell>
               {REVIEW_RESULT_KEYS.map((result) => (
                 <TableCell key={`supplement-${row.name}-${result}`} className="text-center">
-                  <ReviewerResultBadge
+                  <ReviewerResultRateBadge
                     result={result}
-                    value={row.supplement.results[result]}
+                    count={row.supplement.results[result]}
+                    denominator={row.supplement.report_submitted}
                   />
                 </TableCell>
               ))}
@@ -575,16 +724,136 @@ function ReviewerCountBadge({ value }: { value: number }) {
   return value > 0 ? <Badge>{value}</Badge> : "0"
 }
 
-function ReviewerResultBadge({
+function ReviewerResultRateBadge({
   result,
-  value,
+  count,
+  denominator,
 }: {
   result: ResultType
-  value: number
+  count: number
+  denominator: number
 }) {
-  return value > 0 ? (
-    <Badge variant={RESULT_BADGE_VARIANT[result]}>{value}</Badge>
-  ) : "0"
+  const label = `${count.toLocaleString()}(${formatPercent(count, denominator)})`
+
+  return count > 0 ? (
+    <Badge variant={RESULT_BADGE_VARIANT[result]}>{label}</Badge>
+  ) : (
+    <span className="text-muted-foreground">{label}</span>
+  )
+}
+
+function ReviewerSortableHead({
+  sortKey,
+  sortState,
+  onSort,
+  children,
+  align = "center",
+  className = "",
+  rowSpan,
+}: {
+  sortKey: ReviewerSortKey
+  sortState: ReviewerSortState
+  onSort: (key: ReviewerSortKey) => void
+  children: ReactNode
+  align?: "left" | "center" | "right"
+  className?: string
+  rowSpan?: number
+}) {
+  const isActive = sortState.key === sortKey
+  const Icon = isActive ? (sortState.direction === "asc" ? ArrowUp : ArrowDown) : ArrowUpDown
+  const ariaSort = isActive
+    ? sortState.direction === "asc"
+      ? "ascending"
+      : "descending"
+    : "none"
+  const justifyClass = {
+    left: "justify-start",
+    center: "justify-center",
+    right: "justify-end",
+  }[align]
+
+  return (
+    <TableHead rowSpan={rowSpan} aria-sort={ariaSort} className={className}>
+      <button
+        type="button"
+        className={`inline-flex w-full items-center gap-1 ${justifyClass} rounded px-1 py-1 text-sm font-medium hover:bg-muted`}
+        onClick={() => onSort(sortKey)}
+      >
+        <span>{children}</span>
+        <Icon className="h-3.5 w-3.5 text-muted-foreground" aria-hidden />
+      </button>
+    </TableHead>
+  )
+}
+
+function compareReviewerRows(
+  a: ReviewerStat,
+  b: ReviewerStat,
+  sortState: ReviewerSortState,
+) {
+  const aValue = getReviewerSortValue(a, sortState.key)
+  const bValue = getReviewerSortValue(b, sortState.key)
+  const direction = sortState.direction === "asc" ? 1 : -1
+  const primary =
+    typeof aValue === "string" || typeof bValue === "string"
+      ? REVIEWER_NAME_COLLATOR.compare(String(aValue), String(bValue))
+      : aValue - bValue
+
+  if (primary !== 0) return primary * direction
+
+  const groupCompare = compareNullableNumber(a.group_no, b.group_no)
+  if (groupCompare !== 0) return groupCompare
+  return REVIEWER_NAME_COLLATOR.compare(a.name, b.name)
+}
+
+function getReviewerSortValue(row: ReviewerStat, key: ReviewerSortKey) {
+  switch (key) {
+    case "group_no":
+      return row.group_no ?? Number.MAX_SAFE_INTEGER
+    case "name":
+      return row.name
+    case "preliminary_doc_received":
+      return row.preliminary.doc_received
+    case "preliminary_report_submitted":
+      return row.preliminary.report_submitted
+    case "preliminary_pass_rate":
+      return resultRate(row.preliminary.results.pass, row.preliminary.report_submitted)
+    case "preliminary_simple_error_rate":
+      return resultRate(row.preliminary.results.simple_error, row.preliminary.report_submitted)
+    case "preliminary_recalculate_rate":
+      return resultRate(row.preliminary.results.recalculate, row.preliminary.report_submitted)
+    case "supplement_doc_received":
+      return row.supplement.doc_received
+    case "supplement_report_submitted":
+      return row.supplement.report_submitted
+    case "supplement_pass_rate":
+      return resultRate(row.supplement.results.pass, row.supplement.report_submitted)
+    case "supplement_simple_error_rate":
+      return resultRate(row.supplement.results.simple_error, row.supplement.report_submitted)
+    case "supplement_recalculate_rate":
+      return resultRate(row.supplement.results.recalculate, row.supplement.report_submitted)
+    case "total":
+      return row.total
+    case "total_area":
+      return row.total_area
+    case "area_over_1000":
+      return row.area_over_1000
+    case "high_risk":
+      return row.high_risk
+    case "completed":
+      return row.completed
+  }
+}
+
+function resultRate(count: number, denominator: number) {
+  return denominator > 0 ? count / denominator : 0
+}
+
+function compareNullableNumber(a: number | null, b: number | null) {
+  if (a === b) return 0
+  if (a === null) return 1
+  if (b === null) return -1
+  return a - b
 }
 
 function RegionalStatsView({
