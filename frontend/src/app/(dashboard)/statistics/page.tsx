@@ -547,190 +547,188 @@ function ReviewerStatsTable({
   }
 
   return (
-    <div className="space-y-4">
-      <ReviewerTotalsSummary totals={totals} />
-      <div className="max-h-[70vh] overflow-auto rounded-md border">
-        <Table className="min-w-[1180px]">
-          <TableHeader>
-            <TableRow>
+    <div className="max-h-[70vh] overflow-auto rounded-md border">
+      <Table className="min-w-[1180px]">
+        <TableHeader>
+          <TableRow>
+            <ReviewerSortableHead
+              rowSpan={2}
+              sortKey="group_no"
+              sortState={sortState}
+              onSort={handleSort}
+              className="w-[64px] text-center"
+            >
+              조
+            </ReviewerSortableHead>
+            <ReviewerSortableHead
+              rowSpan={2}
+              sortKey="name"
+              sortState={sortState}
+              onSort={handleSort}
+              align="left"
+              className="min-w-[120px]"
+            >
+              이름
+            </ReviewerSortableHead>
+            <TableHead colSpan={5} className="border-l text-center">예비</TableHead>
+            <TableHead colSpan={5} className="border-l text-center">보완</TableHead>
+            <TableHead colSpan={5} className="border-l text-center">요약</TableHead>
+          </TableRow>
+          <TableRow>
+            <ReviewerSortableHead
+              sortKey="preliminary_doc_received"
+              sortState={sortState}
+              onSort={handleSort}
+              className="border-l text-center"
+            >
+              예비도서
+            </ReviewerSortableHead>
+            <ReviewerSortableHead
+              sortKey="preliminary_report_submitted"
+              sortState={sortState}
+              onSort={handleSort}
+              className="text-center"
+            >
+              예비검토서
+            </ReviewerSortableHead>
+            {REVIEW_RESULT_KEYS.map((result) => (
               <ReviewerSortableHead
-                rowSpan={2}
-                sortKey="group_no"
-                sortState={sortState}
-                onSort={handleSort}
-                className="w-[64px] text-center"
-              >
-                조
-              </ReviewerSortableHead>
-              <ReviewerSortableHead
-                rowSpan={2}
-                sortKey="name"
-                sortState={sortState}
-                onSort={handleSort}
-                align="left"
-                className="min-w-[120px]"
-              >
-                이름
-              </ReviewerSortableHead>
-              <TableHead colSpan={5} className="border-l text-center">예비</TableHead>
-              <TableHead colSpan={5} className="border-l text-center">보완</TableHead>
-              <TableHead colSpan={5} className="border-l text-center">요약</TableHead>
-            </TableRow>
-            <TableRow>
-              <ReviewerSortableHead
-                sortKey="preliminary_doc_received"
-                sortState={sortState}
-                onSort={handleSort}
-                className="border-l text-center"
-              >
-                예비도서
-              </ReviewerSortableHead>
-              <ReviewerSortableHead
-                sortKey="preliminary_report_submitted"
-                sortState={sortState}
-                onSort={handleSort}
-                className="text-center"
-              >
-                예비검토서
-              </ReviewerSortableHead>
-              {REVIEW_RESULT_KEYS.map((result) => (
-                <ReviewerSortableHead
-                  key={`preliminary-${result}`}
-                  sortKey={REVIEWER_RESULT_SORT_KEYS.preliminary[result]}
-                  sortState={sortState}
-                  onSort={handleSort}
-                  className="text-center"
-                >
-                  {RESULT_LABELS[result]}
-                </ReviewerSortableHead>
-              ))}
-              <ReviewerSortableHead
-                sortKey="supplement_doc_received"
-                sortState={sortState}
-                onSort={handleSort}
-                className="border-l text-center"
-              >
-                보완도서
-              </ReviewerSortableHead>
-              <ReviewerSortableHead
-                sortKey="supplement_report_submitted"
+                key={`preliminary-${result}`}
+                sortKey={REVIEWER_RESULT_SORT_KEYS.preliminary[result]}
                 sortState={sortState}
                 onSort={handleSort}
                 className="text-center"
               >
-                보완검토서
+                {RESULT_LABELS[result]}
               </ReviewerSortableHead>
-              {REVIEW_RESULT_KEYS.map((result) => (
-                <ReviewerSortableHead
-                  key={`supplement-${result}`}
-                  sortKey={REVIEWER_RESULT_SORT_KEYS.supplement[result]}
-                  sortState={sortState}
-                  onSort={handleSort}
-                  className="text-center"
-                >
-                  {RESULT_LABELS[result]}
-                </ReviewerSortableHead>
-              ))}
-              <ReviewerSortableHead
-                sortKey="total"
-                sortState={sortState}
-                onSort={handleSort}
-                className="border-l text-center"
-              >
-                배정
-              </ReviewerSortableHead>
-              <ReviewerSortableHead
-                sortKey="total_area"
-                sortState={sortState}
-                onSort={handleSort}
-                align="right"
-                className="text-right"
-              >
-                연면적 합
-              </ReviewerSortableHead>
-              <ReviewerSortableHead
-                sortKey="area_over_1000"
-                sortState={sortState}
-                onSort={handleSort}
-                className="text-center"
-              >
-                1000㎡ 이상
-              </ReviewerSortableHead>
-              <ReviewerSortableHead
-                sortKey="high_risk"
-                sortState={sortState}
-                onSort={handleSort}
-                className="text-center"
-              >
-                고위험
-              </ReviewerSortableHead>
-              <ReviewerSortableHead
-                sortKey="completed"
-                sortState={sortState}
-                onSort={handleSort}
-                className="text-center"
-              >
-                완료
-              </ReviewerSortableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {sortedRows.map((row) => (
-              <TableRow key={`${row.group_no ?? "none"}-${row.name}`}>
-                <TableCell className="text-center">
-                  {row.group_no ? `${row.group_no}조` : "-"}
-                </TableCell>
-                <TableCell className="font-medium">{row.name}</TableCell>
-                <TableCell className="border-l text-center">
-                  {row.preliminary.doc_received}
-                </TableCell>
-                <TableCell className="text-center">
-                  <ReviewerCountBadge value={row.preliminary.report_submitted} />
-                </TableCell>
-                {REVIEW_RESULT_KEYS.map((result) => (
-                  <TableCell key={`preliminary-${row.name}-${result}`} className="text-center">
-                    <ReviewerResultRateBadge
-                      result={result}
-                      count={row.preliminary.results[result]}
-                      denominator={row.preliminary.report_submitted}
-                    />
-                  </TableCell>
-                ))}
-                <TableCell className="border-l text-center">
-                  {row.supplement.doc_received}
-                </TableCell>
-                <TableCell className="text-center">
-                  <ReviewerCountBadge value={row.supplement.report_submitted} />
-                </TableCell>
-                {REVIEW_RESULT_KEYS.map((result) => (
-                  <TableCell key={`supplement-${row.name}-${result}`} className="text-center">
-                    <ReviewerResultRateBadge
-                      result={result}
-                      count={row.supplement.results[result]}
-                      denominator={row.supplement.report_submitted}
-                    />
-                  </TableCell>
-                ))}
-                <TableCell className="border-l text-center">{row.total}</TableCell>
-                <TableCell className="text-right font-mono text-sm">
-                  {row.total_area.toLocaleString(undefined, { maximumFractionDigits: 0 })}
-                </TableCell>
-                <TableCell className="text-center">
-                  {row.area_over_1000 > 0 ? (
-                    <Badge variant="secondary">{row.area_over_1000}</Badge>
-                  ) : "0"}
-                </TableCell>
-                <TableCell className="text-center">
-                  {row.high_risk > 0 ? (
-                    <Badge variant="destructive">{row.high_risk}</Badge>
-                  ) : "0"}
-                </TableCell>
-                <TableCell className="text-center">{row.completed}</TableCell>
-              </TableRow>
             ))}
-          </TableBody>
-        </Table>
-      </div>
+            <ReviewerSortableHead
+              sortKey="supplement_doc_received"
+              sortState={sortState}
+              onSort={handleSort}
+              className="border-l text-center"
+            >
+              보완도서
+            </ReviewerSortableHead>
+            <ReviewerSortableHead
+              sortKey="supplement_report_submitted"
+              sortState={sortState}
+              onSort={handleSort}
+              className="text-center"
+            >
+              보완검토서
+            </ReviewerSortableHead>
+            {REVIEW_RESULT_KEYS.map((result) => (
+              <ReviewerSortableHead
+                key={`supplement-${result}`}
+                sortKey={REVIEWER_RESULT_SORT_KEYS.supplement[result]}
+                sortState={sortState}
+                onSort={handleSort}
+                className="text-center"
+              >
+                {RESULT_LABELS[result]}
+              </ReviewerSortableHead>
+            ))}
+            <ReviewerSortableHead
+              sortKey="total"
+              sortState={sortState}
+              onSort={handleSort}
+              className="border-l text-center"
+            >
+              배정
+            </ReviewerSortableHead>
+            <ReviewerSortableHead
+              sortKey="total_area"
+              sortState={sortState}
+              onSort={handleSort}
+              align="right"
+              className="text-right"
+            >
+              연면적 합
+            </ReviewerSortableHead>
+            <ReviewerSortableHead
+              sortKey="area_over_1000"
+              sortState={sortState}
+              onSort={handleSort}
+              className="text-center"
+            >
+              1000㎡ 이상
+            </ReviewerSortableHead>
+            <ReviewerSortableHead
+              sortKey="high_risk"
+              sortState={sortState}
+              onSort={handleSort}
+              className="text-center"
+            >
+              고위험
+            </ReviewerSortableHead>
+            <ReviewerSortableHead
+              sortKey="completed"
+              sortState={sortState}
+              onSort={handleSort}
+              className="text-center"
+            >
+              완료
+            </ReviewerSortableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          <ReviewerTotalRow totals={totals} />
+          {sortedRows.map((row) => (
+            <TableRow key={`${row.group_no ?? "none"}-${row.name}`}>
+              <TableCell className="text-center">
+                {row.group_no ? `${row.group_no}조` : "-"}
+              </TableCell>
+              <TableCell className="font-medium">{row.name}</TableCell>
+              <TableCell className="border-l text-center">
+                {row.preliminary.doc_received}
+              </TableCell>
+              <TableCell className="text-center">
+                <ReviewerCountBadge value={row.preliminary.report_submitted} />
+              </TableCell>
+              {REVIEW_RESULT_KEYS.map((result) => (
+                <TableCell key={`preliminary-${row.name}-${result}`} className="text-center">
+                  <ReviewerResultRateBadge
+                    result={result}
+                    count={row.preliminary.results[result]}
+                    denominator={row.preliminary.report_submitted}
+                  />
+                </TableCell>
+              ))}
+              <TableCell className="border-l text-center">
+                {row.supplement.doc_received}
+              </TableCell>
+              <TableCell className="text-center">
+                <ReviewerCountBadge value={row.supplement.report_submitted} />
+              </TableCell>
+              {REVIEW_RESULT_KEYS.map((result) => (
+                <TableCell key={`supplement-${row.name}-${result}`} className="text-center">
+                  <ReviewerResultRateBadge
+                    result={result}
+                    count={row.supplement.results[result]}
+                    denominator={row.supplement.report_submitted}
+                  />
+                </TableCell>
+              ))}
+              <TableCell className="border-l text-center">{row.total}</TableCell>
+              <TableCell className="text-right font-mono text-sm">
+                {row.total_area.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+              </TableCell>
+              <TableCell className="text-center">
+                {row.area_over_1000 > 0 ? (
+                  <Badge variant="secondary">{row.area_over_1000}</Badge>
+                ) : "0"}
+              </TableCell>
+              <TableCell className="text-center">
+                {row.high_risk > 0 ? (
+                  <Badge variant="destructive">{row.high_risk}</Badge>
+                ) : "0"}
+              </TableCell>
+              <TableCell className="text-center">{row.completed}</TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
     </div>
   )
 }
@@ -739,79 +737,58 @@ function ReviewerCountBadge({ value }: { value: number }) {
   return value > 0 ? <Badge>{value}</Badge> : "0"
 }
 
-function ReviewerTotalsSummary({ totals }: { totals: ReviewerTotals }) {
+function ReviewerTotalRow({ totals }: { totals: ReviewerTotals }) {
   return (
-    <section className="rounded-md border bg-muted/20 p-4">
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-sm font-semibold">전체 합계</h2>
-        <span className="text-xs text-muted-foreground">
-          검토위원 {totals.reviewerCount.toLocaleString()}명 기준
+    <TableRow className="bg-muted/40 font-semibold hover:bg-muted/50">
+      <TableCell className="text-center">전체</TableCell>
+      <TableCell>
+        합계
+        <span className="ml-1 text-xs font-normal text-muted-foreground">
+          ({totals.reviewerCount.toLocaleString()}명)
         </span>
-      </div>
-      <div className="grid gap-3 xl:grid-cols-[1fr_1.6fr_1.6fr]">
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-2">
-          <ReviewerSummaryItem label="배정" value={`${totals.total.toLocaleString()}건`} />
-          <ReviewerSummaryItem label="완료" value={`${totals.completed.toLocaleString()}건`} />
-          <ReviewerSummaryItem
-            label="연면적 합"
-            value={totals.total_area.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+      </TableCell>
+      <TableCell className="border-l text-center">{totals.preliminary.doc_received}</TableCell>
+      <TableCell className="text-center">
+        <ReviewerCountBadge value={totals.preliminary.report_submitted} />
+      </TableCell>
+      {REVIEW_RESULT_KEYS.map((result) => (
+        <TableCell key={`total-preliminary-${result}`} className="text-center">
+          <ReviewerResultRateBadge
+            result={result}
+            count={totals.preliminary.results[result]}
+            denominator={totals.preliminary.report_submitted}
           />
-          <ReviewerSummaryItem
-            label="1000㎡ 이상"
-            value={`${totals.area_over_1000.toLocaleString()}건`}
+        </TableCell>
+      ))}
+      <TableCell className="border-l text-center">{totals.supplement.doc_received}</TableCell>
+      <TableCell className="text-center">
+        <ReviewerCountBadge value={totals.supplement.report_submitted} />
+      </TableCell>
+      {REVIEW_RESULT_KEYS.map((result) => (
+        <TableCell key={`total-supplement-${result}`} className="text-center">
+          <ReviewerResultRateBadge
+            result={result}
+            count={totals.supplement.results[result]}
+            denominator={totals.supplement.report_submitted}
           />
-          <ReviewerSummaryItem label="고위험" value={`${totals.high_risk.toLocaleString()}건`} />
-        </div>
-        <ReviewerPhaseSummary title="예비" phase={totals.preliminary} />
-        <ReviewerPhaseSummary title="보완" phase={totals.supplement} />
-      </div>
-    </section>
-  )
-}
-
-function ReviewerSummaryItem({
-  label,
-  value,
-}: {
-  label: string
-  value: string
-}) {
-  return (
-    <div className="min-w-0 rounded border bg-background px-3 py-2">
-      <p className="text-xs text-muted-foreground">{label}</p>
-      <p className="mt-1 truncate text-sm font-semibold">{value}</p>
-    </div>
-  )
-}
-
-function ReviewerPhaseSummary({
-  title,
-  phase,
-}: {
-  title: string
-  phase: ReviewerPhaseStat
-}) {
-  return (
-    <div className="rounded border bg-background px-3 py-2">
-      <div className="mb-2 flex items-center justify-between gap-2">
-        <span className="text-sm font-semibold">{title}</span>
-        <span className="text-xs text-muted-foreground">
-          도서 {phase.doc_received.toLocaleString()}건 · 검토서 {phase.report_submitted.toLocaleString()}건
-        </span>
-      </div>
-      <div className="flex flex-wrap gap-2">
-        {REVIEW_RESULT_KEYS.map((result) => (
-          <div key={`${title}-${result}`} className="flex items-center gap-1 text-sm">
-            <span className="text-muted-foreground">{RESULT_LABELS[result]}</span>
-            <ReviewerResultRateBadge
-              result={result}
-              count={phase.results[result]}
-              denominator={phase.report_submitted}
-            />
-          </div>
-        ))}
-      </div>
-    </div>
+        </TableCell>
+      ))}
+      <TableCell className="border-l text-center">{totals.total}</TableCell>
+      <TableCell className="text-right font-mono text-sm">
+        {totals.total_area.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+      </TableCell>
+      <TableCell className="text-center">
+        {totals.area_over_1000 > 0 ? (
+          <Badge variant="secondary">{totals.area_over_1000}</Badge>
+        ) : "0"}
+      </TableCell>
+      <TableCell className="text-center">
+        {totals.high_risk > 0 ? (
+          <Badge variant="destructive">{totals.high_risk}</Badge>
+        ) : "0"}
+      </TableCell>
+      <TableCell className="text-center">{totals.completed}</TableCell>
+    </TableRow>
   )
 }
 
@@ -824,12 +801,21 @@ function ReviewerResultRateBadge({
   count: number
   denominator: number
 }) {
-  const label = `${count.toLocaleString()}(${formatPercent(count, denominator)})`
+  const content = (
+    <span className="inline-flex items-baseline gap-0.5">
+      <span className="text-sm font-semibold leading-none">{count.toLocaleString()}</span>
+      <span className="text-[10px] font-normal leading-none opacity-80">
+        ({formatPercent(count, denominator)})
+      </span>
+    </span>
+  )
 
   return count > 0 ? (
-    <Badge variant={RESULT_BADGE_VARIANT[result]}>{label}</Badge>
+    <Badge variant={RESULT_BADGE_VARIANT[result]} className="h-auto px-2 py-1">
+      {content}
+    </Badge>
   ) : (
-    <span className="text-muted-foreground">{label}</span>
+    <span className="text-muted-foreground">{content}</span>
   )
 }
 
