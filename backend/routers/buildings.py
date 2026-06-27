@@ -640,10 +640,16 @@ def get_stats(
             ReviewStage.phase == PhaseType.SUPPLEMENT_5,
         ),
     )
+    phase_group_expr = case(
+        (ReviewStage.phase == PhaseType.PRELIMINARY, "preliminary"),
+        else_="supplement",
+    )
     due_date_rows = (
         _scoped_by_building_id(
             db.query(
+                ReviewStage.doc_received_at.label("doc_received_at"),
                 ReviewStage.report_due_date.label("report_due_date"),
+                phase_group_expr.label("phase_group"),
                 sa_func.count(ReviewStage.id)
                 .filter(ReviewStage.report_submitted_at.isnot(None))
                 .label("submitted"),
@@ -669,13 +675,27 @@ def get_stats(
             ),
             ReviewStage.building_id,
         )
-        .group_by(ReviewStage.report_due_date)
-        .order_by(ReviewStage.report_due_date)
+        .group_by(
+            ReviewStage.doc_received_at,
+            ReviewStage.report_due_date,
+            phase_group_expr,
+        )
+        .order_by(
+            ReviewStage.report_due_date,
+            ReviewStage.doc_received_at,
+            phase_group_expr,
+        )
         .all()
     )
     due_date_submission_stats = [
         {
+            "doc_received_at": (
+                row.doc_received_at.isoformat()
+                if row.doc_received_at is not None
+                else None
+            ),
             "report_due_date": row.report_due_date.isoformat(),
+            "phase_group": row.phase_group,
             "submitted": row.submitted or 0,
             "not_submitted": row.not_submitted or 0,
             "total": (row.submitted or 0) + (row.not_submitted or 0),

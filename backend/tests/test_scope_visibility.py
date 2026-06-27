@@ -293,6 +293,9 @@ def test_stats_returns_due_date_submission_stats(
 ):
     """제출예정일별 제출/미제출 현황을 현재 미제출 단계 기준으로 집계한다."""
     _, headers = make_user(UserRole.CHIEF_SECRETARY)
+    received_one = date(2026, 6, 26)
+    received_two = date(2026, 7, 1)
+    submitted_only_received = date(2026, 7, 5)
     due_one = date(2026, 7, 10)
     due_two = date(2026, 7, 15)
     submitted_only_due = date(2026, 7, 20)
@@ -310,6 +313,7 @@ def test_stats_returns_due_date_submission_stats(
             building_id=submitted.id,
             phase=PhaseType.PRELIMINARY,
             phase_order=0,
+            doc_received_at=received_one,
             report_due_date=due_one,
             report_submitted_at=date(2026, 7, 9),
         ),
@@ -317,24 +321,28 @@ def test_stats_returns_due_date_submission_stats(
             building_id=pending.id,
             phase=PhaseType.PRELIMINARY,
             phase_order=0,
+            doc_received_at=received_one,
             report_due_date=due_one,
         ),
         ReviewStage(
             building_id=ignored_old.id,
             phase=PhaseType.PRELIMINARY,
             phase_order=0,
+            doc_received_at=received_one,
             report_due_date=due_one,
         ),
         ReviewStage(
             building_id=pending_supplement.id,
             phase=PhaseType.SUPPLEMENT_1,
             phase_order=1,
+            doc_received_at=received_two,
             report_due_date=due_two,
         ),
         ReviewStage(
             building_id=submitted_supplement.id,
             phase=PhaseType.SUPPLEMENT_1,
             phase_order=1,
+            doc_received_at=received_two,
             report_due_date=due_two,
             report_submitted_at=date(2026, 7, 14),
         ),
@@ -342,6 +350,7 @@ def test_stats_returns_due_date_submission_stats(
             building_id=submitted_only.id,
             phase=PhaseType.PRELIMINARY,
             phase_order=0,
+            doc_received_at=submitted_only_received,
             report_due_date=submitted_only_due,
             report_submitted_at=date(2026, 7, 19),
         ),
@@ -353,13 +362,17 @@ def test_stats_returns_due_date_submission_stats(
     assert res.status_code == 200
     assert res.json()["due_date_submission_stats"] == [
         {
+            "doc_received_at": "2026-06-26",
             "report_due_date": "2026-07-10",
+            "phase_group": "preliminary",
             "submitted": 1,
             "not_submitted": 1,
             "total": 2,
         },
         {
+            "doc_received_at": "2026-07-01",
             "report_due_date": "2026-07-15",
+            "phase_group": "supplement",
             "submitted": 1,
             "not_submitted": 1,
             "total": 2,

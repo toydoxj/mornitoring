@@ -43,7 +43,9 @@ interface InquiryCounts {
 }
 
 interface DueDateSubmissionStat {
+  doc_received_at: string | null
   report_due_date: string
+  phase_group: "preliminary" | "supplement"
   submitted: number
   not_submitted: number
   total: number
@@ -787,6 +789,15 @@ const BREAKDOWN_VALUE: Record<BreakdownAccent, string> = {
   indigo: "text-indigo-600",
 }
 
+const DUE_DATE_PHASE_LABELS: Record<DueDateSubmissionStat["phase_group"], string> = {
+  preliminary: "예비",
+  supplement: "보완",
+}
+
+function formatDashboardDate(value: string | null) {
+  return value ? value.replaceAll("-", ".") : "-"
+}
+
 function BreakdownCard({
   title,
   total,
@@ -844,7 +855,7 @@ function DueDateSubmissionStats({ rows }: { rows: DueDateSubmissionStat[] }) {
           제출예정일별 제출 현황
         </p>
         <span className="text-xs text-muted-foreground">
-          {rows.length.toLocaleString()}일
+          {rows.length.toLocaleString()}건
         </span>
       </div>
       {rows.length === 0 ? (
@@ -856,7 +867,9 @@ function DueDateSubmissionStats({ rows }: { rows: DueDateSubmissionStat[] }) {
           <Table>
             <TableHeader className="sticky top-0 bg-white">
               <TableRow>
-                <TableHead className="h-8">날짜</TableHead>
+                <TableHead className="h-8">접수일</TableHead>
+                <TableHead className="h-8">제출예정일</TableHead>
+                <TableHead className="h-8 w-[80px] text-center">예비/보완</TableHead>
                 <TableHead className="h-8 w-[70px] text-right">제출</TableHead>
                 <TableHead className="h-8 w-[70px] text-right">미제출</TableHead>
                 <TableHead className="h-8 w-[70px] text-right">합계</TableHead>
@@ -864,9 +877,17 @@ function DueDateSubmissionStats({ rows }: { rows: DueDateSubmissionStat[] }) {
             </TableHeader>
             <TableBody>
               {rows.map((row) => (
-                <TableRow key={row.report_due_date}>
+                <TableRow
+                  key={`${row.doc_received_at ?? "none"}-${row.report_due_date}-${row.phase_group}`}
+                >
                   <TableCell className="h-8 font-mono text-xs">
-                    {row.report_due_date.replaceAll("-", ".")}
+                    {formatDashboardDate(row.doc_received_at)}
+                  </TableCell>
+                  <TableCell className="h-8 font-mono text-xs">
+                    {formatDashboardDate(row.report_due_date)}
+                  </TableCell>
+                  <TableCell className="h-8 text-center">
+                    {DUE_DATE_PHASE_LABELS[row.phase_group]}
                   </TableCell>
                   <TableCell className="h-8 text-right text-emerald-700">
                     {row.submitted.toLocaleString()}
