@@ -295,11 +295,13 @@ def test_stats_returns_due_date_submission_stats(
     _, headers = make_user(UserRole.CHIEF_SECRETARY)
     due_one = date(2026, 7, 10)
     due_two = date(2026, 7, 15)
+    submitted_only_due = date(2026, 7, 20)
     submitted = make_building(mgmt_no="DUE-STAT-SUBMITTED")
     pending = make_building(mgmt_no="DUE-STAT-PENDING")
     ignored_old = make_building(mgmt_no="DUE-STAT-IGNORED")
     pending_supplement = make_building(mgmt_no="DUE-STAT-SUP-PENDING")
     submitted_supplement = make_building(mgmt_no="DUE-STAT-SUP-SUBMITTED")
+    submitted_only = make_building(mgmt_no="DUE-STAT-SUBMITTED-ONLY")
     pending.current_phase = "doc_received"
     ignored_old.current_phase = "assigned"
     pending_supplement.current_phase = "supplement_1_received"
@@ -335,6 +337,13 @@ def test_stats_returns_due_date_submission_stats(
             phase_order=1,
             report_due_date=due_two,
             report_submitted_at=date(2026, 7, 14),
+        ),
+        ReviewStage(
+            building_id=submitted_only.id,
+            phase=PhaseType.PRELIMINARY,
+            phase_order=0,
+            report_due_date=submitted_only_due,
+            report_submitted_at=date(2026, 7, 19),
         ),
     ])
     db_session.commit()

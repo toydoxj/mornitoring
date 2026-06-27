@@ -681,6 +681,7 @@ def get_stats(
             "total": (row.submitted or 0) + (row.not_submitted or 0),
         }
         for row in due_date_rows
+        if (row.not_submitted or 0) > 0
     ]
 
     # 2) phase 별 건수

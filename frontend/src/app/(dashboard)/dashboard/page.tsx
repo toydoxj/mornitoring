@@ -849,7 +849,7 @@ function DueDateSubmissionStats({ rows }: { rows: DueDateSubmissionStat[] }) {
       </div>
       {rows.length === 0 ? (
         <div className="rounded-md border px-3 py-4 text-center text-sm text-muted-foreground">
-          제출예정일 없음
+          미제출 예정일 없음
         </div>
       ) : (
         <div className="max-h-52 overflow-y-auto rounded-md border">
