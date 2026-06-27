@@ -614,6 +614,75 @@ def get_stats(
             uploaded_reports_supplement += uploaded_count
             deleted_submitted_reports_supplement += deleted_submitted_count
 
+    pending_due_filter = or_(
+        and_(
+            Building.current_phase == "doc_received",
+            ReviewStage.phase == PhaseType.PRELIMINARY,
+        ),
+        and_(
+            Building.current_phase == "supplement_1_received",
+            ReviewStage.phase == PhaseType.SUPPLEMENT_1,
+        ),
+        and_(
+            Building.current_phase == "supplement_2_received",
+            ReviewStage.phase == PhaseType.SUPPLEMENT_2,
+        ),
+        and_(
+            Building.current_phase == "supplement_3_received",
+            ReviewStage.phase == PhaseType.SUPPLEMENT_3,
+        ),
+        and_(
+            Building.current_phase == "supplement_4_received",
+            ReviewStage.phase == PhaseType.SUPPLEMENT_4,
+        ),
+        and_(
+            Building.current_phase == "supplement_5_received",
+            ReviewStage.phase == PhaseType.SUPPLEMENT_5,
+        ),
+    )
+    due_date_rows = (
+        _scoped_by_building_id(
+            db.query(
+                ReviewStage.report_due_date.label("report_due_date"),
+                sa_func.count(ReviewStage.id)
+                .filter(ReviewStage.report_submitted_at.isnot(None))
+                .label("submitted"),
+                sa_func.count(ReviewStage.id)
+                .filter(
+                    and_(
+                        ReviewStage.report_submitted_at.is_(None),
+                        pending_due_filter,
+                    )
+                )
+                .label("not_submitted"),
+            )
+            .join(Building, ReviewStage.building_id == Building.id)
+            .filter(
+                ReviewStage.report_due_date.isnot(None),
+                or_(
+                    ReviewStage.report_submitted_at.isnot(None),
+                    and_(
+                        ReviewStage.report_submitted_at.is_(None),
+                        pending_due_filter,
+                    ),
+                ),
+            ),
+            ReviewStage.building_id,
+        )
+        .group_by(ReviewStage.report_due_date)
+        .order_by(ReviewStage.report_due_date)
+        .all()
+    )
+    due_date_submission_stats = [
+        {
+            "report_due_date": row.report_due_date.isoformat(),
+            "submitted": row.submitted or 0,
+            "not_submitted": row.not_submitted or 0,
+            "total": (row.submitted or 0) + (row.not_submitted or 0),
+        }
+        for row in due_date_rows
+    ]
+
     # 2) phase 별 건수
     phase_counts_raw = (
         _scoped(db.query(Building.current_phase, sa_func.count(Building.id)))
@@ -1292,6 +1361,7 @@ def get_stats(
         "uploaded_reports_supplement": uploaded_reports_supplement,
         "deleted_submitted_reports_preliminary": deleted_submitted_reports_preliminary,
         "deleted_submitted_reports_supplement": deleted_submitted_reports_supplement,
+        "due_date_submission_stats": due_date_submission_stats,
         "completed": completed,
         # 최종 판정 5분류 (적합/보완적합/부적합/부적합(미회신)/대상제외)
         "final_counts": final_counts,

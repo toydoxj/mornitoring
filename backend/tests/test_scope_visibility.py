@@ -288,6 +288,76 @@ def test_stats_splits_uploaded_reports_and_deleted_submissions(
     assert body["deleted_submitted_reports_supplement"] == 1
 
 
+def test_stats_returns_due_date_submission_stats(
+    client, db_session, make_user, make_building
+):
+    """제출예정일별 제출/미제출 현황을 현재 미제출 단계 기준으로 집계한다."""
+    _, headers = make_user(UserRole.CHIEF_SECRETARY)
+    due_one = date(2026, 7, 10)
+    due_two = date(2026, 7, 15)
+    submitted = make_building(mgmt_no="DUE-STAT-SUBMITTED")
+    pending = make_building(mgmt_no="DUE-STAT-PENDING")
+    ignored_old = make_building(mgmt_no="DUE-STAT-IGNORED")
+    pending_supplement = make_building(mgmt_no="DUE-STAT-SUP-PENDING")
+    submitted_supplement = make_building(mgmt_no="DUE-STAT-SUP-SUBMITTED")
+    pending.current_phase = "doc_received"
+    ignored_old.current_phase = "assigned"
+    pending_supplement.current_phase = "supplement_1_received"
+    db_session.add_all([
+        ReviewStage(
+            building_id=submitted.id,
+            phase=PhaseType.PRELIMINARY,
+            phase_order=0,
+            report_due_date=due_one,
+            report_submitted_at=date(2026, 7, 9),
+        ),
+        ReviewStage(
+            building_id=pending.id,
+            phase=PhaseType.PRELIMINARY,
+            phase_order=0,
+            report_due_date=due_one,
+        ),
+        ReviewStage(
+            building_id=ignored_old.id,
+            phase=PhaseType.PRELIMINARY,
+            phase_order=0,
+            report_due_date=due_one,
+        ),
+        ReviewStage(
+            building_id=pending_supplement.id,
+            phase=PhaseType.SUPPLEMENT_1,
+            phase_order=1,
+            report_due_date=due_two,
+        ),
+        ReviewStage(
+            building_id=submitted_supplement.id,
+            phase=PhaseType.SUPPLEMENT_1,
+            phase_order=1,
+            report_due_date=due_two,
+            report_submitted_at=date(2026, 7, 14),
+        ),
+    ])
+    db_session.commit()
+
+    res = client.get("/api/buildings/stats", headers=headers)
+
+    assert res.status_code == 200
+    assert res.json()["due_date_submission_stats"] == [
+        {
+            "report_due_date": "2026-07-10",
+            "submitted": 1,
+            "not_submitted": 1,
+            "total": 2,
+        },
+        {
+            "report_due_date": "2026-07-15",
+            "submitted": 1,
+            "not_submitted": 1,
+            "total": 2,
+        },
+    ]
+
+
 def test_stats_reviewer_status_counts_documents_reports_and_results(
     client, db_session, make_user, make_reviewer, make_building
 ):

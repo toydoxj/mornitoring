@@ -42,6 +42,13 @@ interface InquiryCounts {
   completed: number
 }
 
+interface DueDateSubmissionStat {
+  report_due_date: string
+  submitted: number
+  not_submitted: number
+  total: number
+}
+
 interface DashboardStats {
   total: number
   // 전체 흐름 요약
@@ -57,6 +64,7 @@ interface DashboardStats {
   uploaded_reports_supplement: number
   deleted_submitted_reports_preliminary: number
   deleted_submitted_reports_supplement: number
+  due_date_submission_stats: DueDateSubmissionStat[]
   completed: number
   final_counts: FinalCounts
   inquiry_counts: InquiryCounts
@@ -321,48 +329,51 @@ export default function DashboardPage() {
               <CardTitle>현황</CardTitle>
             </CardHeader>
             <CardContent className="flex-1">
-              <div className="grid h-full gap-3 sm:grid-cols-3 xl:grid-cols-3 xl:auto-rows-fr">
-                <BreakdownCard
-                  title="검토서 미접수"
-                  total={stats.docs_waiting_review_preliminary + stats.docs_waiting_review_supplement}
-                  accent="blue"
-                  items={[
-                    { label: "예비", value: stats.docs_waiting_review_preliminary },
-                    { label: "보완", value: stats.docs_waiting_review_supplement },
-                  ]}
-                />
-                <BreakdownCard
-                  title="검토서 제출"
-                  total={
-                    stats.uploaded_reports_preliminary +
-                    stats.uploaded_reports_supplement +
-                    stats.deleted_submitted_reports_preliminary +
-                    stats.deleted_submitted_reports_supplement
-                  }
-                  accent="slate"
-                  onClick={canManageReports ? () => router.push("/review-files") : undefined}
-                  items={[
-                    { label: "예비 업로드", value: stats.uploaded_reports_preliminary },
-                    { label: "보완 업로드", value: stats.uploaded_reports_supplement },
-                    { label: "예비 제출(삭제)", value: stats.deleted_submitted_reports_preliminary },
-                    { label: "보완 제출(삭제)", value: stats.deleted_submitted_reports_supplement },
-                  ]}
-                />
-                <BreakdownCard
-                  title="문의사항"
-                  total={
-                    stats.inquiry_counts.open +
-                    stats.inquiry_counts.asking_agency +
-                    stats.inquiry_counts.completed
-                  }
-                  accent="amber"
-                  onClick={() => router.push("/inquiries")}
-                  items={[
-                    { label: "접수", value: stats.inquiry_counts.open },
-                    { label: "관리원문의", value: stats.inquiry_counts.asking_agency },
-                    { label: "완료", value: stats.inquiry_counts.completed },
-                  ]}
-                />
+              <div className="flex h-full flex-col gap-3">
+                <div className="grid gap-3 sm:grid-cols-3 xl:grid-cols-3 xl:auto-rows-fr">
+                  <BreakdownCard
+                    title="검토서 미접수"
+                    total={stats.docs_waiting_review_preliminary + stats.docs_waiting_review_supplement}
+                    accent="blue"
+                    items={[
+                      { label: "예비", value: stats.docs_waiting_review_preliminary },
+                      { label: "보완", value: stats.docs_waiting_review_supplement },
+                    ]}
+                  />
+                  <BreakdownCard
+                    title="검토서 제출"
+                    total={
+                      stats.uploaded_reports_preliminary +
+                      stats.uploaded_reports_supplement +
+                      stats.deleted_submitted_reports_preliminary +
+                      stats.deleted_submitted_reports_supplement
+                    }
+                    accent="slate"
+                    onClick={canManageReports ? () => router.push("/review-files") : undefined}
+                    items={[
+                      { label: "예비 업로드", value: stats.uploaded_reports_preliminary },
+                      { label: "보완 업로드", value: stats.uploaded_reports_supplement },
+                      { label: "예비 제출(삭제)", value: stats.deleted_submitted_reports_preliminary },
+                      { label: "보완 제출(삭제)", value: stats.deleted_submitted_reports_supplement },
+                    ]}
+                  />
+                  <BreakdownCard
+                    title="문의사항"
+                    total={
+                      stats.inquiry_counts.open +
+                      stats.inquiry_counts.asking_agency +
+                      stats.inquiry_counts.completed
+                    }
+                    accent="amber"
+                    onClick={() => router.push("/inquiries")}
+                    items={[
+                      { label: "접수", value: stats.inquiry_counts.open },
+                      { label: "관리원문의", value: stats.inquiry_counts.asking_agency },
+                      { label: "완료", value: stats.inquiry_counts.completed },
+                    ]}
+                  />
+                </div>
+                <DueDateSubmissionStats rows={stats.due_date_submission_stats} />
               </div>
             </CardContent>
           </Card>
@@ -821,6 +832,57 @@ function BreakdownCard({
           </span>
         ))}
       </div>
+    </div>
+  )
+}
+
+function DueDateSubmissionStats({ rows }: { rows: DueDateSubmissionStat[] }) {
+  return (
+    <div className="border-t pt-3">
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <p className="text-xs font-medium text-muted-foreground">
+          제출예정일별 제출 현황
+        </p>
+        <span className="text-xs text-muted-foreground">
+          {rows.length.toLocaleString()}일
+        </span>
+      </div>
+      {rows.length === 0 ? (
+        <div className="rounded-md border px-3 py-4 text-center text-sm text-muted-foreground">
+          제출예정일 없음
+        </div>
+      ) : (
+        <div className="max-h-52 overflow-y-auto rounded-md border">
+          <Table>
+            <TableHeader className="sticky top-0 bg-white">
+              <TableRow>
+                <TableHead className="h-8">날짜</TableHead>
+                <TableHead className="h-8 w-[70px] text-right">제출</TableHead>
+                <TableHead className="h-8 w-[70px] text-right">미제출</TableHead>
+                <TableHead className="h-8 w-[70px] text-right">합계</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {rows.map((row) => (
+                <TableRow key={row.report_due_date}>
+                  <TableCell className="h-8 font-mono text-xs">
+                    {row.report_due_date.replaceAll("-", ".")}
+                  </TableCell>
+                  <TableCell className="h-8 text-right text-emerald-700">
+                    {row.submitted.toLocaleString()}
+                  </TableCell>
+                  <TableCell className="h-8 text-right text-red-600">
+                    {row.not_submitted.toLocaleString()}
+                  </TableCell>
+                  <TableCell className="h-8 text-right font-medium">
+                    {row.total.toLocaleString()}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      )}
     </div>
   )
 }
