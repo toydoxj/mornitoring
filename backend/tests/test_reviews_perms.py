@@ -8,7 +8,7 @@ from datetime import date
 from models.inappropriate_note import InappropriateNote
 from models.review_opinion_detail import ReviewOpinionDetail
 from models.review_severity_summary import ReviewSeveritySummary
-from models.review_stage import PhaseType, ReviewStage
+from models.review_stage import PhaseType, ResultType, ReviewStage
 from models.user import UserRole
 
 
@@ -141,3 +141,54 @@ def test_chief_secretary_can_delete_review_stage_history_and_related_rows(
         .count()
         == 0
     )
+
+
+def test_struct_engineer_firm_list_groups_related_numbers_and_reviewers(
+    client, db_session, make_user, make_reviewer, make_building
+):
+    _, headers = make_user(UserRole.CHIEF_SECRETARY)
+    _, reviewer, _ = make_reviewer()
+    first = make_building(reviewer_id=reviewer.id, mgmt_no="SE-FIRM-001")
+    second = make_building(reviewer_id=reviewer.id, mgmt_no="SE-FIRM-002")
+    ignored = make_building(mgmt_no="SE-FIRM-003")
+    first.struct_eng_firm = "한빛구조기술사사무소"
+    first.struct_eng_name = "홍구조"
+    second.struct_eng_firm = " 한빛구조기술사사무소 "
+    second.struct_eng_name = "김구조"
+    ignored.struct_eng_firm = ""
+    db_session.add(
+        ReviewStage(
+            building_id=first.id,
+            phase=PhaseType.PRELIMINARY,
+            phase_order=0,
+            report_submitted_at=date(2026, 6, 30),
+            reviewer_name="검토위원1",
+            result=ResultType.PASS,
+        )
+    )
+    db_session.commit()
+
+    res = client.get("/api/reviews/struct-engineer-firms", headers=headers)
+
+    assert res.status_code == 200
+    payload = res.json()
+    assert len(payload) == 1
+    group = payload[0]
+    assert group["firm"] == "한빛구조기술사사무소"
+    assert group["building_count"] == 2
+    assert group["reviewer_count"] == 1
+    assert group["submitted_count"] == 1
+    assert [item["mgmt_no"] for item in group["items"]] == [
+        "SE-FIRM-001",
+        "SE-FIRM-002",
+    ]
+    assert group["items"][0]["latest_phase"] == "preliminary"
+    assert group["items"][0]["latest_report_submitted_at"] == "2026-06-30"
+
+
+def test_reviewer_cannot_access_struct_engineer_firm_list(client, make_reviewer):
+    _, _, headers = make_reviewer()
+
+    res = client.get("/api/reviews/struct-engineer-firms", headers=headers)
+
+    assert res.status_code == 403

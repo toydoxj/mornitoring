@@ -206,6 +206,32 @@ def _attach_review_file_metadata(db: Session, files: list[dict]) -> list[dict]:
     return enriched
 
 
+def _latest_submitted_stage(building: Building) -> ReviewStage | None:
+    """건물의 가장 최근 제출 검토 단계를 찾는다."""
+    submitted_stages = [
+        stage
+        for stage in building.stages
+        if stage.report_submitted_at is not None
+    ]
+    if not submitted_stages:
+        return None
+    return max(
+        submitted_stages,
+        key=lambda stage: (
+            stage.report_submitted_at or date.min,
+            stage.phase_order,
+            stage.id or 0,
+        ),
+    )
+
+
+def _review_stage_phase_value(stage: ReviewStage | None) -> str | None:
+    """검토 단계 enum/string 값을 API 표시용 문자열로 변환한다."""
+    if stage is None:
+        return None
+    return stage.phase.value if hasattr(stage.phase, "value") else str(stage.phase)
+
+
 class SeveritySummaryResponse(BaseModel):
     category: str
     severity: str
@@ -238,6 +264,27 @@ class ReviewStageResponse(BaseModel):
     inappropriate_decision: str | None = None
 
     model_config = {"from_attributes": True}
+
+
+class StructEngineerFirmBuildingResponse(BaseModel):
+    id: int
+    mgmt_no: str
+    building_name: str | None = None
+    struct_eng_name: str | None = None
+    reviewer_name: str | None = None
+    latest_reviewer_name: str | None = None
+    current_phase: str | None = None
+    final_result: str | None = None
+    latest_phase: str | None = None
+    latest_report_submitted_at: date | None = None
+
+
+class StructEngineerFirmResponse(BaseModel):
+    firm: str
+    building_count: int
+    reviewer_count: int
+    submitted_count: int
+    items: list[StructEngineerFirmBuildingResponse]
 
 
 class OpinionDetailResponse(BaseModel):
@@ -1283,6 +1330,83 @@ def list_uploaded_files(
 
     files = list_review_files(prefix)
     return _attach_review_file_metadata(db, files)
+
+
+@router.get(
+    "/struct-engineer-firms",
+    response_model=list[StructEngineerFirmResponse],
+)
+def list_struct_engineer_firms(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(
+        require_roles(
+            UserRole.TEAM_LEADER,
+            UserRole.CHIEF_SECRETARY,
+            UserRole.MANAGER,
+        )
+    ),
+):
+    """책임구조기술자 사무소별 관련 관리번호와 검토자 목록."""
+    del current_user
+    buildings = (
+        db.query(Building)
+        .options(
+            selectinload(Building.reviewer).selectinload(Reviewer.user),
+            selectinload(Building.stages),
+        )
+        .filter(
+            Building.struct_eng_firm.isnot(None),
+            func.trim(Building.struct_eng_firm) != "",
+        )
+        .order_by(Building.struct_eng_firm.asc(), Building.mgmt_no.asc())
+        .all()
+    )
+
+    grouped_items: dict[str, list[StructEngineerFirmBuildingResponse]] = {}
+    reviewers_by_firm: dict[str, set[str]] = {}
+    submitted_count_by_firm: dict[str, int] = {}
+
+    for building in buildings:
+        firm = (building.struct_eng_firm or "").strip()
+        if not firm:
+            continue
+
+        latest_stage = _latest_submitted_stage(building)
+        reviewer_name = _reviewer_display_name_for_building(building)
+        latest_reviewer_name = latest_stage.reviewer_name if latest_stage else None
+
+        if reviewer_name:
+            reviewers_by_firm.setdefault(firm, set()).add(reviewer_name)
+        if latest_stage:
+            submitted_count_by_firm[firm] = submitted_count_by_firm.get(firm, 0) + 1
+
+        grouped_items.setdefault(firm, []).append(
+            StructEngineerFirmBuildingResponse(
+                id=building.id,
+                mgmt_no=building.mgmt_no,
+                building_name=building.building_name,
+                struct_eng_name=building.struct_eng_name,
+                reviewer_name=reviewer_name,
+                latest_reviewer_name=latest_reviewer_name,
+                current_phase=building.current_phase,
+                final_result=building.final_result,
+                latest_phase=_review_stage_phase_value(latest_stage),
+                latest_report_submitted_at=(
+                    latest_stage.report_submitted_at if latest_stage else None
+                ),
+            )
+        )
+
+    return [
+        StructEngineerFirmResponse(
+            firm=firm,
+            building_count=len(items),
+            reviewer_count=len(reviewers_by_firm.get(firm, set())),
+            submitted_count=submitted_count_by_firm.get(firm, 0),
+            items=sorted(items, key=lambda item: item.mgmt_no),
+        )
+        for firm, items in sorted(grouped_items.items(), key=lambda pair: pair[0])
+    ]
 
 
 MAX_REVIEW_FILE_ZIP_COUNT = 500
