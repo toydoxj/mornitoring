@@ -24,6 +24,7 @@ type RegionalTab = "area" | "floors" | "risk" | "drawing_creator"
 type SeverityLabel = "L0" | "L1" | "L2" | "L3" | "L4"
 type OpinionSeverity = "NA" | SeverityLabel
 type ReportMaxLabel = "pass" | SeverityLabel
+type RelatedTechCoopStatus = "cooperated" | "not_cooperated"
 type OpinionQualityDecision = "suitable" | "unsuitable"
 type SortDirection = "asc" | "desc"
 type SeverityTableSortKey<TLabel extends string> = "label" | "total" | TLabel
@@ -135,6 +136,10 @@ interface SeverityPhaseStat extends SeverityPivotRow {
   phase: PhaseType
 }
 
+interface SeverityRelatedTechCoopStat extends SeverityPivotRow {
+  status: RelatedTechCoopStatus
+}
+
 interface SeverityReportMaxPhaseStat {
   phase: PhaseType
   counts: Record<ReportMaxLabel, number>
@@ -152,6 +157,7 @@ interface SeverityStats {
   totals: Record<SeverityLabel, number>
   by_category: SeverityCategoryStat[]
   by_phase: SeverityPhaseStat[]
+  by_related_tech_coop: SeverityRelatedTechCoopStat[]
   by_report_max: SeverityReportMaxStats
 }
 
@@ -274,6 +280,11 @@ const REPORT_MAX_LABEL_TEXT: Record<ReportMaxLabel, string> = {
   L2: "L2",
   L3: "L3",
   L4: "L4",
+}
+
+const RELATED_TECH_COOP_LABEL_TEXT: Record<RelatedTechCoopStatus, string> = {
+  cooperated: "협력",
+  not_cooperated: "미협력",
 }
 
 const PHASE_LABEL_TEXT: Record<PhaseType, string> = {
@@ -1151,6 +1162,18 @@ function SeverityStatsView({
           counts={stats.totals}
           getLabel={(label) => label}
           getStyle={(label) => SEVERITY_STYLE[label]}
+        />
+      </section>
+
+      <section className="space-y-2">
+        <h2 className="text-sm font-semibold">관계기술자 협력 여부별 심각도</h2>
+        <SeverityTable
+          labels={SEVERITY_LABELS}
+          labelHeader="실제 협력"
+          rows={stats.by_related_tech_coop}
+          getColumnLabel={(label) => label}
+          getLabel={(row) => RELATED_TECH_COOP_LABEL_TEXT[row.status]}
+          emptyText="관계기술자 협력 여부별 심각도 집계가 없습니다."
         />
       </section>
 

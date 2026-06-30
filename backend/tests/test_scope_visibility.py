@@ -542,6 +542,7 @@ def test_stats_returns_severity_summary_by_category_and_phase(
     _, headers = make_user(UserRole.CHIEF_SECRETARY)
     _, reviewer, _ = make_reviewer()
     building = make_building(reviewer_id=reviewer.id, mgmt_no="SEV-STATS-001")
+    building.struct_eng_name = "김구조"
 
     stage = ReviewStage(
         building_id=building.id,
@@ -608,6 +609,18 @@ def test_stats_returns_severity_summary_by_category_and_phase(
             },
         ],
     }
+    assert severity_stats["by_related_tech_coop"] == [
+        {
+            "status": "cooperated",
+            "counts": {"L0": 1, "L1": 0, "L2": 0, "L3": 2, "L4": 0},
+            "total": 3,
+        },
+        {
+            "status": "not_cooperated",
+            "counts": {"L0": 0, "L1": 0, "L2": 0, "L3": 0, "L4": 0},
+            "total": 0,
+        },
+    ]
 
 
 def test_stats_returns_keyword_summary_from_opinion_details(
@@ -898,6 +911,11 @@ def test_secretary_stats_severity_excludes_other_group(
     assert severity_stats["by_report_max"]["total"] == 1
     assert severity_stats["by_report_max"]["totals"]["L0"] == 1
     assert severity_stats["by_report_max"]["totals"]["L4"] == 0
+    by_related_tech_coop = {
+        row["status"]: row for row in severity_stats["by_related_tech_coop"]
+    }
+    assert by_related_tech_coop["not_cooperated"]["counts"]["L0"] == 1
+    assert by_related_tech_coop["not_cooperated"]["counts"]["L4"] == 0
 
 
 def test_secretary_stats_keyword_excludes_other_group(

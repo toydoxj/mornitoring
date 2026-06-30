@@ -1166,6 +1166,37 @@ def get_stats(
     ]
     severity_by_phase.sort(key=lambda row: phase_order.get(row["phase"], 999))
 
+    related_tech_coop_status_expr = case(
+        (related_tech_coop_input_filter, "cooperated"),
+        else_="not_cooperated",
+    )
+    severity_related_tech_coop_rows = (
+        _scoped_by_building_id(
+            db.query(
+                related_tech_coop_status_expr.label("status"),
+                ReviewSeveritySummary.severity,
+                sa_func.sum(ReviewSeveritySummary.count),
+            )
+            .join(ReviewStage, ReviewSeveritySummary.stage_id == ReviewStage.id)
+            .join(Building, ReviewStage.building_id == Building.id),
+            ReviewStage.building_id,
+        )
+        .group_by(related_tech_coop_status_expr, ReviewSeveritySummary.severity)
+        .all()
+    )
+    related_tech_coop_map = {
+        "cooperated": _empty_severity_counts(),
+        "not_cooperated": _empty_severity_counts(),
+    }
+    for status, severity, count in severity_related_tech_coop_rows:
+        if status not in related_tech_coop_map or severity not in SEVERITY_LABELS:
+            continue
+        related_tech_coop_map[status][severity] = int(count or 0)
+    severity_by_related_tech_coop = [
+        {"status": status, "counts": counts, "total": sum(counts.values())}
+        for status, counts in related_tech_coop_map.items()
+    ]
+
     # 5-1) 검토서 1건당 최고 심각도 기준 집계
     # 한 검토서 안에 여러 상세의견이 있어도 가장 높은 L값 하나만 1건으로 센다.
     severity_rank = case(
@@ -1401,6 +1432,7 @@ def get_stats(
             "totals": severity_totals,
             "by_category": severity_by_category,
             "by_phase": severity_by_phase,
+            "by_related_tech_coop": severity_by_related_tech_coop,
             "by_report_max": {
                 "total": sum(severity_report_max_totals.values()),
                 "totals": severity_report_max_totals,
