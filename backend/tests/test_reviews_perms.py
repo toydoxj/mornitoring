@@ -192,3 +192,60 @@ def test_reviewer_cannot_access_struct_engineer_firm_list(client, make_reviewer)
     res = client.get("/api/reviews/struct-engineer-firms", headers=headers)
 
     assert res.status_code == 403
+
+
+def test_structural_engineer_drawing_creator_list_groups_related_numbers(
+    client, db_session, make_user, make_reviewer, make_building
+):
+    _, headers = make_user(UserRole.CHIEF_SECRETARY)
+    _, reviewer, _ = make_reviewer()
+    first = make_building(reviewer_id=reviewer.id, mgmt_no="DRAW-SE-001")
+    second = make_building(reviewer_id=reviewer.id, mgmt_no="DRAW-SE-002")
+    ignored = make_building(reviewer_id=reviewer.id, mgmt_no="DRAW-SE-003")
+    first.drawing_creator_firm = "한빛구조도면사무소"
+    first.drawing_creator_name = "이도면"
+    first.drawing_creator_qualification = "건축구조기술사"
+    second.drawing_creator_firm = " 한빛구조도면사무소 "
+    second.drawing_creator_name = "박도면"
+    second.drawing_creator_qualification = "구조기술사"
+    ignored.drawing_creator_firm = "한빛구조도면사무소"
+    ignored.drawing_creator_name = "최건축"
+    ignored.drawing_creator_qualification = "건축사"
+    db_session.add(
+        ReviewStage(
+            building_id=first.id,
+            phase=PhaseType.PRELIMINARY,
+            phase_order=0,
+            report_submitted_at=date(2026, 6, 30),
+            reviewer_name="검토위원1",
+            result=ResultType.PASS,
+        )
+    )
+    db_session.commit()
+
+    res = client.get("/api/reviews/structural-engineer-drawing-creators", headers=headers)
+
+    assert res.status_code == 200
+    payload = res.json()
+    assert len(payload) == 1
+    group = payload[0]
+    assert group["firm"] == "한빛구조도면사무소"
+    assert group["building_count"] == 2
+    assert group["reviewer_count"] == 1
+    assert group["submitted_count"] == 1
+    assert [item["mgmt_no"] for item in group["items"]] == [
+        "DRAW-SE-001",
+        "DRAW-SE-002",
+    ]
+    assert group["items"][0]["drawing_creator_name"] == "이도면"
+    assert group["items"][0]["latest_phase"] == "preliminary"
+
+
+def test_reviewer_cannot_access_structural_engineer_drawing_creator_list(
+    client, make_reviewer
+):
+    _, _, headers = make_reviewer()
+
+    res = client.get("/api/reviews/structural-engineer-drawing-creators", headers=headers)
+
+    assert res.status_code == 403

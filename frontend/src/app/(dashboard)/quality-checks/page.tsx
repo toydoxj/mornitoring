@@ -69,7 +69,33 @@ interface StructEngineerFirmGroup {
   items: StructEngineerFirmBuilding[]
 }
 
-type ActiveTab = "qualityTargets" | "structEngineerFirms"
+interface StructuralEngineerDrawingCreatorBuilding {
+  id: number
+  mgmt_no: string
+  building_name?: string | null
+  drawing_creator_firm?: string | null
+  drawing_creator_name?: string | null
+  drawing_creator_qualification?: string | null
+  reviewer_name?: string | null
+  latest_reviewer_name?: string | null
+  current_phase?: string | null
+  final_result?: string | null
+  latest_phase?: string | null
+  latest_report_submitted_at?: string | null
+}
+
+interface StructuralEngineerDrawingCreatorGroup {
+  firm: string
+  building_count: number
+  reviewer_count: number
+  submitted_count: number
+  items: StructuralEngineerDrawingCreatorBuilding[]
+}
+
+type ActiveTab =
+  | "qualityTargets"
+  | "structEngineerFirms"
+  | "structuralEngineerDrawingCreators"
 
 function formatList(values: string[]) {
   return values.length > 0 ? values.join(", ") : "-"
@@ -90,7 +116,9 @@ function formatResult(result?: string | null) {
   return RESULT_LABELS[result] ?? result
 }
 
-function formatLatestSubmission(item: StructEngineerFirmBuilding) {
+function formatLatestSubmission(
+  item: StructEngineerFirmBuilding | StructuralEngineerDrawingCreatorBuilding,
+) {
   if (!item.latest_phase && !item.latest_report_submitted_at) return "-"
   const phaseLabel = formatPhase(item.latest_phase)
   if (!item.latest_report_submitted_at) return phaseLabel
@@ -109,6 +137,12 @@ export default function QualityChecksPage() {
   const [selectedFirm, setSelectedFirm] = useState("")
   const [firmSearch, setFirmSearch] = useState("")
   const [isFirmLoading, setIsFirmLoading] = useState(true)
+  const [drawingCreatorGroups, setDrawingCreatorGroups] = useState<
+    StructuralEngineerDrawingCreatorGroup[]
+  >([])
+  const [selectedDrawingCreatorFirm, setSelectedDrawingCreatorFirm] = useState("")
+  const [drawingCreatorSearch, setDrawingCreatorSearch] = useState("")
+  const [isDrawingCreatorLoading, setIsDrawingCreatorLoading] = useState(true)
 
   const fetchItems = useCallback(async () => {
     setIsLoading(true)
@@ -145,6 +179,25 @@ export default function QualityChecksPage() {
     }
   }, [])
 
+  const fetchStructuralEngineerDrawingCreators = useCallback(async () => {
+    setIsDrawingCreatorLoading(true)
+    try {
+      const { data } = await apiClient.get<StructuralEngineerDrawingCreatorGroup[]>(
+        "/api/reviews/structural-engineer-drawing-creators",
+      )
+      setDrawingCreatorGroups(data)
+      setSelectedDrawingCreatorFirm((current) => {
+        if (current && data.some((group) => group.firm === current)) return current
+        return data[0]?.firm ?? ""
+      })
+    } catch (err) {
+      console.error("구조도면 작성자 목록 조회 실패:", err)
+      alert("구조도면 작성자 목록을 불러오지 못했습니다.")
+    } finally {
+      setIsDrawingCreatorLoading(false)
+    }
+  }, [])
+
   useEffect(() => {
     fetchItems()
   }, [fetchItems])
@@ -153,9 +206,17 @@ export default function QualityChecksPage() {
     fetchStructEngineerFirms()
   }, [fetchStructEngineerFirms])
 
+  useEffect(() => {
+    fetchStructuralEngineerDrawingCreators()
+  }, [fetchStructuralEngineerDrawingCreators])
+
   const handleRefresh = () => {
     if (activeTab === "qualityTargets") {
       fetchItems()
+      return
+    }
+    if (activeTab === "structuralEngineerDrawingCreators") {
+      fetchStructuralEngineerDrawingCreators()
       return
     }
     fetchStructEngineerFirms()
@@ -187,6 +248,10 @@ export default function QualityChecksPage() {
     (sum, group) => sum + group.building_count,
     0,
   )
+  const drawingCreatorBuildingCount = drawingCreatorGroups.reduce(
+    (sum, group) => sum + group.building_count,
+    0,
+  )
 
   const filteredFirmGroups = useMemo(() => {
     const keyword = firmSearch.trim().toLowerCase()
@@ -213,6 +278,34 @@ export default function QualityChecksPage() {
     )
   }, [filteredFirmGroups, selectedFirm])
 
+  const filteredDrawingCreatorGroups = useMemo(() => {
+    const keyword = drawingCreatorSearch.trim().toLowerCase()
+    if (!keyword) return drawingCreatorGroups
+    return drawingCreatorGroups.filter((group) => {
+      if (group.firm.toLowerCase().includes(keyword)) return true
+      return group.items.some((item) =>
+        [
+          item.mgmt_no,
+          item.building_name,
+          item.drawing_creator_name,
+          item.drawing_creator_qualification,
+          item.reviewer_name,
+          item.latest_reviewer_name,
+        ].some((value) => value?.toLowerCase().includes(keyword)),
+      )
+    })
+  }, [drawingCreatorGroups, drawingCreatorSearch])
+
+  const selectedDrawingCreatorGroup = useMemo(() => {
+    return (
+      filteredDrawingCreatorGroups.find(
+        (group) => group.firm === selectedDrawingCreatorFirm,
+      )
+      ?? filteredDrawingCreatorGroups[0]
+      ?? null
+    )
+  }, [filteredDrawingCreatorGroups, selectedDrawingCreatorFirm])
+
   return (
     <div className="space-y-4">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
@@ -221,7 +314,9 @@ export default function QualityChecksPage() {
           <p className="text-sm text-muted-foreground">
             {activeTab === "qualityTargets"
               ? `심각도 L3/L4 또는 표현 품질 점검 대상 검토서 ${total.toLocaleString()}건`
-              : `책임구조기술자 사무소 ${firmGroups.length.toLocaleString()}곳 · 관련 관리번호 ${firmBuildingCount.toLocaleString()}건`}
+              : activeTab === "structEngineerFirms"
+                ? `책임구조기술자 사무소 ${firmGroups.length.toLocaleString()}곳 · 관련 관리번호 ${firmBuildingCount.toLocaleString()}건`
+                : `구조도면 작성자 소속 ${drawingCreatorGroups.length.toLocaleString()}곳 · 관련 관리번호 ${drawingCreatorBuildingCount.toLocaleString()}건`}
           </p>
         </div>
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
@@ -233,11 +328,25 @@ export default function QualityChecksPage() {
               onChange={(e) => setFirmSearch(e.target.value)}
             />
           )}
+          {activeTab === "structuralEngineerDrawingCreators" && (
+            <Input
+              className="w-full sm:w-80"
+              placeholder="소속, 관리번호, 작성자, 검토자 검색"
+              value={drawingCreatorSearch}
+              onChange={(e) => setDrawingCreatorSearch(e.target.value)}
+            />
+          )}
           <Button
             type="button"
             variant="outline"
             onClick={handleRefresh}
-            loading={activeTab === "qualityTargets" ? isLoading : isFirmLoading}
+            loading={
+              activeTab === "qualityTargets"
+                ? isLoading
+                : activeTab === "structEngineerFirms"
+                  ? isFirmLoading
+                  : isDrawingCreatorLoading
+            }
             loadingText="조회 중"
           >
             <RefreshCw />
@@ -270,6 +379,18 @@ export default function QualityChecksPage() {
           onClick={() => setActiveTab("structEngineerFirms")}
         >
           책임구조기술자 사무소
+        </Button>
+        <Button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === "structuralEngineerDrawingCreators"}
+          variant={
+            activeTab === "structuralEngineerDrawingCreators" ? "default" : "ghost"
+          }
+          size="sm"
+          onClick={() => setActiveTab("structuralEngineerDrawingCreators")}
+        >
+          구조도면 작성자
         </Button>
       </div>
 
@@ -358,27 +479,151 @@ export default function QualityChecksPage() {
             </TableBody>
           </Table>
         </div>
-      ) : isFirmLoading ? (
+      ) : activeTab === "structEngineerFirms" ? (
+        isFirmLoading ? (
+          <div className="py-20 text-center text-muted-foreground">불러오는 중...</div>
+        ) : firmGroups.length === 0 ? (
+          <div className="py-20 text-center text-muted-foreground">
+            책임구조기술자 사무소 정보가 없습니다.
+          </div>
+        ) : (
+          <div className="grid gap-4 lg:grid-cols-[minmax(260px,340px)_1fr]">
+            <div className="overflow-hidden rounded-md border bg-white">
+              <div className="flex items-center justify-between border-b px-3 py-2">
+                <span className="text-sm font-medium">사무소 명단</span>
+                <Badge variant="outline">
+                  {filteredFirmGroups.length.toLocaleString()}곳
+                </Badge>
+              </div>
+              <div className="max-h-[640px] overflow-y-auto">
+                {filteredFirmGroups.length === 0 ? (
+                  <div className="px-3 py-10 text-center text-sm text-muted-foreground">
+                    검색 결과가 없습니다.
+                  </div>
+                ) : (
+                  filteredFirmGroups.map((group) => {
+                    const isSelected = selectedFirmGroup?.firm === group.firm
+                    return (
+                      <button
+                        key={group.firm}
+                        type="button"
+                        className={cn(
+                          "flex w-full items-start justify-between gap-3 border-b px-3 py-3 text-left text-sm transition-colors last:border-b-0 hover:bg-muted/70",
+                          isSelected && "bg-muted",
+                        )}
+                        onClick={() => setSelectedFirm(group.firm)}
+                      >
+                        <span className="min-w-0">
+                          <span className="block truncate font-medium">{group.firm}</span>
+                          <span className="mt-1 block text-xs text-muted-foreground">
+                            검토자 {group.reviewer_count.toLocaleString()}명 · 제출{" "}
+                            {group.submitted_count.toLocaleString()}건
+                          </span>
+                        </span>
+                        <Badge variant={isSelected ? "default" : "outline"}>
+                          {group.building_count.toLocaleString()}건
+                        </Badge>
+                      </button>
+                    )
+                  })
+                )}
+              </div>
+            </div>
+
+            <div className="space-y-3">
+              {selectedFirmGroup ? (
+                <>
+                  <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                    <div>
+                      <h2 className="text-lg font-semibold">{selectedFirmGroup.firm}</h2>
+                      <p className="text-sm text-muted-foreground">
+                        관련 관리번호 {selectedFirmGroup.building_count.toLocaleString()}건 · 검토자{" "}
+                        {selectedFirmGroup.reviewer_count.toLocaleString()}명
+                      </p>
+                    </div>
+                    <Badge variant="outline">
+                      검토서 제출 {selectedFirmGroup.submitted_count.toLocaleString()}건
+                    </Badge>
+                  </div>
+
+                  <div className="overflow-x-auto rounded-md border bg-white">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead className="w-[140px]">관리번호</TableHead>
+                          <TableHead>건축물명</TableHead>
+                          <TableHead className="w-[140px]">책임구조기술자</TableHead>
+                          <TableHead className="w-[120px]">검토자</TableHead>
+                          <TableHead className="w-[190px]">최근 검토서</TableHead>
+                          <TableHead className="w-[110px]">최종결과</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {selectedFirmGroup.items.map((item) => (
+                          <TableRow key={item.id}>
+                            <TableCell>
+                              <button
+                                type="button"
+                                className="font-mono text-sm font-medium text-blue-600 hover:underline"
+                                onClick={() =>
+                                  router.push(`/buildings/${item.id}?from=quality-checks`)
+                                }
+                              >
+                                {item.mgmt_no}
+                              </button>
+                            </TableCell>
+                            <TableCell className="text-sm">
+                              {formatText(item.building_name)}
+                            </TableCell>
+                            <TableCell className="text-sm">
+                              {formatText(item.struct_eng_name)}
+                            </TableCell>
+                            <TableCell className="text-sm">
+                              {formatText(item.latest_reviewer_name ?? item.reviewer_name)}
+                            </TableCell>
+                            <TableCell className="text-sm text-muted-foreground">
+                              {formatLatestSubmission(item)}
+                            </TableCell>
+                            <TableCell className="text-sm">
+                              {formatResult(item.final_result)}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                </>
+              ) : (
+                <div className="py-20 text-center text-muted-foreground">
+                  선택된 사무소가 없습니다.
+                </div>
+              )}
+            </div>
+          </div>
+        )
+      ) : isDrawingCreatorLoading ? (
         <div className="py-20 text-center text-muted-foreground">불러오는 중...</div>
-      ) : firmGroups.length === 0 ? (
+      ) : drawingCreatorGroups.length === 0 ? (
         <div className="py-20 text-center text-muted-foreground">
-          책임구조기술자 사무소 정보가 없습니다.
+          구조도면 작성자 자격이 구조기술사인 정보가 없습니다.
         </div>
       ) : (
         <div className="grid gap-4 lg:grid-cols-[minmax(260px,340px)_1fr]">
           <div className="overflow-hidden rounded-md border bg-white">
             <div className="flex items-center justify-between border-b px-3 py-2">
-              <span className="text-sm font-medium">사무소 명단</span>
-              <Badge variant="outline">{filteredFirmGroups.length.toLocaleString()}곳</Badge>
+              <span className="text-sm font-medium">작성자 소속</span>
+              <Badge variant="outline">
+                {filteredDrawingCreatorGroups.length.toLocaleString()}곳
+              </Badge>
             </div>
             <div className="max-h-[640px] overflow-y-auto">
-              {filteredFirmGroups.length === 0 ? (
+              {filteredDrawingCreatorGroups.length === 0 ? (
                 <div className="px-3 py-10 text-center text-sm text-muted-foreground">
                   검색 결과가 없습니다.
                 </div>
               ) : (
-                filteredFirmGroups.map((group) => {
-                  const isSelected = selectedFirmGroup?.firm === group.firm
+                filteredDrawingCreatorGroups.map((group) => {
+                  const isSelected = selectedDrawingCreatorGroup?.firm === group.firm
                   return (
                     <button
                       key={group.firm}
@@ -387,7 +632,7 @@ export default function QualityChecksPage() {
                         "flex w-full items-start justify-between gap-3 border-b px-3 py-3 text-left text-sm transition-colors last:border-b-0 hover:bg-muted/70",
                         isSelected && "bg-muted",
                       )}
-                      onClick={() => setSelectedFirm(group.firm)}
+                      onClick={() => setSelectedDrawingCreatorFirm(group.firm)}
                     >
                       <span className="min-w-0">
                         <span className="block truncate font-medium">{group.firm}</span>
@@ -407,18 +652,19 @@ export default function QualityChecksPage() {
           </div>
 
           <div className="space-y-3">
-            {selectedFirmGroup ? (
+            {selectedDrawingCreatorGroup ? (
               <>
                 <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
                   <div>
-                    <h2 className="text-lg font-semibold">{selectedFirmGroup.firm}</h2>
+                    <h2 className="text-lg font-semibold">{selectedDrawingCreatorGroup.firm}</h2>
                     <p className="text-sm text-muted-foreground">
-                      관련 관리번호 {selectedFirmGroup.building_count.toLocaleString()}건 · 검토자{" "}
-                      {selectedFirmGroup.reviewer_count.toLocaleString()}명
+                      관련 관리번호{" "}
+                      {selectedDrawingCreatorGroup.building_count.toLocaleString()}건 · 검토자{" "}
+                      {selectedDrawingCreatorGroup.reviewer_count.toLocaleString()}명
                     </p>
                   </div>
                   <Badge variant="outline">
-                    검토서 제출 {selectedFirmGroup.submitted_count.toLocaleString()}건
+                    검토서 제출 {selectedDrawingCreatorGroup.submitted_count.toLocaleString()}건
                   </Badge>
                 </div>
 
@@ -428,14 +674,15 @@ export default function QualityChecksPage() {
                       <TableRow>
                         <TableHead className="w-[140px]">관리번호</TableHead>
                         <TableHead>건축물명</TableHead>
-                        <TableHead className="w-[140px]">책임구조기술자</TableHead>
+                        <TableHead className="w-[140px]">도면작성자</TableHead>
+                        <TableHead className="w-[130px]">자격</TableHead>
                         <TableHead className="w-[120px]">검토자</TableHead>
                         <TableHead className="w-[190px]">최근 검토서</TableHead>
                         <TableHead className="w-[110px]">최종결과</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {selectedFirmGroup.items.map((item) => (
+                      {selectedDrawingCreatorGroup.items.map((item) => (
                         <TableRow key={item.id}>
                           <TableCell>
                             <button
@@ -448,15 +695,24 @@ export default function QualityChecksPage() {
                               {item.mgmt_no}
                             </button>
                           </TableCell>
-                          <TableCell className="text-sm">{formatText(item.building_name)}</TableCell>
-                          <TableCell className="text-sm">{formatText(item.struct_eng_name)}</TableCell>
+                          <TableCell className="text-sm">
+                            {formatText(item.building_name)}
+                          </TableCell>
+                          <TableCell className="text-sm">
+                            {formatText(item.drawing_creator_name)}
+                          </TableCell>
+                          <TableCell className="text-sm">
+                            {formatText(item.drawing_creator_qualification)}
+                          </TableCell>
                           <TableCell className="text-sm">
                             {formatText(item.latest_reviewer_name ?? item.reviewer_name)}
                           </TableCell>
                           <TableCell className="text-sm text-muted-foreground">
                             {formatLatestSubmission(item)}
                           </TableCell>
-                          <TableCell className="text-sm">{formatResult(item.final_result)}</TableCell>
+                          <TableCell className="text-sm">
+                            {formatResult(item.final_result)}
+                          </TableCell>
                         </TableRow>
                       ))}
                     </TableBody>
@@ -465,7 +721,7 @@ export default function QualityChecksPage() {
               </>
             ) : (
               <div className="py-20 text-center text-muted-foreground">
-                선택된 사무소가 없습니다.
+                선택된 작성자 소속이 없습니다.
               </div>
             )}
           </div>

@@ -287,6 +287,29 @@ class StructEngineerFirmResponse(BaseModel):
     items: list[StructEngineerFirmBuildingResponse]
 
 
+class StructuralEngineerDrawingCreatorBuildingResponse(BaseModel):
+    id: int
+    mgmt_no: str
+    building_name: str | None = None
+    drawing_creator_firm: str | None = None
+    drawing_creator_name: str | None = None
+    drawing_creator_qualification: str | None = None
+    reviewer_name: str | None = None
+    latest_reviewer_name: str | None = None
+    current_phase: str | None = None
+    final_result: str | None = None
+    latest_phase: str | None = None
+    latest_report_submitted_at: date | None = None
+
+
+class StructuralEngineerDrawingCreatorResponse(BaseModel):
+    firm: str
+    building_count: int
+    reviewer_count: int
+    submitted_count: int
+    items: list[StructuralEngineerDrawingCreatorBuildingResponse]
+
+
 class OpinionDetailResponse(BaseModel):
     id: int
     stage_id: int
@@ -1399,6 +1422,80 @@ def list_struct_engineer_firms(
 
     return [
         StructEngineerFirmResponse(
+            firm=firm,
+            building_count=len(items),
+            reviewer_count=len(reviewers_by_firm.get(firm, set())),
+            submitted_count=submitted_count_by_firm.get(firm, 0),
+            items=sorted(items, key=lambda item: item.mgmt_no),
+        )
+        for firm, items in sorted(grouped_items.items(), key=lambda pair: pair[0])
+    ]
+
+
+@router.get(
+    "/structural-engineer-drawing-creators",
+    response_model=list[StructuralEngineerDrawingCreatorResponse],
+)
+def list_structural_engineer_drawing_creators(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(
+        require_roles(
+            UserRole.TEAM_LEADER,
+            UserRole.CHIEF_SECRETARY,
+            UserRole.MANAGER,
+        )
+    ),
+):
+    """구조도면 작성자 자격이 건축구조기술사인 건을 소속별로 조회한다."""
+    del current_user
+    qualification = func.trim(func.coalesce(Building.drawing_creator_qualification, ""))
+    buildings = (
+        db.query(Building)
+        .options(
+            selectinload(Building.reviewer).selectinload(Reviewer.user),
+            selectinload(Building.stages),
+        )
+        .filter(qualification.like("%구조기술사%"))
+        .order_by(Building.drawing_creator_firm.asc(), Building.mgmt_no.asc())
+        .all()
+    )
+
+    grouped_items: dict[str, list[StructuralEngineerDrawingCreatorBuildingResponse]] = {}
+    reviewers_by_firm: dict[str, set[str]] = {}
+    submitted_count_by_firm: dict[str, int] = {}
+
+    for building in buildings:
+        firm = (building.drawing_creator_firm or "").strip() or "소속 미기재"
+        latest_stage = _latest_submitted_stage(building)
+        reviewer_name = _reviewer_display_name_for_building(building)
+        latest_reviewer_name = latest_stage.reviewer_name if latest_stage else None
+
+        if reviewer_name:
+            reviewers_by_firm.setdefault(firm, set()).add(reviewer_name)
+        if latest_stage:
+            submitted_count_by_firm[firm] = submitted_count_by_firm.get(firm, 0) + 1
+
+        grouped_items.setdefault(firm, []).append(
+            StructuralEngineerDrawingCreatorBuildingResponse(
+                id=building.id,
+                mgmt_no=building.mgmt_no,
+                building_name=building.building_name,
+                drawing_creator_firm=building.drawing_creator_firm,
+                drawing_creator_name=building.drawing_creator_name,
+                drawing_creator_qualification=building.drawing_creator_qualification,
+                reviewer_name=reviewer_name,
+                latest_reviewer_name=latest_reviewer_name,
+                current_phase=building.current_phase,
+                final_result=building.final_result,
+                latest_phase=_review_stage_phase_value(latest_stage),
+                latest_report_submitted_at=(
+                    latest_stage.report_submitted_at if latest_stage else None
+                ),
+            )
+        )
+
+    return [
+        StructuralEngineerDrawingCreatorResponse(
             firm=firm,
             building_count=len(items),
             reviewer_count=len(reviewers_by_firm.get(firm, set())),
