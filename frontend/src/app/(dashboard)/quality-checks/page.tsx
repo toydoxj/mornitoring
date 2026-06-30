@@ -395,7 +395,7 @@ export default function QualityChecksPage() {
           size="sm"
           onClick={() => setActiveTab("structuralEngineerDrawingCreators")}
         >
-          책임구조기술자
+          도면작성자격
         </Button>
       </div>
 
