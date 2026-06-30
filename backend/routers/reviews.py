@@ -291,6 +291,7 @@ class StructuralEngineerDrawingCreatorBuildingResponse(BaseModel):
     id: int
     mgmt_no: str
     building_name: str | None = None
+    struct_eng_firm: str | None = None
     drawing_creator_firm: str | None = None
     drawing_creator_name: str | None = None
     drawing_creator_qualification: str | None = None
@@ -1456,7 +1457,7 @@ def list_structural_engineer_drawing_creators(
             selectinload(Building.stages),
         )
         .filter(qualification.like("%구조기술사%"))
-        .order_by(Building.drawing_creator_firm.asc(), Building.mgmt_no.asc())
+        .order_by(Building.struct_eng_firm.asc(), Building.mgmt_no.asc())
         .all()
     )
 
@@ -1465,7 +1466,11 @@ def list_structural_engineer_drawing_creators(
     submitted_count_by_firm: dict[str, int] = {}
 
     for building in buildings:
-        firm = (building.drawing_creator_firm or "").strip() or "소속 미기재"
+        firm = (
+            (building.struct_eng_firm or "").strip()
+            or (building.drawing_creator_firm or "").strip()
+            or "소속 미기재"
+        )
         latest_stage = _latest_submitted_stage(building)
         reviewer_name = _reviewer_display_name_for_building(building)
         latest_reviewer_name = latest_stage.reviewer_name if latest_stage else None
@@ -1480,6 +1485,7 @@ def list_structural_engineer_drawing_creators(
                 id=building.id,
                 mgmt_no=building.mgmt_no,
                 building_name=building.building_name,
+                struct_eng_firm=building.struct_eng_firm,
                 drawing_creator_firm=building.drawing_creator_firm,
                 drawing_creator_name=building.drawing_creator_name,
                 drawing_creator_qualification=building.drawing_creator_qualification,

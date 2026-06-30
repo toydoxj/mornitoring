@@ -202,12 +202,15 @@ def test_structural_engineer_drawing_creator_list_groups_related_numbers(
     first = make_building(reviewer_id=reviewer.id, mgmt_no="DRAW-SE-001")
     second = make_building(reviewer_id=reviewer.id, mgmt_no="DRAW-SE-002")
     ignored = make_building(reviewer_id=reviewer.id, mgmt_no="DRAW-SE-003")
+    first.struct_eng_firm = "한빛구조기술사사무소"
     first.drawing_creator_firm = "한빛구조도면사무소"
     first.drawing_creator_name = "이도면"
     first.drawing_creator_qualification = "건축구조기술사"
+    second.struct_eng_firm = " 한빛구조기술사사무소 "
     second.drawing_creator_firm = " 한빛구조도면사무소 "
     second.drawing_creator_name = "박도면"
     second.drawing_creator_qualification = "구조기술사"
+    ignored.struct_eng_firm = "무시구조기술사사무소"
     ignored.drawing_creator_firm = "한빛구조도면사무소"
     ignored.drawing_creator_name = "최건축"
     ignored.drawing_creator_qualification = "건축사"
@@ -229,7 +232,7 @@ def test_structural_engineer_drawing_creator_list_groups_related_numbers(
     payload = res.json()
     assert len(payload) == 1
     group = payload[0]
-    assert group["firm"] == "한빛구조도면사무소"
+    assert group["firm"] == "한빛구조기술사사무소"
     assert group["building_count"] == 2
     assert group["reviewer_count"] == 1
     assert group["submitted_count"] == 1
@@ -237,6 +240,7 @@ def test_structural_engineer_drawing_creator_list_groups_related_numbers(
         "DRAW-SE-001",
         "DRAW-SE-002",
     ]
+    assert group["items"][0]["struct_eng_firm"] == "한빛구조기술사사무소"
     assert group["items"][0]["drawing_creator_name"] == "이도면"
     assert group["items"][0]["latest_phase"] == "preliminary"
 
