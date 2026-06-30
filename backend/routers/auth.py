@@ -175,6 +175,29 @@ async def get_current_user(
     return user
 
 
+def _get_optional_current_user_from_request(request: Request, db: Session) -> User | None:
+    """콜백 요청의 Bearer 토큰이 유효하면 현재 사용자를 반환한다."""
+    authorization = request.headers.get("authorization", "")
+    scheme, _, token = authorization.partition(" ")
+    if scheme.lower() != "bearer" or not token:
+        return None
+
+    try:
+        payload = jwt.decode(
+            token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm]
+        )
+        sub = payload.get("sub")
+        user_id = int(sub)
+    except (JWTError, TypeError, ValueError):
+        return None
+
+    return (
+        db.query(User)
+        .filter(User.id == user_id, User.is_active.is_(True))
+        .first()
+    )
+
+
 def require_roles(*roles: UserRole):
     """역할 기반 접근 제어 의존성"""
     async def role_checker(current_user: User = Depends(get_current_user)):
@@ -336,9 +359,24 @@ async def kakao_callback(
                 detail="초대 링크 대상 계정을 찾을 수 없습니다. 관리자에게 새 초대를 요청해주세요",
             )
 
+    current_link_target = (
+        _get_optional_current_user_from_request(request, db)
+        if setup_target is None
+        else None
+    )
+
     # DB에서 사용자 조회 (kakao_id 기준)
     user = db.query(User).filter(User.kakao_id == kakao_id).first()
     if user:
+        if current_link_target is not None and user.id != current_link_target.id:
+            log_event(
+                "warning", "kakao_current_link_conflict",
+                current_user_id=current_link_target.id, kakao_user_id=user.id,
+            )
+            raise HTTPException(
+                status_code=409,
+                detail="이미 다른 사용자에게 연결된 카카오 계정입니다",
+            )
         if setup_target is not None and user.id != setup_target.id:
             log_event(
                 "warning", "kakao_setup_target_mismatch",
@@ -462,6 +500,69 @@ async def kakao_callback(
                 access_token=access_token,
                 must_change_password=False,
             )
+
+    if current_link_target is not None:
+        if current_link_target.kakao_id and current_link_target.kakao_id != kakao_id:
+            raise HTTPException(
+                status_code=409,
+                detail="현재 계정에는 이미 다른 카카오 계정이 연결되어 있습니다",
+            )
+        if current_link_target.kakao_uuid:
+            if not kakao_uuid:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "카카오 계정 확인 정보가 부족합니다. "
+                        "동의 항목을 확인한 뒤 다시 시도해주세요"
+                    ),
+                )
+            if current_link_target.kakao_uuid != kakao_uuid:
+                log_event(
+                    "warning", "kakao_current_link_uuid_mismatch",
+                    current_user_id=current_link_target.id,
+                )
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "현재 계정의 카카오 친구 매칭과 로그인한 카카오 계정이 다릅니다. "
+                        "본인 카카오 계정으로 다시 로그인해주세요"
+                    ),
+                )
+
+        current_link_target.kakao_id = kakao_id
+        current_link_target.kakao_login_uuid = kakao_uuid
+        current_link_target.kakao_access_token = kakao_access
+        current_link_target.kakao_refresh_token = kakao_refresh
+        current_link_target.kakao_token_expires_at = kakao_token_expires_at
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail="이미 다른 사용자에게 연결된 카카오 계정입니다",
+            )
+
+        from services.kakao import diagnose_and_cache_scopes
+        await diagnose_and_cache_scopes(current_link_target, kakao_access, db)
+        db.refresh(current_link_target)
+        access_token = create_access_token(
+            {
+                "sub": str(current_link_target.id),
+                "role": current_link_target.role.value,
+            }
+        )
+        _safe_log_action(
+            db,
+            user_id=current_link_target.id,
+            action="login",
+            target_type="user",
+            target_id=current_link_target.id,
+            after_data={"provider": "kakao_current_link"},
+            ip_address=_client_ip(request),
+        )
+        db.commit()
+        return TokenResponse(access_token=access_token, must_change_password=False)
 
     # 카카오 ID 매칭 실패 → 이메일+비번으로 /link-account 호출 필요
     # (이름 기반 자동 매칭은 동명이인 위험으로 제거)

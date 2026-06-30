@@ -72,7 +72,7 @@ function KakaoCallbackContent() {
         sessionStorage.removeItem("pending_link_email")
         localStorage.setItem("access_token", data.access_token)
         sessionStorage.setItem(processedKey, "1")
-        await fetchMe()
+        await fetchMe({ force: true })
         router.replace("/dashboard")
       } catch (err: unknown) {
         const axiosErr = err as { response?: { data?: { detail?: string } } }

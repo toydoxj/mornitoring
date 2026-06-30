@@ -189,6 +189,64 @@ def test_kakao_callback_unknown_kakao_id_returns_link_session(
     assert rows[0].kakao_login_uuid == "login-uuid-99999"
 
 
+def test_kakao_callback_logged_in_unlinked_user_links_directly(
+    client, db_session, kakao_mock, make_user
+):
+    """이메일 로그인 상태의 미연동 사용자는 콜백에서 현재 계정에 바로 연결된다."""
+    user, headers = make_user(
+        UserRole.REVIEWER,
+        email="logged-in-link@example.com",
+    )
+
+    kakao_mock.token_ok(access_token="direct_access", refresh_token="direct_refresh")
+    kakao_mock.user_info_ok(kakao_id="777777", uuid="direct-login-uuid")
+
+    state = generate_oauth_state()
+    res = client.get(
+        f"/api/auth/kakao/callback?code=direct_code&state={state}",
+        headers=headers,
+    )
+
+    assert res.status_code == 200
+    body = res.json()
+    assert body["access_token"]
+    assert body.get("need_link") is None or body.get("need_link") is False
+
+    db_session.expire_all()
+    from models.user import User as UserModel
+    refreshed = db_session.query(UserModel).filter(UserModel.id == user.id).first()
+    assert refreshed.kakao_id == "777777"
+    assert refreshed.kakao_login_uuid == "direct-login-uuid"
+    assert refreshed.kakao_access_token == "direct_access"
+
+
+def test_kakao_callback_logged_in_user_rejects_other_users_kakao(
+    client, kakao_mock, make_user
+):
+    """로그인 중인 사용자에게 다른 사용자 카카오 계정을 연결하지 않는다."""
+    _, headers = make_user(
+        UserRole.REVIEWER,
+        email="current-user@example.com",
+    )
+    make_user(
+        UserRole.REVIEWER,
+        email="already-linked-owner@example.com",
+        kakao_id="888888",
+    )
+
+    kakao_mock.token_ok(access_token="conflict_access", refresh_token="conflict_refresh")
+    kakao_mock.user_info_ok(kakao_id="888888", uuid="owner-uuid")
+
+    state = generate_oauth_state()
+    res = client.get(
+        f"/api/auth/kakao/callback?code=conflict_code&state={state}",
+        headers=headers,
+    )
+
+    assert res.status_code == 409
+    assert "이미 다른 사용자" in res.json()["detail"]
+
+
 # ===== 3. /link-account 성공 =====
 
 def test_link_account_success_saves_kakao_id(

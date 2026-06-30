@@ -242,12 +242,12 @@ export default function DashboardLayout({
         <div className="border-b border-amber-200 bg-amber-50 text-amber-900">
           <div className="mx-auto flex w-[92%] flex-col gap-2 py-2 text-sm sm:flex-row sm:items-center sm:justify-between sm:gap-3 lg:w-[90%]">
             <span>
-              📱 카카오 알림을 받으려면 <strong>카카오 연동</strong>이 필요합니다.
-              아래 버튼으로 카카오 로그인 + 동의를 진행해주세요.
+              카카오 알림을 받으려면 현재 로그인한 계정에 <strong>카카오 계정 연결</strong>이 필요합니다.
+              아래 버튼으로 카카오 로그인과 동의를 진행해주세요.
             </span>
             <div className="flex gap-2 sm:shrink-0">
               <Button size="sm" onClick={() => handleConnectKakao()}>
-                카카오 연동하기
+                카카오 계정 연결
               </Button>
               <Button
                 size="sm"

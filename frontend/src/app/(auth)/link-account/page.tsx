@@ -55,7 +55,7 @@ function LinkAccountContent() {
       sessionStorage.removeItem("kakao_link_name")
       sessionStorage.removeItem("pending_link_context")
       localStorage.setItem("access_token", data.access_token)
-      await fetchMe()
+      await fetchMe({ force: true })
       router.push("/dashboard")
     } catch (err: unknown) {
       const axiosErr = err as { response?: { data?: { detail?: string } } }
@@ -76,8 +76,8 @@ function LinkAccountContent() {
       <CardContent>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="rounded-md bg-muted p-3 text-sm">
-            <p>카카오 닉네임과 일치하는 계정을 찾지 못했습니다.</p>
-            <p>기존 계정의 이메일과 비밀번호를 입력하여 연결해주세요.</p>
+            <p>현재 카카오 계정을 기존 시스템 계정과 연결합니다.</p>
+            <p>등록된 이메일과 비밀번호를 입력해주세요.</p>
             <p className="mt-1 text-muted-foreground">한번 연결하면 이후 카카오 로그인만으로 접속됩니다.</p>
           </div>
           <div className="space-y-2">
