@@ -74,6 +74,7 @@ interface StructuralEngineerDrawingCreatorBuilding {
   mgmt_no: string
   building_name?: string | null
   struct_eng_firm?: string | null
+  struct_eng_name?: string | null
   drawing_creator_firm?: string | null
   drawing_creator_name?: string | null
   drawing_creator_qualification?: string | null
@@ -192,8 +193,8 @@ export default function QualityChecksPage() {
         return data[0]?.firm ?? ""
       })
     } catch (err) {
-      console.error("책임구조기술사 목록 조회 실패:", err)
-      alert("책임구조기술사 목록을 불러오지 못했습니다.")
+      console.error("책임구조기술자 목록 조회 실패:", err)
+      alert("책임구조기술자 목록을 불러오지 못했습니다.")
     } finally {
       setIsDrawingCreatorLoading(false)
     }
@@ -289,6 +290,7 @@ export default function QualityChecksPage() {
           item.mgmt_no,
           item.building_name,
           item.struct_eng_firm,
+          item.struct_eng_name,
           item.drawing_creator_firm,
           item.drawing_creator_name,
           item.drawing_creator_qualification,
@@ -319,7 +321,7 @@ export default function QualityChecksPage() {
               ? `심각도 L3/L4 또는 표현 품질 점검 대상 검토서 ${total.toLocaleString()}건`
               : activeTab === "structEngineerFirms"
                 ? `책임구조기술자 사무소 ${firmGroups.length.toLocaleString()}곳 · 관련 관리번호 ${firmBuildingCount.toLocaleString()}건`
-                : `책임구조기술사 사무소 ${drawingCreatorGroups.length.toLocaleString()}곳 · 관련 관리번호 ${drawingCreatorBuildingCount.toLocaleString()}건`}
+                : `책임구조기술자 사무소 ${drawingCreatorGroups.length.toLocaleString()}곳 · 관련 관리번호 ${drawingCreatorBuildingCount.toLocaleString()}건`}
           </p>
         </div>
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
@@ -334,7 +336,7 @@ export default function QualityChecksPage() {
           {activeTab === "structuralEngineerDrawingCreators" && (
             <Input
               className="w-full sm:w-80"
-              placeholder="사무소, 관리번호, 책임구조기술사, 검토자 검색"
+              placeholder="사무소, 관리번호, 책임구조기술자, 검토자 검색"
               value={drawingCreatorSearch}
               onChange={(e) => setDrawingCreatorSearch(e.target.value)}
             />
@@ -393,7 +395,7 @@ export default function QualityChecksPage() {
           size="sm"
           onClick={() => setActiveTab("structuralEngineerDrawingCreators")}
         >
-          책임구조기술사
+          책임구조기술자
         </Button>
       </div>
 
@@ -608,7 +610,7 @@ export default function QualityChecksPage() {
         <div className="py-20 text-center text-muted-foreground">불러오는 중...</div>
       ) : drawingCreatorGroups.length === 0 ? (
         <div className="py-20 text-center text-muted-foreground">
-          책임구조기술사 정보가 없습니다.
+          책임구조기술자 정보가 없습니다.
         </div>
       ) : (
         <div className="grid gap-4 lg:grid-cols-[minmax(260px,340px)_1fr]">
@@ -677,7 +679,7 @@ export default function QualityChecksPage() {
                       <TableRow>
                         <TableHead className="w-[140px]">관리번호</TableHead>
                         <TableHead>건축물명</TableHead>
-                        <TableHead className="w-[140px]">책임구조기술사</TableHead>
+                        <TableHead className="w-[140px]">책임구조기술자</TableHead>
                         <TableHead className="w-[130px]">자격</TableHead>
                         <TableHead className="w-[120px]">검토자</TableHead>
                         <TableHead className="w-[190px]">최근 검토서</TableHead>
@@ -702,7 +704,7 @@ export default function QualityChecksPage() {
                             {formatText(item.building_name)}
                           </TableCell>
                           <TableCell className="text-sm">
-                            {formatText(item.drawing_creator_name)}
+                            {formatText(item.struct_eng_name)}
                           </TableCell>
                           <TableCell className="text-sm">
                             {formatText(item.drawing_creator_qualification)}

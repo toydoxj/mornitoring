@@ -292,6 +292,7 @@ class StructuralEngineerDrawingCreatorBuildingResponse(BaseModel):
     mgmt_no: str
     building_name: str | None = None
     struct_eng_firm: str | None = None
+    struct_eng_name: str | None = None
     drawing_creator_firm: str | None = None
     drawing_creator_name: str | None = None
     drawing_creator_qualification: str | None = None
@@ -1486,6 +1487,7 @@ def list_structural_engineer_drawing_creators(
                 mgmt_no=building.mgmt_no,
                 building_name=building.building_name,
                 struct_eng_firm=building.struct_eng_firm,
+                struct_eng_name=building.struct_eng_name,
                 drawing_creator_firm=building.drawing_creator_firm,
                 drawing_creator_name=building.drawing_creator_name,
                 drawing_creator_qualification=building.drawing_creator_qualification,
