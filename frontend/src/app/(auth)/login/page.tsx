@@ -1,36 +1,28 @@
 "use client"
 
 import { useCallback, useEffect, useRef, useState } from "react"
-import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { useAuthStore } from "@/stores/authStore"
 import apiClient from "@/lib/api/client"
 
-const PASSWORD_LOGIN_NOTICE = `"이메일/비밀번호" 로그인 기능은 7월부터 차단될 예정입니다.
-카카오톡 로그인으로 진행해 주시기 바랍니다.`
+async function fetchKakaoLoginUrl(consent = false) {
+  const endpoint = consent
+    ? "/api/auth/kakao/login?consent=true"
+    : "/api/auth/kakao/login"
+  const { data } = await apiClient.get<{ url: string }>(endpoint)
+  return data.url
+}
 
 export default function LoginPage() {
-  const router = useRouter()
-  const login = useAuthStore((s) => s.login)
   const kakaoAutoStarted = useRef(false)
-  const [email, setEmail] = useState("")
-  const [password, setPassword] = useState("")
   const [error, setError] = useState("")
-  const [isSubmitting, setIsSubmitting] = useState(false)
   const [isKakaoRedirecting, setIsKakaoRedirecting] = useState(false)
 
   const handleKakaoLogin = useCallback(async (consent = false) => {
     setError("")
     setIsKakaoRedirecting(true)
     try {
-      const endpoint = consent
-        ? "/api/auth/kakao/login?consent=true"
-        : "/api/auth/kakao/login"
-      const { data } = await apiClient.get<{ url: string }>(endpoint)
-      window.location.href = data.url
+      window.location.href = await fetchKakaoLoginUrl(consent)
     } catch {
       setError("카카오 로그인 연결에 실패했습니다")
       setIsKakaoRedirecting(false)
@@ -43,28 +35,14 @@ export default function LoginPage() {
     if (params.get("kakao") !== "consent") return
 
     kakaoAutoStarted.current = true
-    void handleKakaoLogin(true)
-  }, [handleKakaoLogin])
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    setError("")
-    window.alert(PASSWORD_LOGIN_NOTICE)
-    setIsSubmitting(true)
-
-    try {
-      const result = await login(email, password)
-      if (result.mustChangePassword) {
-        router.push("/change-password")
-      } else {
-        router.push("/dashboard")
-      }
-    } catch {
-      setError("이메일 또는 비밀번호가 올바르지 않습니다")
-    } finally {
-      setIsSubmitting(false)
-    }
-  }
+    void fetchKakaoLoginUrl(true)
+      .then((url) => {
+        window.location.href = url
+      })
+      .catch(() => {
+        setError("카카오 로그인 연결에 실패했습니다")
+      })
+  }, [])
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-gray-50">
@@ -72,69 +50,22 @@ export default function LoginPage() {
         <CardHeader className="text-center">
           <CardTitle className="text-2xl">건축구조안전 모니터링</CardTitle>
           <p className="text-sm text-muted-foreground">
-            계정 정보를 입력하여 로그인하세요
+            카카오 계정으로 로그인하세요
           </p>
         </CardHeader>
-        <CardContent>
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="email">이메일</Label>
-              <Input
-                id="email"
-                type="email"
-                placeholder="email@example.com"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                required
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="password">비밀번호</Label>
-              <Input
-                id="password"
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-              />
-            </div>
-            {error && (
-              <p className="text-sm text-red-500">{error}</p>
-            )}
-            <Button type="submit" className="w-full" loading={isSubmitting} loadingText="로그인 중...">
-              로그인
-            </Button>
-          </form>
-          <div className="mt-3 flex items-center justify-center gap-2 text-sm">
-            <button
-              type="button"
-              className="text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
-              onClick={() => router.push("/find-account")}
-            >
-              아이디 찾기
-            </button>
-            <span className="text-muted-foreground">·</span>
-            <span className="text-muted-foreground">비밀번호 재설정은 관리자 문의</span>
-          </div>
-          <div className="mt-4 space-y-2">
-            <div className="relative">
-              <div className="absolute inset-0 flex items-center">
-                <span className="w-full border-t" />
-              </div>
-              <div className="relative flex justify-center text-xs uppercase">
-                <span className="bg-white px-2 text-muted-foreground">또는</span>
-              </div>
-            </div>
-            <Button
-              variant="outline"
-              className="w-full bg-[#FEE500] text-[#191919] hover:bg-[#FDD835] border-[#FEE500]"
-              loading={isKakaoRedirecting}
-              loadingText="카카오로 이동 중..."
-              onClick={() => handleKakaoLogin()}
-            >
-              카카오 로그인
-            </Button>
-          </div>
+        <CardContent className="space-y-3">
+          <Button
+            variant="outline"
+            className="w-full bg-[#FEE500] text-[#191919] hover:bg-[#FDD835] border-[#FEE500]"
+            loading={isKakaoRedirecting}
+            loadingText="카카오로 이동 중..."
+            onClick={() => handleKakaoLogin()}
+          >
+            카카오 로그인
+          </Button>
+          {error && (
+            <p className="text-sm text-red-500">{error}</p>
+          )}
         </CardContent>
       </Card>
     </div>
