@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from logging_config import log_event
 from database import get_db
 from models.user import User, UserRole
 from routers.auth import require_roles
@@ -11,9 +12,11 @@ from services.kakao import (
     REQUIRED_KAKAO_SCOPES,
     ensure_valid_token,
     extract_kakao_login_uuid,
+    generate_reconnect_token,
     get_friends,
     get_kakao_identity_status,
     get_kakao_token_status,
+    get_reconnect_page_url,
     get_reauthorize_url,
     get_user_info,
     get_user_scopes,
@@ -40,6 +43,13 @@ class ScopeStatusResponse(BaseModel):
     missing_scopes: list[str]
     scopes: list[ScopeItem]
     reauthorize_url: str | None = None
+
+
+class KakaoReconnectLinkResponse(BaseModel):
+    user_id: int
+    name: str
+    reconnect_url: str
+    expires_at: str
 
 
 @router.get("/me/scopes", response_model=ScopeStatusResponse)
@@ -228,6 +238,43 @@ async def unlink_kakao_oauth(
     user.kakao_scopes_checked_at = None
     db.commit()
     return {"message": "카카오 로그인 연동이 해제되었습니다", "user_id": user.id}
+
+
+@router.post(
+    "/users/{user_id}/reconnect-link",
+    response_model=KakaoReconnectLinkResponse,
+    include_in_schema=False,
+)
+def issue_kakao_reconnect_link(
+    user_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(
+        require_roles(UserRole.TEAM_LEADER, UserRole.CHIEF_SECRETARY)
+    ),
+):
+    """관리자가 개별 전달할 카카오 로그인 재연결 링크를 발급한다."""
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다")
+    if not user.is_active:
+        raise HTTPException(status_code=400, detail="비활성 사용자입니다")
+
+    token, expires_at = generate_reconnect_token(
+        user_id=user.id,
+        created_by=current_user.id,
+    )
+    log_event(
+        "info",
+        "kakao_reconnect_link_issued",
+        user_id=user.id,
+        created_by=current_user.id,
+    )
+    return KakaoReconnectLinkResponse(
+        user_id=user.id,
+        name=user.name,
+        reconnect_url=get_reconnect_page_url(token),
+        expires_at=expires_at.isoformat(),
+    )
 
 
 class UserMatchStatus(BaseModel):

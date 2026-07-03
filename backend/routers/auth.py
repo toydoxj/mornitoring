@@ -67,6 +67,11 @@ class TokenResponse(BaseModel):
     must_change_password: bool = False
 
 
+class KakaoReconnectLoginResponse(BaseModel):
+    url: str
+    user_name: str
+
+
 class UserResponse(BaseModel):
     id: int
     name: str
@@ -278,6 +283,45 @@ def kakao_login(
             setup_user_id=setup_user_id,
         )
     }
+
+
+@router.get(
+    "/kakao/reconnect-login",
+    response_model=KakaoReconnectLoginResponse,
+    include_in_schema=False,
+)
+def kakao_reconnect_login(
+    token: str = Query(..., min_length=1, max_length=1200),
+    db: Session = Depends(get_db),
+):
+    """숨김 재연결 링크에서 카카오 OAuth URL을 발급한다.
+
+    관리자 화면에서 생성한 서명 토큰만 허용하며, 일반 로그인 화면에는 노출하지 않는다.
+    """
+    from services.kakao import decode_reconnect_token, get_authorize_url
+
+    user_id = decode_reconnect_token(token)
+    if user_id is None:
+        raise HTTPException(
+            status_code=401,
+            detail="재연결 링크가 유효하지 않거나 만료되었습니다",
+        )
+
+    user = (
+        db.query(User)
+        .filter(User.id == user_id, User.is_active.is_(True))
+        .first()
+    )
+    if user is None:
+        raise HTTPException(
+            status_code=401,
+            detail="재연결 대상 계정을 찾을 수 없습니다",
+        )
+
+    return KakaoReconnectLoginResponse(
+        url=get_authorize_url(prompt="select_account", setup_user_id=user.id),
+        user_name=user.name,
+    )
 
 
 @router.get("/kakao/callback")

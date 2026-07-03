@@ -24,6 +24,7 @@ let _handlingAuthError = false
 const AUTH_REDIRECT_EXEMPT_PATHS = [
   "/api/auth/login",
   "/api/auth/kakao/callback",
+  "/api/auth/kakao/reconnect-login",
   "/api/auth/link-account",
   "/api/auth/find-account",
   "/api/auth/password-setup",

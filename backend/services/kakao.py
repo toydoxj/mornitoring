@@ -116,6 +116,61 @@ def decode_setup_context(setup_context: str) -> int | None:
 
 
 LINK_SESSION_TTL_SECONDS = 600  # 10분
+KAKAO_RECONNECT_TOKEN_TTL_SECONDS = 72 * 3600  # 72시간
+
+
+def generate_reconnect_token(
+    *,
+    user_id: int,
+    created_by: int | None,
+    ttl_seconds: int = KAKAO_RECONNECT_TOKEN_TTL_SECONDS,
+) -> tuple[str, datetime]:
+    """관리자가 개별 전달할 카카오 로그인 재연결 토큰을 생성한다.
+
+    토큰은 DB에 평문을 저장하지 않는 서명 JWT이며, 링크를 가진 사용자만
+    숨김 재연결 페이지에서 카카오 OAuth를 시작할 수 있다.
+    """
+    expires_at = datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds)
+    payload: dict[str, str | int] = {
+        "type": "kakao_reconnect",
+        "user_id": user_id,
+        "nonce": secrets.token_urlsafe(16),
+        "exp": int(expires_at.timestamp()),
+    }
+    if created_by is not None:
+        payload["created_by"] = created_by
+    token = jwt.encode(
+        payload,
+        settings.jwt_secret_key,
+        algorithm=settings.jwt_algorithm,
+    )
+    return token, expires_at
+
+
+def decode_reconnect_token(token: str) -> int | None:
+    """카카오 재연결 토큰에서 대상 user_id를 검증해 꺼낸다."""
+    if not token:
+        return None
+    try:
+        payload = jwt.decode(
+            token,
+            settings.jwt_secret_key,
+            algorithms=[settings.jwt_algorithm],
+        )
+    except JWTError:
+        return None
+    if payload.get("type") != "kakao_reconnect":
+        return None
+    try:
+        return int(payload.get("user_id"))
+    except (TypeError, ValueError):
+        return None
+
+
+def get_reconnect_page_url(token: str) -> str:
+    """외부 전달용 숨김 재연결 페이지 URL을 만든다."""
+    query = urlencode({"token": token})
+    return f"{settings.frontend_base_url.rstrip('/')}/kakao-reconnect?{query}"
 
 
 def create_link_session(

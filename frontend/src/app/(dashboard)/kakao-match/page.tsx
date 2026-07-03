@@ -1,6 +1,7 @@
 "use client"
 
 import { useEffect, useState } from "react"
+import { Copy } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
@@ -57,6 +58,13 @@ interface UserScopeDiagnosis {
   error: string | null
 }
 
+interface KakaoReconnectLinkResponse {
+  user_id: number
+  name: string
+  reconnect_url: string
+  expires_at: string
+}
+
 const ROLE_LABELS: Record<UserRole, string> = {
   team_leader: "팀장",
   chief_secretary: "총괄간사",
@@ -110,6 +118,11 @@ export default function KakaoMatchPage() {
   const [scopeStatus, setScopeStatus] = useState<ScopeStatus | null>(null)
   const [diagnosis, setDiagnosis] = useState<UserScopeDiagnosis | null>(null)
   const [diagnosisLoading, setDiagnosisLoading] = useState(false)
+  const [reconnectLinks, setReconnectLinks] = useState<
+    Record<number, KakaoReconnectLinkResponse>
+  >({})
+  const [reconnectLoadingUserId, setReconnectLoadingUserId] = useState<number | null>(null)
+  const [copiedReconnectUserId, setCopiedReconnectUserId] = useState<number | null>(null)
 
   const fetchUsers = async () => {
     try {
@@ -246,6 +259,30 @@ export default function KakaoMatchPage() {
         (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
         ?? "카카오 로그인 연동 해제 실패"
       alert(msg)
+    }
+  }
+
+  const handleIssueReconnectLink = async (user: UserStatus) => {
+    setReconnectLoadingUserId(user.user_id)
+    setCopiedReconnectUserId(null)
+    try {
+      const { data } = await apiClient.post<KakaoReconnectLinkResponse>(
+        `/api/kakao/users/${user.user_id}/reconnect-link`
+      )
+      setReconnectLinks((prev) => ({ ...prev, [user.user_id]: data }))
+      try {
+        await navigator.clipboard.writeText(data.reconnect_url)
+        setCopiedReconnectUserId(user.user_id)
+      } catch {
+        // 브라우저 권한 문제로 복사가 실패해도 아래 링크 표시로 수동 전달 가능
+      }
+    } catch (err) {
+      const msg =
+        (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
+        ?? "재연결 링크 생성 실패"
+      alert(msg)
+    } finally {
+      setReconnectLoadingUserId(null)
     }
   }
 
@@ -402,19 +439,19 @@ export default function KakaoMatchPage() {
               <TableHead className="w-[110px]">토큰</TableHead>
               <TableHead className="w-[120px]">친구 매칭</TableHead>
               <TableHead className="w-[110px]">일치 확인</TableHead>
-              <TableHead className="w-[260px]">작업</TableHead>
+              <TableHead className="w-[340px]">작업</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {isLoading ? (
               <TableRow>
-                <TableCell colSpan={8} className="h-32 text-center">
+                <TableCell colSpan={9} className="h-32 text-center">
                   로딩 중...
                 </TableCell>
               </TableRow>
             ) : users.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={8} className="h-32 text-center text-muted-foreground">
+                <TableCell colSpan={9} className="h-32 text-center text-muted-foreground">
                   사용자가 없습니다
                 </TableCell>
               </TableRow>
@@ -458,42 +495,67 @@ export default function KakaoMatchPage() {
                     {renderKakaoIdentityBadge(r.kakao_identity_status)}
                   </TableCell>
                   <TableCell>
-                    {isSelf ? (
-                      <span className="text-xs text-muted-foreground">나에게 보내기 자동 사용</span>
-                    ) : (
-                    <div className="flex gap-2">
-                      <Button size="sm" variant="outline" onClick={() => handleOpenMatch(r)}>
-                        {r.kakao_linked ? "변경" : "매칭"}
-                      </Button>
-                      {r.kakao_linked && (
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => handleUnmatch(r.user_id)}
-                        >
-                          해제
-                        </Button>
+                    <div className="space-y-2">
+                      {isSelf ? (
+                        <span className="text-xs text-muted-foreground">
+                          나에게 보내기 자동 사용
+                        </span>
+                      ) : (
+                        <div className="flex flex-wrap gap-2">
+                          <Button size="sm" variant="outline" onClick={() => handleOpenMatch(r)}>
+                            {r.kakao_linked ? "변경" : "매칭"}
+                          </Button>
+                          {r.kakao_linked && (
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => handleUnmatch(r.user_id)}
+                            >
+                              해제
+                            </Button>
+                          )}
+                          {r.kakao_oauth_linked && (
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => handleDiagnose(r)}
+                            >
+                              진단
+                            </Button>
+                          )}
+                          {r.kakao_oauth_linked && (
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => handleUnlinkKakaoOAuth(r.user_id, r.name)}
+                            >
+                              로그인 해제
+                            </Button>
+                          )}
+                        </div>
                       )}
-                      {r.kakao_oauth_linked && (
+                      <div className="flex flex-wrap items-center gap-2">
                         <Button
                           size="sm"
-                          variant="ghost"
-                          onClick={() => handleDiagnose(r)}
+                          variant="outline"
+                          onClick={() => handleIssueReconnectLink(r)}
+                          loading={reconnectLoadingUserId === r.user_id}
+                          loadingText="생성 중..."
+                          title="관리자가 개별 전달할 숨김 카카오 로그인 재연결 링크 생성"
                         >
-                          진단
+                          <Copy />
+                          재연결 링크
                         </Button>
-                      )}
-                      {r.kakao_oauth_linked && (
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => handleUnlinkKakaoOAuth(r.user_id, r.name)}
-                        >
-                          로그인 해제
-                        </Button>
+                        {copiedReconnectUserId === r.user_id && (
+                          <span className="text-xs text-green-700">복사됨</span>
+                        )}
+                      </div>
+                      {reconnectLinks[r.user_id] && (
+                        <code className="block max-w-[320px] break-all rounded border bg-muted px-2 py-1 text-[10px] text-muted-foreground">
+                          {reconnectLinks[r.user_id].reconnect_url}
+                        </code>
                       )}
                     </div>
-                    )}
                   </TableCell>
                 </TableRow>
                 )
