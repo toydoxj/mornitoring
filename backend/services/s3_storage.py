@@ -35,12 +35,52 @@ PHASE_FOLDER_MAP = {
     "supplement_5": "보완검토(5차)",
 }
 
+REVIEW_FILE_CONTENT_TYPE = "application/vnd.ms-excel.sheet.macroEnabled.12"
+
+
+def build_review_file_key(
+    mgmt_no: str,
+    phase: str,
+    original_filename: str,
+    *,
+    filename_stem: str | None = None,
+) -> str:
+    """검토서 S3 key를 생성한다."""
+    today = business_today()
+    suffix = Path(original_filename).suffix
+    phase_folder = PHASE_FOLDER_MAP.get(phase, phase)
+    date_folder = today.strftime("%Y-%m-%d")
+    stem = filename_stem or mgmt_no
+    return f"reviews/{phase_folder}/{date_folder}/{stem}{suffix}"
+
+
+def review_file_exists(s3_key: str | None) -> bool:
+    """S3에 검토서 객체가 실제로 있는지 확인한다."""
+    if not s3_key:
+        return False
+    if not settings.aws_access_key_id:
+        # 로컬/테스트 모드에서는 실제 S3 조회가 불가하므로 DB key 존재를 신뢰한다.
+        return True
+
+    client = _get_s3_client()
+    try:
+        client.head_object(Bucket=settings.s3_bucket_name, Key=s3_key)
+        return True
+    except ClientError as exc:
+        error_code = exc.response.get("Error", {}).get("Code")
+        if error_code in {"NoSuchKey", "NoSuchBucket", "404", "NotFound"}:
+            return False
+        raise
+
 
 def upload_review_file(
     file_path: str | Path,
     mgmt_no: str,
     phase: str,
     original_filename: str,
+    *,
+    target_key: str | None = None,
+    filename_stem: str | None = None,
 ) -> str:
     """검토서 파일을 S3에 업로드
 
@@ -49,11 +89,12 @@ def upload_review_file(
     Returns:
         S3 key (파일 경로)
     """
-    today = business_today()
-    suffix = Path(original_filename).suffix
-    phase_folder = PHASE_FOLDER_MAP.get(phase, phase)
-    date_folder = today.strftime("%Y-%m-%d")
-    s3_key = f"reviews/{phase_folder}/{date_folder}/{mgmt_no}{suffix}"
+    s3_key = target_key or build_review_file_key(
+        mgmt_no,
+        phase,
+        original_filename,
+        filename_stem=filename_stem,
+    )
 
     if not settings.aws_access_key_id:
         # S3 미설정 시 로컬 모드 (key만 반환)
@@ -64,7 +105,7 @@ def upload_review_file(
         str(file_path),
         settings.s3_bucket_name,
         s3_key,
-        ExtraArgs={"ContentType": "application/vnd.ms-excel.sheet.macroEnabled.12"},
+        ExtraArgs={"ContentType": REVIEW_FILE_CONTENT_TYPE},
     )
     return s3_key
 

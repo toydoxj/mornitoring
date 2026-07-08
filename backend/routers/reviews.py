@@ -103,6 +103,7 @@ from services.s3_storage import (
     get_download_url,
     list_review_files,
     delete_file,
+    review_file_exists,
     stream_s3_file_to_writer,
 )
 from services.audit import log_action
@@ -864,6 +865,146 @@ def _resolve_inappropriate_review_needed(
     return bool(requested_value or (stage and stage.inappropriate_review_needed))
 
 
+def _enum_value(value: object) -> str | None:
+    if value is None:
+        return None
+    enum_value = getattr(value, "value", None)
+    return str(enum_value if enum_value is not None else value)
+
+
+def _normalized_text(value: object) -> str:
+    return str(value or "").strip()
+
+
+def _normalized_stage_severity_counts(stage: ReviewStage) -> dict[str, int]:
+    return {
+        label: int(getattr(stage, f"severity_{label.lower()}_count", 0) or 0)
+        for label in SEVERITY_LABELS
+    }
+
+
+def _normalized_extracted_severity_counts(extracted: dict) -> dict[str, int]:
+    counts = extracted.get("severity_counts") or {}
+    return {label: int(counts.get(label, 0) or 0) for label in SEVERITY_LABELS}
+
+
+def _normalized_category_severity_rows(rows: list[dict]) -> dict[tuple[str, str], int]:
+    normalized: dict[tuple[str, str], int] = {}
+    for row in rows:
+        category = _normalized_text(row.get("category"))
+        severity = _normalized_text(row.get("severity")).upper()
+        count = int(row.get("count") or 0)
+        if not category or severity not in SEVERITY_LABELS or count <= 0:
+            continue
+        key = (category, severity)
+        normalized[key] = normalized.get(key, 0) + count
+    return normalized
+
+
+def _stage_category_severity_rows(stage: ReviewStage) -> dict[tuple[str, str], int]:
+    rows: dict[tuple[str, str], int] = {}
+    for summary in stage.severity_summaries:
+        category = _normalized_text(summary.category)
+        severity = _normalized_text(summary.severity).upper()
+        count = int(summary.count or 0)
+        if not category or severity not in SEVERITY_LABELS or count <= 0:
+            continue
+        rows[(category, severity)] = count
+    return rows
+
+
+def _normalized_opinion_entries(
+    rows: list[dict],
+) -> list[tuple[int | None, str, str, str]]:
+    normalized: list[tuple[int | None, str, str, str]] = []
+    for row in rows:
+        category = _normalized_text(row.get("category"))
+        severity = _normalized_text(row.get("severity")).upper()
+        content = clean_opinion_detail_content(row.get("content"))
+        if not category or severity not in SEVERITY_LABELS or not content:
+            continue
+        raw_row_number = row.get("row") or row.get("row_number")
+        row_number = int(raw_row_number) if raw_row_number else None
+        normalized.append((row_number, category, severity, content))
+    return sorted(
+        normalized,
+        key=lambda item: (
+            item[0] is None,
+            item[0] or 0,
+            item[1],
+            item[2],
+            item[3],
+        ),
+    )
+
+
+def _stage_opinion_entries(stage: ReviewStage) -> list[tuple[int | None, str, str, str]]:
+    rows = [
+        {
+            "row_number": detail.row_number,
+            "category": detail.category,
+            "severity": detail.severity,
+            "content": detail.content,
+        }
+        for detail in stage.opinion_details
+    ]
+    return _normalized_opinion_entries(rows)
+
+
+def _is_same_review_submission(stage: ReviewStage, extracted: dict) -> bool:
+    """S3 파일이 지워진 stage에 대해 새 파일이 기존 검토 결과와 같은지 비교."""
+    scalar_pairs = (
+        (_enum_value(stage.result), _enum_value(extracted.get("result"))),
+        (
+            _normalized_text(stage.defect_type_1),
+            _normalized_text(extracted.get("defect_type_1")),
+        ),
+        (
+            _normalized_text(stage.defect_type_2),
+            _normalized_text(extracted.get("defect_type_2")),
+        ),
+        (
+            _normalized_text(stage.defect_type_3),
+            _normalized_text(extracted.get("defect_type_3")),
+        ),
+        (
+            _normalized_text(stage.review_opinion),
+            _normalized_text(extracted.get("review_opinion")),
+        ),
+    )
+    if any(old != new for old, new in scalar_pairs):
+        return False
+
+    if _normalized_stage_severity_counts(
+        stage
+    ) != _normalized_extracted_severity_counts(extracted):
+        return False
+
+    if _stage_category_severity_rows(stage) != _normalized_category_severity_rows(
+        extracted.get("category_severity_counts") or []
+    ):
+        return False
+
+    return _stage_opinion_entries(stage) == _normalized_opinion_entries(
+        extracted.get("opinion_entries") or []
+    )
+
+
+def _review_upload_target(
+    stage: ReviewStage,
+    extracted: dict,
+    mgmt_no: str,
+) -> tuple[str | None, str | None]:
+    """재업로드 시 사용할 기존 key 또는 파일명 stem을 결정한다."""
+    if stage.s3_file_key and review_file_exists(stage.s3_file_key):
+        return stage.s3_file_key, None
+
+    if _is_same_review_submission(stage, extracted):
+        return None, None
+
+    return None, f"{mgmt_no}_re"
+
+
 def _quality_check_base_query(db: Session, current_user: User):
     """검토서 확인 대상 후보가 되는 미처리 상세 의견 기본 쿼리."""
     query = (
@@ -1240,8 +1381,12 @@ async def upload_review(
 
         if stage:
             # 기존 단계 업데이트 (재업로드)
-            # 새 파일 업로드 전에 기존 S3 파일 삭제 (날짜 경로가 다르면 orphan 방지)
             old_s3_key = stage.s3_file_key
+            upload_target_key, upload_filename_stem = _review_upload_target(
+                stage,
+                extracted,
+                mgmt_no,
+            )
             stage.report_submitted_at = business_today()
             stage.reviewer_name = submitted_reviewer_name
             if extracted["result"]:
@@ -1260,7 +1405,14 @@ async def upload_review(
                 stage,
                 inappropriate_review_needed,
             )
-            new_s3_key = upload_review_file(tmp_path, mgmt_no, actual_phase, file.filename)
+            new_s3_key = upload_review_file(
+                tmp_path,
+                mgmt_no,
+                actual_phase,
+                file.filename,
+                target_key=upload_target_key,
+                filename_stem=upload_filename_stem,
+            )
             stage.s3_file_key = new_s3_key
             if old_s3_key and old_s3_key != new_s3_key:
                 try:

@@ -33,6 +33,74 @@ def _fake_xlsx_upload(client, url, headers, mgmt_no, phase):
     )
 
 
+def _extracted_review_data(result=ResultType.PASS, review_opinion=""):
+    return {
+        "result": result,
+        "defect_type_1": "",
+        "defect_type_2": "",
+        "defect_type_3": "",
+        "review_opinion": review_opinion,
+        "severity_counts": {},
+        "category_severity_counts": [],
+        "opinion_entries": [],
+    }
+
+
+def _patch_successful_upload(monkeypatch, extracted, captured, *, s3_exists):
+    def fake_validate_review_file(**kwargs):
+        return ValidationResult(
+            is_valid=True,
+            reviewer_name=kwargs["submitter_name"],
+            extracted_data={},
+        )
+
+    def fake_upload_review_file(
+        _tmp_path,
+        mgmt_no,
+        phase,
+        original_filename,
+        *,
+        target_key=None,
+        filename_stem=None,
+    ):
+        captured["target_key"] = target_key
+        captured["filename_stem"] = filename_stem
+        captured["mgmt_no"] = mgmt_no
+        suffix = ".xlsm" if original_filename.endswith(".xlsm") else ""
+        return (
+            target_key
+            or f"reviews/{phase}/2026-07-08/{filename_stem or mgmt_no}{suffix}"
+        )
+
+    monkeypatch.setattr(
+        reviews_router,
+        "validate_review_file",
+        fake_validate_review_file,
+    )
+    monkeypatch.setattr(
+        reviews_router,
+        "extract_review_data",
+        lambda _tmp_path: extracted,
+    )
+    monkeypatch.setattr(reviews_router, "review_file_exists", lambda _key: s3_exists)
+    monkeypatch.setattr(reviews_router, "upload_review_file", fake_upload_review_file)
+
+
+def _post_review_upload(client, headers, mgmt_no):
+    files = {
+        "file": (
+            f"{mgmt_no}.xlsm",
+            io.BytesIO(b"review file"),
+            "application/vnd.ms-excel.sheet.macroEnabled.12",
+        )
+    }
+    return client.post(
+        f"/api/reviews/upload?mgmt_no={mgmt_no}&phase=preliminary",
+        headers=headers,
+        files=files,
+    )
+
+
 def test_reviewer_cannot_preview_other_building_upload(
     client, make_reviewer, make_building
 ):
@@ -120,6 +188,136 @@ def test_upload_allows_reupload_for_current_submitted_phase(
     assert payload["success"] is False
     assert payload["message"] == "유효성 검증 실패"
     assert "업로드 불가" not in payload["message"]
+
+
+def test_reupload_overwrites_existing_s3_review_file(
+    client, db_session, make_reviewer, make_building, monkeypatch
+):
+    """DB stage와 S3 파일이 모두 있으면 기존 S3 key에 그대로 덮어쓴다."""
+    _, reviewer, headers = make_reviewer()
+    mgmt_no = "2026-9101"
+    building = make_building(reviewer_id=reviewer.id, mgmt_no=mgmt_no)
+    building.current_phase = "preliminary"
+    old_key = "reviews/예비검토/2026-07-01/2026-9101.xlsm"
+    db_session.add(ReviewStage(
+        building_id=building.id,
+        phase=PhaseType.PRELIMINARY,
+        phase_order=0,
+        result=ResultType.PASS,
+        review_opinion="기존",
+        s3_file_key=old_key,
+    ))
+    db_session.commit()
+
+    captured = {}
+    _patch_successful_upload(
+        monkeypatch,
+        _extracted_review_data(result=ResultType.RECALCULATE, review_opinion="변경"),
+        captured,
+        s3_exists=True,
+    )
+
+    res = _post_review_upload(client, headers, mgmt_no)
+
+    assert res.status_code == 200, res.text
+    assert res.json()["success"] is True
+    assert captured["target_key"] == old_key
+    assert captured["filename_stem"] is None
+
+    db_session.expire_all()
+    saved = (
+        db_session.query(ReviewStage)
+        .filter(ReviewStage.building_id == building.id)
+        .one()
+    )
+    assert saved.s3_file_key == old_key
+
+
+def test_reupload_without_s3_file_keeps_default_name_when_review_is_same(
+    client, db_session, make_reviewer, make_building, monkeypatch
+):
+    """DB 내용은 있고 S3 파일이 없을 때, 새 검토서 내용이 같으면 기본 파일명으로 올린다."""
+    _, reviewer, headers = make_reviewer()
+    mgmt_no = "2026-9102"
+    building = make_building(reviewer_id=reviewer.id, mgmt_no=mgmt_no)
+    building.current_phase = "preliminary"
+    db_session.add(ReviewStage(
+        building_id=building.id,
+        phase=PhaseType.PRELIMINARY,
+        phase_order=0,
+        result=ResultType.PASS,
+        review_opinion="동일 의견",
+        s3_file_key=None,
+    ))
+    db_session.commit()
+
+    captured = {}
+    _patch_successful_upload(
+        monkeypatch,
+        _extracted_review_data(result=ResultType.PASS, review_opinion="동일 의견"),
+        captured,
+        s3_exists=False,
+    )
+
+    res = _post_review_upload(client, headers, mgmt_no)
+
+    assert res.status_code == 200, res.text
+    assert res.json()["success"] is True
+    assert captured["target_key"] is None
+    assert captured["filename_stem"] is None
+
+    db_session.expire_all()
+    saved = (
+        db_session.query(ReviewStage)
+        .filter(ReviewStage.building_id == building.id)
+        .one()
+    )
+    assert saved.s3_file_key.endswith(f"/{mgmt_no}.xlsm")
+
+
+def test_reupload_without_s3_file_uses_re_name_when_review_differs(
+    client, db_session, make_reviewer, make_building, monkeypatch
+):
+    """DB 내용은 있고 S3 파일이 없을 때, 새 검토서 내용이 다르면 _re 파일명으로 올린다."""
+    _, reviewer, headers = make_reviewer()
+    mgmt_no = "2026-9103"
+    building = make_building(reviewer_id=reviewer.id, mgmt_no=mgmt_no)
+    building.current_phase = "preliminary"
+    db_session.add(ReviewStage(
+        building_id=building.id,
+        phase=PhaseType.PRELIMINARY,
+        phase_order=0,
+        result=ResultType.PASS,
+        review_opinion="기존 의견",
+        s3_file_key=None,
+    ))
+    db_session.commit()
+
+    captured = {}
+    _patch_successful_upload(
+        monkeypatch,
+        _extracted_review_data(
+            result=ResultType.RECALCULATE,
+            review_opinion="변경 의견",
+        ),
+        captured,
+        s3_exists=False,
+    )
+
+    res = _post_review_upload(client, headers, mgmt_no)
+
+    assert res.status_code == 200, res.text
+    assert res.json()["success"] is True
+    assert captured["target_key"] is None
+    assert captured["filename_stem"] == f"{mgmt_no}_re"
+
+    db_session.expire_all()
+    saved = (
+        db_session.query(ReviewStage)
+        .filter(ReviewStage.building_id == building.id)
+        .one()
+    )
+    assert saved.s3_file_key.endswith(f"/{mgmt_no}_re.xlsm")
 
 
 def test_chief_secretary_upload_uses_assigned_reviewer_name(
