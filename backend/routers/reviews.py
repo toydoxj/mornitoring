@@ -951,6 +951,27 @@ def _stage_opinion_entries(stage: ReviewStage) -> list[tuple[int | None, str, st
     return _normalized_opinion_entries(rows)
 
 
+def _stage_has_review_content(stage: ReviewStage) -> bool:
+    """해당 단계에 기존 검토서에서 저장된 내용이 있는지 확인한다."""
+    if _enum_value(stage.result):
+        return True
+    if any(
+        _normalized_text(value)
+        for value in (
+            stage.defect_type_1,
+            stage.defect_type_2,
+            stage.defect_type_3,
+            stage.review_opinion,
+        )
+    ):
+        return True
+    if any(_normalized_stage_severity_counts(stage).values()):
+        return True
+    if _stage_category_severity_rows(stage):
+        return True
+    return bool(_stage_opinion_entries(stage))
+
+
 def _is_same_review_submission(stage: ReviewStage, extracted: dict) -> bool:
     """S3 파일이 지워진 stage에 대해 새 파일이 기존 검토 결과와 같은지 비교."""
     scalar_pairs = (
@@ -998,6 +1019,9 @@ def _review_upload_target(
     """재업로드 시 사용할 기존 key 또는 파일명 stem을 결정한다."""
     if stage.s3_file_key and review_file_exists(stage.s3_file_key):
         return stage.s3_file_key, None
+
+    if not _stage_has_review_content(stage):
+        return None, None
 
     if _is_same_review_submission(stage, extracted):
         return None, None

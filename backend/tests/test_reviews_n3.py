@@ -275,6 +275,49 @@ def test_reupload_without_s3_file_keeps_default_name_when_review_is_same(
     assert saved.s3_file_key.endswith(f"/{mgmt_no}.xlsm")
 
 
+def test_reupload_without_stage_content_keeps_default_name(
+    client, db_session, make_reviewer, make_building, monkeypatch
+):
+    """해당 단계에 기존 검토서 내용이 없으면 S3 파일이 없어도 기본 파일명으로 올린다."""
+    _, reviewer, headers = make_reviewer()
+    mgmt_no = "2026-9104"
+    building = make_building(reviewer_id=reviewer.id, mgmt_no=mgmt_no)
+    building.current_phase = "preliminary"
+    db_session.add(ReviewStage(
+        building_id=building.id,
+        phase=PhaseType.PRELIMINARY,
+        phase_order=0,
+        s3_file_key="reviews/예비검토/2026-07-01/2026-9104.xlsm",
+    ))
+    db_session.commit()
+
+    captured = {}
+    _patch_successful_upload(
+        monkeypatch,
+        _extracted_review_data(
+            result=ResultType.RECALCULATE,
+            review_opinion="신규 검토 의견",
+        ),
+        captured,
+        s3_exists=False,
+    )
+
+    res = _post_review_upload(client, headers, mgmt_no)
+
+    assert res.status_code == 200, res.text
+    assert res.json()["success"] is True
+    assert captured["target_key"] is None
+    assert captured["filename_stem"] is None
+
+    db_session.expire_all()
+    saved = (
+        db_session.query(ReviewStage)
+        .filter(ReviewStage.building_id == building.id)
+        .one()
+    )
+    assert saved.s3_file_key.endswith(f"/{mgmt_no}.xlsm")
+
+
 def test_reupload_without_s3_file_uses_re_name_when_review_differs(
     client, db_session, make_reviewer, make_building, monkeypatch
 ):
