@@ -46,6 +46,15 @@ frontend/ (Next.js)  ──HTTP/JSON──→  backend/ (FastAPI)
                                    PostgreSQL + S3
 ```
 
+## 배포 확인
+
+- 프론트엔드: Vercel, 운영 도메인 `https://ksea-m.vercel.app`, `https://moni.ksea.or.kr`
+- 백엔드: Render, 실제 운영 API `https://monitoring-backend-sg.onrender.com`
+- 오래된 문서의 `https://mornitoring-api.onrender.com`는 현재 운영 헬스체크 기준으로 사용하지 않는다.
+- 배포 전 dirty worktree에서 사용자 변경을 섞지 말고, 필요한 경우 `origin/main` 기준 임시 worktree에서 배포 커밋을 만든다.
+- 배포 후 GitHub Backend CI / Frontend CI, Vercel production READY, 백엔드 `/api/health` 200을 확인한다.
+- 반복 배포/검증 절차는 로컬 Codex 스킬 `mornitoring-deploy-verify`를 사용한다.
+
 ### 백엔드 구조
 - `routers/` — API 엔드포인트 (auth, users, buildings). 역할 기반 접근 제어는 `routers/auth.py`의 `require_roles()` 의존성으로 처리
 - `models/` — SQLAlchemy ORM 모델. `Building`은 통합관리대장 A~AD열, `ReviewStage`는 예비검토~N차 보완 단계를 1:N으로 관리
