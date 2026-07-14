@@ -81,20 +81,27 @@ def test_compare_supplement_phase_with_db_detects_match_and_mismatch(
     result = compare_supplement_phase_with_db(path, db_session, current_user=user)
 
     assert result["total_rows"] == 5
-    assert result["matched"] == 2
-    assert result["mismatched"] == 1
-    assert result["missing_db"] == 2
-    assert result["final_result_matched"] == 2
-    assert result["final_result_mismatched"] == 1
+    # 단계 비교: CW 명기 행(0001·0002·0004)은 엑셀 단계가 completed로 바뀌어
+    # DB completed(0004)만 일치, supplement 단계(0001·0002)는 불일치가 된다.
+    assert result["phase_compare"]["matched"] == 1
+    assert result["phase_compare"]["mismatched"] == 2
+    assert result["phase_compare"]["missing_db"] == 2
+    # 판정 비교: 0001·0004 일치, 0002 불일치
+    assert result["final_result_compare"]["matched"] == 2
+    assert result["final_result_compare"]["mismatched"] == 1
 
     items = {item["mgmt_no"]: item for item in result["items"]}
-    assert items["2026-0001"]["status"] == "matched"
-    assert items["2026-0001"]["excel_phase"] == "supplement_2_received"
-    assert items["2026-0001"]["evidence_column"] == "U"
+    # 0001: CW="적합" → 엑셀 단계 completed, 근거는 CW열. DB는 supplement_2_received → 단계 불일치, 판정 일치
+    assert items["2026-0001"]["cw_completed"] is True
+    assert items["2026-0001"]["status"] == "mismatch"
+    assert items["2026-0001"]["excel_phase"] == "completed"
+    assert items["2026-0001"]["evidence_column"] == "CW"
+    assert items["2026-0001"]["final_result_status"] == "matched"
     assert items["2026-0001"]["reviewer_name"] == "검토자1"
 
+    # 0002: CW="부적합" → 엑셀 단계 completed. DB는 supplement_1_received → 단계 불일치, 판정도 불일치
     assert items["2026-0002"]["status"] == "mismatch"
-    assert items["2026-0002"]["excel_phase"] == "supplement_1"
+    assert items["2026-0002"]["excel_phase"] == "completed"
     assert items["2026-0002"]["db_phase"] == "supplement_1_received"
     assert items["2026-0002"]["phase_direction"] == "excel_ahead"
     assert items["2026-0002"]["final_result_status"] == "mismatch"
@@ -103,10 +110,13 @@ def test_compare_supplement_phase_with_db_detects_match_and_mismatch(
 
     assert items["2026-9999"]["status"] == "missing_db"
 
-    assert items["2026-0004"]["status"] == "completed_final_matched"
+    # 0004: CW="부적합"(=DB fail_simple_error) → 엑셀 단계 completed, DB도 completed → 단계·판정 모두 일치
+    assert items["2026-0004"]["status"] == "matched"
     assert items["2026-0004"]["matched"] is True
+    assert items["2026-0004"]["cw_completed"] is True
     assert items["2026-0004"]["db_phase"] == "completed"
-    assert items["2026-0004"]["excel_phase"] == "supplement_1"
+    assert items["2026-0004"]["excel_phase"] == "completed"
+    assert items["2026-0004"]["final_result_status"] == "matched"
     assert items["2026-0004"]["excel_final_result"] == "fail_simple_error"
 
 
@@ -143,7 +153,7 @@ def test_phase_compare_endpoint_returns_summary(
 
     assert response.status_code == 200
     data = response.json()
-    assert data["matched"] == 1
+    assert data["phase_compare"]["matched"] == 1
     assert data["items"][0]["mgmt_no"] == "2026-0101"
     assert data["items"][0]["status"] == "matched"
     assert data["items"][0]["final_result_status"] == "not_checked"
@@ -265,3 +275,74 @@ def test_parse_final_result_maps_six_categories():
     assert _parse_final_result("차수이관") is None
     assert _parse_final_result("재보완(3차수 이관)") is None
     assert _parse_final_result("재보완\n(3차수 이관)") is None
+    # 6분류에 없는 값은 원문 fallback 없이 None (잠재 결함 수정)
+    assert _parse_final_result("알수없는값") is None
+    assert _parse_final_result("재보완") is None
+
+
+def test_compare_treats_cw_result_as_completed_and_falls_back_on_reamendment(
+    db_session,
+    make_user,
+    make_building,
+    tmp_path,
+):
+    user, _ = make_user(UserRole.CHIEF_SECRETARY)
+    # CW 최종판정 명기 + 보완대장 3차 제출 → 엑셀 단계는 completed (제출 열 무시)
+    cw_done = make_building(mgmt_no="2026-1001")
+    cw_done.current_phase = "supplement_3"
+    cw_done.final_result = "pass_supplement"
+    # 재보완 이관 행 → CW 파싱 None, 엑셀 단계는 보완대장 제출 열 기준
+    reamend = make_building(mgmt_no="2026-1002")
+    reamend.current_phase = "supplement_1_received"
+    reamend.final_result = None
+    # CW 미기재 → 기존 동작 유지
+    plain = make_building(mgmt_no="2026-1003")
+    plain.current_phase = "supplement_1"
+    plain.final_result = None
+    db_session.commit()
+
+    path = tmp_path / "cw_rule.xlsx"
+    _make_supplement_workbook(
+        path,
+        [
+            {
+                "A": "2026-1001",
+                "S": date(2026, 4, 1),
+                "AV": date(2026, 4, 5),
+                "U": date(2026, 4, 10),
+                "BD": date(2026, 4, 15),
+                "W": date(2026, 4, 20),
+                "BL": date(2026, 4, 25),
+            },
+            {"A": "2026-1002", "S": date(2026, 4, 1)},
+            {"A": "2026-1003", "S": date(2026, 4, 1), "AV": date(2026, 4, 5)},
+        ],
+        management_rows=[
+            {"A": "2026-1001", "CW": "보완적합"},
+            {"A": "2026-1002", "CW": "재보완(3차수 이관)"},
+        ],
+    )
+
+    result = compare_supplement_phase_with_db(path, db_session, current_user=user)
+    items = {item["mgmt_no"]: item for item in result["items"]}
+
+    # 2026-1001: CW 완료 → 3차 제출 열 무시하고 엑셀 단계 completed, 근거는 CW열
+    assert items["2026-1001"]["cw_completed"] is True
+    assert items["2026-1001"]["excel_phase"] == "completed"
+    assert items["2026-1001"]["status"] == "mismatch"  # DB는 supplement_3
+    assert items["2026-1001"]["excel_final_result"] == "pass_supplement"
+    assert items["2026-1001"]["final_result_status"] == "matched"
+    assert items["2026-1001"]["evidence_column"] == "CW"
+
+    # 2026-1002: 재보완 이관 → CW 파싱 None, 엑셀 단계는 제출 열 기준
+    assert items["2026-1002"]["cw_completed"] is False
+    assert items["2026-1002"]["excel_phase"] == "supplement_1_received"
+    assert items["2026-1002"]["status"] == "matched"  # DB도 supplement_1_received
+    assert items["2026-1002"]["excel_final_result"] is None
+    assert items["2026-1002"]["final_result_status"] == "excel_final_result_missing"
+
+    # 2026-1003: CW 미기재 → 기존 동작 (제출 열 기준 supplement_1)
+    assert items["2026-1003"]["cw_completed"] is False
+    assert items["2026-1003"]["excel_phase"] == "supplement_1"
+    assert items["2026-1003"]["status"] == "matched"
+    assert items["2026-1003"]["final_result_status"] == "not_checked"

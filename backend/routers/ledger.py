@@ -64,13 +64,13 @@ class LedgerPhaseCompareItem(BaseModel):
     final_result_column: str | None = None
     status: Literal[
         "matched",
-        "completed_final_matched",
         "mismatch",
         "missing_db",
         "excel_phase_missing",
         "not_checked",
     ]
     matched: bool
+    cw_completed: bool
     phase_gap: int | None = None
     phase_direction: Literal["same", "db_ahead", "excel_ahead", "unknown"]
     evidence_round: int | None = None
@@ -80,20 +80,29 @@ class LedgerPhaseCompareItem(BaseModel):
     rounds: list[LedgerSupplementRoundStatus]
 
 
+class LedgerPhaseCompareSummary(BaseModel):
+    matched: int
+    mismatched: int
+    missing_db: int
+    compared: int
+
+
+class LedgerStageCompareSummary(LedgerPhaseCompareSummary):
+    excel_phase_missing: int
+
+
+class LedgerFinalResultCompareSummary(LedgerPhaseCompareSummary):
+    excel_final_result_missing: int
+
+
 class LedgerPhaseCompareResponse(BaseModel):
     sheet: str
     management_sheet: str | None = None
     total_rows: int
-    compared: int
-    matched: int
-    mismatched: int
-    missing_db: int
-    excel_phase_missing: int
-    final_result_compared: int
-    final_result_matched: int
-    final_result_mismatched: int
-    final_result_missing_db: int
-    excel_final_result_missing: int
+    # 단계 비교(엑셀 단계 vs DB current_phase)
+    phase_compare: LedgerStageCompareSummary
+    # 판정 비교(엑셀 CW 파싱 vs DB final_result)
+    final_result_compare: LedgerFinalResultCompareSummary
     items: list[LedgerPhaseCompareItem]
 
 

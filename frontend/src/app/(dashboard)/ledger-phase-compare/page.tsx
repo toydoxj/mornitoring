@@ -30,7 +30,6 @@ import { useAuthStore } from "@/stores/authStore"
 
 type CompareStatus =
   | "matched"
-  | "completed_final_matched"
   | "mismatch"
   | "missing_db"
   | "excel_phase_missing"
@@ -71,6 +70,7 @@ interface LedgerPhaseCompareItem {
   final_result_column: string | null
   status: CompareStatus
   matched: boolean
+  cw_completed: boolean
   phase_gap: number | null
   phase_direction: PhaseDirection
   evidence_round: number | null
@@ -80,20 +80,30 @@ interface LedgerPhaseCompareItem {
   rounds: SupplementRoundStatus[]
 }
 
-interface LedgerPhaseCompareResponse {
-  sheet: string
-  management_sheet: string | null
-  total_rows: number
-  compared: number
+interface StageCompareSummary {
   matched: number
   mismatched: number
   missing_db: number
   excel_phase_missing: number
-  final_result_compared: number
-  final_result_matched: number
-  final_result_mismatched: number
-  final_result_missing_db: number
+  compared: number
+}
+
+interface FinalResultCompareSummary {
+  matched: number
+  mismatched: number
+  missing_db: number
   excel_final_result_missing: number
+  compared: number
+}
+
+interface LedgerPhaseCompareResponse {
+  sheet: string
+  management_sheet: string | null
+  total_rows: number
+  // 단계 비교(엑셀 단계 vs DB current_phase)
+  phase_compare: StageCompareSummary
+  // 판정 비교(엑셀 CW 파싱 vs DB final_result)
+  final_result_compare: FinalResultCompareSummary
   items: LedgerPhaseCompareItem[]
 }
 
@@ -112,7 +122,6 @@ type ErrorWithResponse = {
 
 const STATUS_LABELS: Record<CompareStatus, string> = {
   matched: "일치",
-  completed_final_matched: "완료 일치",
   mismatch: "불일치",
   missing_db: "DB 없음",
   excel_phase_missing: "판단 불가",
@@ -152,7 +161,7 @@ function getFinalResultLabel(result: string | null) {
 }
 
 function getStatusVariant(status: CompareStatus): "default" | "secondary" | "destructive" | "outline" {
-  if (status === "matched" || status === "completed_final_matched") return "default"
+  if (status === "matched") return "default"
   if (status === "mismatch") return "destructive"
   if (status === "missing_db") return "secondary"
   return "outline"
@@ -192,7 +201,6 @@ function getRowClass(item: LedgerPhaseCompareItem) {
 }
 
 function getDirectionLabel(item: LedgerPhaseCompareItem) {
-  if (item.status === "completed_final_matched") return "최종판정 일치"
   if (item.phase_direction === "same") return "동일"
   if (item.phase_gap === null) return "-"
   const step = Math.abs(item.phase_gap)
@@ -321,12 +329,12 @@ export default function LedgerPhaseComparePage() {
       )
       setResult(data)
       const hasIssues =
-        data.mismatched +
-        data.missing_db +
-        data.excel_phase_missing +
-        data.final_result_mismatched +
-        data.final_result_missing_db +
-        data.excel_final_result_missing >
+        data.phase_compare.mismatched +
+        data.phase_compare.missing_db +
+        data.phase_compare.excel_phase_missing +
+        data.final_result_compare.mismatched +
+        data.final_result_compare.missing_db +
+        data.final_result_compare.excel_final_result_missing >
         0
       setViewMode(hasIssues ? "issues" : "all")
     } catch (err) {
@@ -348,7 +356,7 @@ export default function LedgerPhaseComparePage() {
   const handleApplyFinalResults = async () => {
     if (!file || !result) return
     const confirmed = window.confirm(
-      `최종판정 불일치 ${result.final_result_mismatched.toLocaleString()}건을 엑셀 CW열 기준으로 업데이트할까요?`
+      `최종판정 불일치 ${result.final_result_compare.mismatched.toLocaleString()}건을 엑셀 CW열 기준으로 업데이트할까요?`
     )
     if (!confirmed) return
 
@@ -418,7 +426,7 @@ export default function LedgerPhaseComparePage() {
             disabled={
               !file ||
               !result ||
-              result.final_result_mismatched === 0 ||
+              result.final_result_compare.mismatched === 0 ||
               !canApplyFinalResults
             }
             title={!canApplyFinalResults ? "총괄간사만 업데이트할 수 있습니다." : undefined}
@@ -459,17 +467,36 @@ export default function LedgerPhaseComparePage() {
 
       {result && (
         <>
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-6">
-            <SummaryStat label="전체" value={result.total_rows} tone="neutral" />
-            <SummaryStat label="단계 일치" value={result.matched} tone="green" />
-            <SummaryStat label="단계 불일치" value={result.mismatched} tone="red" />
-            <SummaryStat label="DB 없음" value={result.missing_db} tone="amber" />
-            <SummaryStat label="판단 불가" value={result.excel_phase_missing} tone="slate" />
-            <SummaryStat
-              label="최종판정 불일치"
-              value={result.final_result_mismatched}
-              tone="red"
-            />
+          <div className="flex flex-col gap-3">
+            <div>
+              <div className="mb-1.5 flex items-center gap-2 text-xs font-semibold text-muted-foreground">
+                판정 비교 (CW 최종판정 vs DB)
+                <span className="font-normal">전체 {result.total_rows.toLocaleString()}건</span>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+                <SummaryStat label="비교 대상" value={result.final_result_compare.compared} tone="neutral" />
+                <SummaryStat label="일치" value={result.final_result_compare.matched} tone="green" />
+                <SummaryStat label="불일치" value={result.final_result_compare.mismatched} tone="red" />
+                <SummaryStat label="DB 없음" value={result.final_result_compare.missing_db} tone="amber" />
+                <SummaryStat
+                  label="제외/공란"
+                  value={result.final_result_compare.excel_final_result_missing}
+                  tone="slate"
+                />
+              </div>
+            </div>
+            <div>
+              <div className="mb-1.5 text-xs font-semibold text-muted-foreground">
+                단계 비교 (엑셀 단계 vs DB 현재 단계)
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+                <SummaryStat label="비교 대상" value={result.phase_compare.compared} tone="neutral" />
+                <SummaryStat label="일치" value={result.phase_compare.matched} tone="green" />
+                <SummaryStat label="불일치" value={result.phase_compare.mismatched} tone="red" />
+                <SummaryStat label="DB 없음" value={result.phase_compare.missing_db} tone="amber" />
+                <SummaryStat label="판단 불가" value={result.phase_compare.excel_phase_missing} tone="slate" />
+              </div>
+            </div>
           </div>
 
           <div className="flex flex-col gap-3 rounded-lg border bg-white p-3 md:flex-row md:items-center md:justify-between">
@@ -516,8 +543,8 @@ export default function LedgerPhaseComparePage() {
               <Table>
                 <TableHeader className="bg-muted/40">
                   <TableRow>
-                    <TableHead className="w-[92px]">단계</TableHead>
-                    <TableHead className="w-[112px]">최종판정</TableHead>
+                    <TableHead className="w-[92px]">단계 비교</TableHead>
+                    <TableHead className="w-[112px]">판정 비교</TableHead>
                     <TableHead className="w-[64px] text-right">행</TableHead>
                     <TableHead className="w-[120px]">관리번호</TableHead>
                     <TableHead className="min-w-[180px]">건물명</TableHead>

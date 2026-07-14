@@ -273,7 +273,8 @@ def _parse_final_result(val) -> str | None:
     normalized = _normalize_excel_text(text)
     if is_final_result_excluded(normalized):
         return None
-    return FINAL_RESULT_MAP.get(normalized, text)
+    # 6분류에 매핑되지 않는 값(재보완 단독 표기 등)은 유효 최종판정이 아니므로 None.
+    return FINAL_RESULT_MAP.get(normalized)
 
 
 def _find_sheet(wb, preferred_name: str, *required_tokens: str):

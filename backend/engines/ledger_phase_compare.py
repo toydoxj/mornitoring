@@ -140,7 +140,9 @@ def _parse_final_result(value) -> str | None:
     normalized = _normalize_text(text)
     if is_final_result_excluded(normalized):
         return None
-    return FINAL_RESULT_MAP.get(normalized, text)
+    # 6분류에 매핑되지 않는 값(재보완 단독 표기 등)은 유효 최종판정이 아니므로 None.
+    # 원문은 excel_final_result_raw 로 별도 보존된다.
+    return FINAL_RESULT_MAP.get(normalized)
 
 
 def _find_supplement_sheet(workbook):
@@ -255,10 +257,6 @@ def _final_result_status(
     if building.final_result == excel_final_result:
         return "matched"
     return "mismatch"
-
-
-def _should_skip_phase_check(building: Building | None, final_status: str) -> bool:
-    return bool(building and building.current_phase == "completed" and final_status == "matched")
 
 
 def _reviewer_name(building: Building) -> str | None:
@@ -426,63 +424,95 @@ def compare_supplement_phase_with_db(
     )
 
     items: list[dict[str, object]] = []
-    summary = {
-        "total_rows": len(all_mgmt_nos),
+    # 2축 비교: 단계 비교(엑셀 단계 vs DB current_phase)와
+    #           판정 비교(엑셀 CW 파싱 vs DB final_result)를 항상 독립 집계한다.
+    phase_compare = {
         "matched": 0,
         "mismatched": 0,
         "missing_db": 0,
         "excel_phase_missing": 0,
         "compared": 0,
-        "final_result_compared": 0,
-        "final_result_matched": 0,
-        "final_result_mismatched": 0,
-        "final_result_missing_db": 0,
+    }
+    final_result_compare = {
+        "matched": 0,
+        "mismatched": 0,
+        "missing_db": 0,
         "excel_final_result_missing": 0,
+        "compared": 0,
     }
 
     for mgmt_no in all_mgmt_nos:
         row = phase_row_map.get(mgmt_no)
         building = building_map.get(mgmt_no)
-        excel_phase = row["phase"] if row and isinstance(row["phase"], str) else None
-        db_phase = building.current_phase if building else None
-        gap = _phase_gap(db_phase, excel_phase)
-
         final_row = final_result_rows.get(mgmt_no)
         excel_final_result = (
             final_row["excel_final_result"]
             if final_row and isinstance(final_row["excel_final_result"], str)
             else None
         )
+
+        # 판정 비교 (엑셀 CW 파싱 결과 vs DB final_result)
         final_status = _final_result_status(
             building,
             excel_final_result,
             checked=final_row is not None,
         )
         if final_status == "matched":
-            summary["final_result_matched"] += 1
-            summary["final_result_compared"] += 1
+            final_result_compare["matched"] += 1
+            final_result_compare["compared"] += 1
         elif final_status == "mismatch":
-            summary["final_result_mismatched"] += 1
-            summary["final_result_compared"] += 1
+            final_result_compare["mismatched"] += 1
+            final_result_compare["compared"] += 1
         elif final_status == "missing_db":
-            summary["final_result_missing_db"] += 1
+            final_result_compare["missing_db"] += 1
         elif final_status == "excel_final_result_missing":
-            summary["excel_final_result_missing"] += 1
+            final_result_compare["excel_final_result_missing"] += 1
 
-        status = _status_for(building, excel_phase) if row else "not_checked"
-        if status == "mismatch" and _should_skip_phase_check(building, final_status):
-            status = "completed_final_matched"
+        # 규칙 1: CW에 유효 최종판정 6분류가 명기되면 엑셀 단계를 완료로 간주.
+        # 재보완·이관·미기재 등 파싱 실패 행은 보완대장 제출 열 기준(_resolve_excel_phase)을 유지.
+        cw_completed = excel_final_result is not None
+        if cw_completed:
+            excel_phase = "completed"
+        else:
+            excel_phase = row["phase"] if row and isinstance(row["phase"], str) else None
+        db_phase = building.current_phase if building else None
+        gap = _phase_gap(db_phase, excel_phase)
 
-        if status in ("matched", "completed_final_matched"):
-            summary["matched"] += 1
-            summary["compared"] += 1
+        # 단계 비교 (엑셀 단계 vs DB current_phase)
+        # CW 완료 행은 보완대장 행이 없어도 단계 판정 근거가 있으므로 비교 대상에 포함한다.
+        has_phase_source = cw_completed or row is not None
+        status = _status_for(building, excel_phase) if has_phase_source else "not_checked"
+        if status == "matched":
+            phase_compare["matched"] += 1
+            phase_compare["compared"] += 1
         elif status == "mismatch":
-            summary["mismatched"] += 1
-            summary["compared"] += 1
+            phase_compare["mismatched"] += 1
+            phase_compare["compared"] += 1
         elif status == "missing_db":
-            summary["missing_db"] += 1
+            phase_compare["missing_db"] += 1
         elif status == "excel_phase_missing":
-            summary["excel_phase_missing"] += 1
+            phase_compare["excel_phase_missing"] += 1
+
+        # 근거: CW 완료 행은 CW 최종판정을, 그 외는 보완대장 제출 열을 근거로 표시
+        if cw_completed:
+            excel_final_result_raw = (
+                final_row["excel_final_result_raw"]
+                if final_row and isinstance(final_row["excel_final_result_raw"], str)
+                else None
+            )
+            evidence_round = None
+            evidence_column = final_row["final_result_column"] if final_row else FINAL_RESULT_COLUMN
+            evidence_value = excel_final_result_raw
+            evidence_label = (
+                f"CW 최종판정: {excel_final_result_raw}"
+                if excel_final_result_raw
+                else "CW 최종판정"
+            )
+        else:
+            evidence_round = row["evidence_round"] if row else None
+            evidence_column = row["evidence_column"] if row else None
+            evidence_value = row["evidence_value"] if row else None
+            evidence_label = row["evidence_label"] if row else None
 
         items.append(
             {
@@ -501,21 +531,24 @@ def compare_supplement_phase_with_db(
                 "final_result_matched": final_status == "matched" if final_status != "not_checked" else None,
                 "final_result_column": final_row["final_result_column"] if final_row else None,
                 "status": status,
-                "matched": status in ("matched", "completed_final_matched"),
+                "matched": status == "matched",
+                "cw_completed": cw_completed,
                 "phase_gap": gap,
                 "phase_direction": _phase_direction(gap),
-                "evidence_round": row["evidence_round"] if row else None,
-                "evidence_column": row["evidence_column"] if row else None,
-                "evidence_value": row["evidence_value"] if row else None,
-                "evidence_label": row["evidence_label"] if row else None,
+                "evidence_round": evidence_round,
+                "evidence_column": evidence_column,
+                "evidence_value": evidence_value,
+                "evidence_label": evidence_label,
                 "rounds": row["rounds"] if row else [],
             }
         )
 
     return {
-        **summary,
         "sheet": SUPPLEMENT_SHEET_NAME,
         "management_sheet": management_sheet,
+        "total_rows": len(all_mgmt_nos),
+        "phase_compare": phase_compare,
+        "final_result_compare": final_result_compare,
         "items": items,
     }
 

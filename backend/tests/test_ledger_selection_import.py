@@ -1005,3 +1005,6 @@ def test_parse_final_result_maps_six_categories():
     assert _parse_final_result("차수이관") is None
     assert _parse_final_result("재보완(3차수 이관)") is None
     assert _parse_final_result("재보완\n(3차수 이관)") is None
+    # 6분류에 없는 값은 원문 fallback 없이 None (잠재 결함 수정)
+    assert _parse_final_result("알수없는값") is None
+    assert _parse_final_result("재보완") is None
