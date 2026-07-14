@@ -211,11 +211,15 @@ export const PHASE_LABELS: Record<string, string> = {
 }
 
 // 결과 한글 라벨
+// 검토단계 판정(simple_error/recalculate)과 최종판정(final_result) 코드를 함께 담는다.
+// fail 은 레거시 부적합(신규 기입 없음, 기존 데이터 표시용)으로만 유지한다.
 export const RESULT_LABELS: Record<string, string> = {
   pass: "적합",
   pass_supplement: "보완적합",
   simple_error: "단순오류",
   recalculate: "재계산",
+  fail_simple_error: "부적합(단순오류)",
+  fail_recalculate: "부적합(재계산)",
   fail: "부적합",
   fail_no_response: "부적합(미회신)",
   excluded: "대상제외",

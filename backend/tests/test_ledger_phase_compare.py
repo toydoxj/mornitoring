@@ -57,7 +57,7 @@ def test_compare_supplement_phase_with_db_detects_match_and_mismatch(
 
     completed = make_building(mgmt_no="2026-0004")
     completed.current_phase = "completed"
-    completed.final_result = "fail"
+    completed.final_result = "fail_simple_error"
 
     db_session.commit()
 
@@ -98,7 +98,7 @@ def test_compare_supplement_phase_with_db_detects_match_and_mismatch(
     assert items["2026-0002"]["db_phase"] == "supplement_1_received"
     assert items["2026-0002"]["phase_direction"] == "excel_ahead"
     assert items["2026-0002"]["final_result_status"] == "mismatch"
-    assert items["2026-0002"]["excel_final_result"] == "fail"
+    assert items["2026-0002"]["excel_final_result"] == "fail_simple_error"
     assert items["2026-0002"]["final_result_column"] == "CW"
 
     assert items["2026-9999"]["status"] == "missing_db"
@@ -107,7 +107,7 @@ def test_compare_supplement_phase_with_db_detects_match_and_mismatch(
     assert items["2026-0004"]["matched"] is True
     assert items["2026-0004"]["db_phase"] == "completed"
     assert items["2026-0004"]["excel_phase"] == "supplement_1"
-    assert items["2026-0004"]["excel_final_result"] == "fail"
+    assert items["2026-0004"]["excel_final_result"] == "fail_simple_error"
 
 
 def test_phase_compare_endpoint_returns_summary(
@@ -161,7 +161,7 @@ def test_apply_final_results_from_ledger_updates_only_mismatched_final_result(
     building.final_result = "pass"
     matched = make_building(mgmt_no="2026-0202")
     matched.current_phase = "supplement_1"
-    matched.final_result = "fail"
+    matched.final_result = "fail_simple_error"
     transfer = make_building(mgmt_no="2026-0203")
     transfer.current_phase = "preliminary"
     transfer.final_result = None
@@ -194,9 +194,9 @@ def test_apply_final_results_from_ledger_updates_only_mismatched_final_result(
     db_session.refresh(building)
     db_session.refresh(matched)
     db_session.refresh(transfer)
-    assert building.final_result == "fail"
+    assert building.final_result == "fail_simple_error"
     assert building.current_phase == "completed"
-    assert matched.final_result == "fail"
+    assert matched.final_result == "fail_simple_error"
     assert matched.current_phase == "supplement_1"
     assert transfer.final_result is None
     assert transfer.current_phase == "preliminary"
@@ -245,3 +245,23 @@ def test_final_results_apply_endpoint_returns_summary(
     db_session.refresh(building)
     assert building.final_result == "pass_supplement"
     assert building.current_phase == "completed"
+
+
+def test_parse_final_result_maps_six_categories():
+    from engines.ledger_phase_compare import _parse_final_result
+
+    assert _parse_final_result("원적합") == "pass"
+    assert _parse_final_result("적합") == "pass"
+    assert _parse_final_result("보완적합") == "pass_supplement"
+    # 구분 없는 "부적합"은 단순오류로 (정책 결정 1)
+    assert _parse_final_result("부적합") == "fail_simple_error"
+    assert _parse_final_result("부적합(단순오류)") == "fail_simple_error"
+    assert _parse_final_result("부적합\n(단순오류)") == "fail_simple_error"
+    assert _parse_final_result("부적합(재계산)") == "fail_recalculate"
+    assert _parse_final_result("부적합\n(재계산)") == "fail_recalculate"
+    assert _parse_final_result("부적합(미회신)") == "fail_no_response"
+    assert _parse_final_result("대상제외") == "excluded"
+    # 이관 계열은 최종 완료가 아니므로 제외 (None)
+    assert _parse_final_result("차수이관") is None
+    assert _parse_final_result("재보완(3차수 이관)") is None
+    assert _parse_final_result("재보완\n(3차수 이관)") is None

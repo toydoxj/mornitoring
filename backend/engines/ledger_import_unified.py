@@ -19,6 +19,7 @@ from models.review_stage import ReviewStage, PhaseType, ResultType
 from services.audit import log_action
 from services.phase_transition import transition_phase
 from engines.column_mapping import col_letter_to_index
+from engines.final_result_map import FINAL_RESULT_MAP, is_final_result_excluded
 
 DATA_START_ROW = 5
 GROUP_HEADER_ROW = 3
@@ -135,16 +136,8 @@ RESULT_LABELS = {
     ResultType.RECALCULATE: "재계산",
 }
 
-FINAL_RESULT_MAP = {
-    "원적합": "pass",
-    "적합": "pass",
-    "보완적합": "pass_supplement",
-    "부적합": "fail",
-    "부적합미회신": "fail_no_response",
-    "부적합(미회신)": "fail_no_response",
-    "대상제외": "excluded",
-}
-FINAL_RESULT_EXCLUDED_VALUES = {"차수이관"}
+# 최종판정 매핑·제외 규칙은 engines/final_result_map.py 공용 상수를 사용한다
+# (ledger_phase_compare.py 와 항상 일치해야 하므로 중복 정의 금지).
 
 
 def _cell_value(row: tuple, col_letter: str):
@@ -278,7 +271,7 @@ def _parse_final_result(val) -> str | None:
     if _is_blank_marker(text):
         return None
     normalized = _normalize_excel_text(text)
-    if normalized in FINAL_RESULT_EXCLUDED_VALUES:
+    if is_final_result_excluded(normalized):
         return None
     return FINAL_RESULT_MAP.get(normalized, text)
 

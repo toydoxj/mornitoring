@@ -37,6 +37,12 @@ const RESULT_VARIANT: Record<string, "default" | "secondary" | "destructive" | "
   pass_supplement: "default",
   simple_error: "secondary",
   recalculate: "destructive",
+  // 최종판정(final_result) 코드
+  fail_simple_error: "destructive",
+  fail_recalculate: "destructive",
+  fail_no_response: "destructive",
+  fail: "destructive", // 레거시
+  excluded: "secondary",
 }
 
 const SUBMITTED_PHASES = new Set([

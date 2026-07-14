@@ -107,6 +107,19 @@ RESULT_LABELS = {
     "minor": "경미",
 }
 
+# 최종판정(final_result) 코드 → CW열 한글 표기 역매핑.
+# 실물 관리대장 CW열은 코드 값이 아닌 한글 라벨(원적합/보완적합/부적합(단순오류)…)을
+# 사용하므로 export 시에도 한글 라벨로 기록한다. 매핑에 없는 값은 원본 그대로 둔다.
+FINAL_RESULT_EXPORT_LABELS = {
+    "pass": "원적합",
+    "pass_supplement": "보완적합",
+    "fail_simple_error": "부적합(단순오류)",
+    "fail_recalculate": "부적합(재계산)",
+    "fail_no_response": "부적합(미회신)",
+    "excluded": "대상제외",
+    "fail": "부적합",  # 레거시
+}
+
 
 def _format_value(val, field_name: str):
     """DB 값을 엑셀 출력용으로 변환"""
@@ -236,9 +249,15 @@ def export_ledger(db: Session) -> BytesIO:
         elif building.reviewer and building.reviewer.user:
             ws.cell(row=row_num, column=2, value=building.reviewer.user.name)
 
-        # 최종 판정
+        # 최종 판정 (코드 → 한글 라벨)
         if building.final_result:
-            ws.cell(row=row_num, column=final_col_idx, value=building.final_result)
+            ws.cell(
+                row=row_num,
+                column=final_col_idx,
+                value=FINAL_RESULT_EXPORT_LABELS.get(
+                    building.final_result, building.final_result
+                ),
+            )
 
         # 검토 단계 데이터 (일괄 조회에서 가져오기)
         stages = stages_by_building.get(building.id, [])

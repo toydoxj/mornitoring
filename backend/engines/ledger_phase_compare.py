@@ -13,6 +13,7 @@ from models.reviewer import Reviewer
 from models.user import User
 from services.audit import log_action
 from services.scope import building_visibility_filter
+from engines.final_result_map import FINAL_RESULT_MAP, is_final_result_excluded
 
 SUPPLEMENT_SHEET_NAME = "통합 보완대장"
 MANAGEMENT_SHEET_NAME = "통합 관리대장"
@@ -74,15 +75,8 @@ SUPPLEMENT_PHASE_COLUMNS = (
     },
 )
 
-FINAL_RESULT_MAP = {
-    "원적합": "pass",
-    "적합": "pass",
-    "보완적합": "pass_supplement",
-    "부적합": "fail",
-    "부적합미회신": "fail_no_response",
-    "대상제외": "excluded",
-}
-FINAL_RESULT_EXCLUDED_VALUES = {"차수이관"}
+# 최종판정 매핑·제외 규칙은 engines/final_result_map.py 공용 상수를 사용한다
+# (ledger_import_unified.py 와 항상 일치해야 하므로 중복 정의 금지).
 
 
 def _normalize_text(value) -> str:
@@ -144,7 +138,7 @@ def _parse_final_result(value) -> str | None:
     if text is None:
         return None
     normalized = _normalize_text(text)
-    if normalized in FINAL_RESULT_EXCLUDED_VALUES:
+    if is_final_result_excluded(normalized):
         return None
     return FINAL_RESULT_MAP.get(normalized, text)
 

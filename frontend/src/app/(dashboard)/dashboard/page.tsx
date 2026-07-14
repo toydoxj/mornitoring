@@ -31,9 +31,11 @@ interface ReviewerStat {
 interface FinalCounts {
   pass: number
   pass_supplement: number
-  fail: number
+  fail_simple_error: number
+  fail_recalculate: number
   fail_no_response: number
   excluded: number
+  fail: number // 레거시 부적합 (신규 기입 없음, 기존 데이터 표시용)
 }
 
 interface InquiryCounts {
@@ -748,7 +750,13 @@ function SubmittedBucket({
 
 function FinalBucket({ counts }: { counts: FinalCounts }) {
   const total =
-    counts.pass + counts.pass_supplement + counts.fail + counts.fail_no_response + counts.excluded
+    counts.pass +
+    counts.pass_supplement +
+    counts.fail_simple_error +
+    counts.fail_recalculate +
+    counts.fail_no_response +
+    counts.excluded +
+    counts.fail
   return (
     <div className="relative overflow-hidden rounded-xl border bg-white p-4 transition-all hover:shadow-md before:absolute before:left-0 before:top-0 before:h-full before:w-1 before:bg-violet-500">
       <p className="text-xs font-medium text-muted-foreground">최종 완료</p>
@@ -761,9 +769,13 @@ function FinalBucket({ counts }: { counts: FinalCounts }) {
       <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
         <span>적합 <strong className="text-emerald-700">{counts.pass}</strong></span>
         <span>보완적합 <strong className="text-blue-700">{counts.pass_supplement}</strong></span>
-        <span>부적합 <strong className="text-red-700">{counts.fail}</strong></span>
+        <span>부적합(단순오류) <strong className="text-red-700">{counts.fail_simple_error}</strong></span>
+        <span>부적합(재계산) <strong className="text-red-700">{counts.fail_recalculate}</strong></span>
         <span>부적합(미회신) <strong className="text-red-700">{counts.fail_no_response}</strong></span>
         <span>대상제외 <strong className="text-slate-700">{counts.excluded}</strong></span>
+        {counts.fail > 0 && (
+          <span>부적합(기존) <strong className="text-red-700">{counts.fail}</strong></span>
+        )}
       </div>
     </div>
   )
@@ -997,9 +1009,11 @@ function FlowStages({ stats }: { stats: DashboardStats }) {
   const finalTotal =
     stats.final_counts.pass +
     stats.final_counts.pass_supplement +
-    stats.final_counts.fail +
+    stats.final_counts.fail_simple_error +
+    stats.final_counts.fail_recalculate +
     stats.final_counts.fail_no_response +
-    stats.final_counts.excluded
+    stats.final_counts.excluded +
+    stats.final_counts.fail
 
   return (
     <div className="flex h-full flex-col items-stretch gap-3 lg:flex-row lg:items-stretch">
@@ -1037,9 +1051,13 @@ function FlowStages({ stats }: { stats: DashboardStats }) {
         items={[
           { label: "적합", value: stats.final_counts.pass },
           { label: "보완적합", value: stats.final_counts.pass_supplement },
-          { label: "부적합", value: stats.final_counts.fail },
+          { label: "부적합(단순오류)", value: stats.final_counts.fail_simple_error },
+          { label: "부적합(재계산)", value: stats.final_counts.fail_recalculate },
           { label: "부적합(미회신)", value: stats.final_counts.fail_no_response },
           { label: "대상제외", value: stats.final_counts.excluded },
+          ...(stats.final_counts.fail > 0
+            ? [{ label: "부적합(기존)", value: stats.final_counts.fail }]
+            : []),
         ]}
       />
     </div>

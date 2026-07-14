@@ -543,7 +543,7 @@ def get_stats(
     total = totals_row.total or 0
     completed = totals_row.completed or 0
 
-    # 1-1) 최종 판정 5분류 — 전체 현황 카드용
+    # 1-1) 최종 판정 6분류(+레거시) — 전체 현황 카드용
     final_rows = (
         _scoped(
             db.query(Building.final_result, sa_func.count(Building.id))
@@ -553,11 +553,13 @@ def get_stats(
         .all()
     )
     final_counts = {
-        "pass": 0,
-        "pass_supplement": 0,
-        "fail": 0,
-        "fail_no_response": 0,
-        "excluded": 0,
+        "pass": 0,               # 적합
+        "pass_supplement": 0,    # 보완적합
+        "fail_simple_error": 0,  # 부적합(단순오류)
+        "fail_recalculate": 0,   # 부적합(재계산)
+        "fail_no_response": 0,   # 부적합(미회신)
+        "excluded": 0,           # 대상제외
+        "fail": 0,               # 레거시 부적합 (신규 기입 없음, 기존 데이터 집계용)
     }
     for key, count in final_rows:
         if key in final_counts:
@@ -1415,7 +1417,8 @@ def get_stats(
         "deleted_submitted_reports_supplement": deleted_submitted_reports_supplement,
         "due_date_submission_stats": due_date_submission_stats,
         "completed": completed,
-        # 최종 판정 5분류 (적합/보완적합/부적합/부적합(미회신)/대상제외)
+        # 최종 판정 6분류(+레거시)
+        # (적합/보완적합/부적합(단순오류)/부적합(재계산)/부적합(미회신)/대상제외 + 레거시 부적합)
         "final_counts": final_counts,
         # 문의사항 상태별 건수 (전체)
         "inquiry_counts": inquiry_counts,
@@ -1923,9 +1926,11 @@ def my_stats(
     final_counts = {
         "pass": 0,               # 적합
         "pass_supplement": 0,    # 보완적합
-        "fail": 0,               # 부적합
+        "fail_simple_error": 0,  # 부적합(단순오류)
+        "fail_recalculate": 0,   # 부적합(재계산)
         "fail_no_response": 0,   # 부적합(미회신)
         "excluded": 0,           # 대상제외
+        "fail": 0,               # 레거시 부적합 (신규 기입 없음, 기존 데이터 집계용)
     }
     reviewer_filter = _my_assignment_filter(db, current_user)
     summary = (

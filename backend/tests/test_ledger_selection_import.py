@@ -549,7 +549,7 @@ def test_import_ledger_unified_finalizes_from_result_report_and_warns_preliminar
     db_session.refresh(building)
     db_session.refresh(stage)
     assert building.current_phase == "completed"
-    assert building.final_result == "fail"
+    assert building.final_result == "fail_simple_error"
     assert stage.result == ResultType.RECALCULATE
     assert stage.review_opinion == "변경된 예비 검토의견"
     assert stage.stage_remarks == "판정의견: 재계산\n관리원 입력 예비판정 결과: 보완"
@@ -701,7 +701,7 @@ def test_import_ledger_unified_checks_only_updates_checked_fields(
     db_session.refresh(supplement)
     assert building.building_type == "기존유형"
     assert building.current_phase == "completed"
-    assert building.final_result == "fail"
+    assert building.final_result == "fail_simple_error"
     assert preliminary.result == ResultType.RECALCULATE
     assert preliminary.review_opinion == "기존 예비 의견"
     assert supplement.result == ResultType.SIMPLE_ERROR
@@ -839,7 +839,7 @@ def test_apply_checks_endpoint_updates_only_checked_fields(
     db_session.refresh(stage)
     assert building.building_type == "기존유형"
     assert building.current_phase == "completed"
-    assert building.final_result == "fail"
+    assert building.final_result == "fail_simple_error"
     assert stage.result == ResultType.RECALCULATE
     assert stage.review_opinion == "기존 의견"
 
@@ -985,3 +985,23 @@ def test_import_ledger_unified_checks_only_excludes_supplement_appeal(
         .count()
         == 0
     )
+
+
+def test_parse_final_result_maps_six_categories():
+    from engines.ledger_import_unified import _parse_final_result
+
+    assert _parse_final_result("원적합") == "pass"
+    assert _parse_final_result("적합") == "pass"
+    assert _parse_final_result("보완적합") == "pass_supplement"
+    # 구분 없는 "부적합"은 단순오류로 (정책 결정 1)
+    assert _parse_final_result("부적합") == "fail_simple_error"
+    assert _parse_final_result("부적합(단순오류)") == "fail_simple_error"
+    assert _parse_final_result("부적합\n(단순오류)") == "fail_simple_error"
+    assert _parse_final_result("부적합(재계산)") == "fail_recalculate"
+    assert _parse_final_result("부적합\n(재계산)") == "fail_recalculate"
+    assert _parse_final_result("부적합(미회신)") == "fail_no_response"
+    assert _parse_final_result("대상제외") == "excluded"
+    # 이관 계열은 최종 완료가 아니므로 제외 (None)
+    assert _parse_final_result("차수이관") is None
+    assert _parse_final_result("재보완(3차수 이관)") is None
+    assert _parse_final_result("재보완\n(3차수 이관)") is None
