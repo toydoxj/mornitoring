@@ -1017,7 +1017,12 @@ function FlowStages({ stats }: { stats: DashboardStats }) {
 
   return (
     <div className="flex h-full flex-col items-stretch gap-3 lg:flex-row lg:items-stretch">
-      <FlowStageCard title="총 등록건" total={stats.total} accent="indigo" items={[]} />
+      <FlowStageCard
+        title="총 등록건"
+        total={stats.total}
+        accent="indigo"
+        items={[{ label: "미배포", value: stats.assigned }]}
+      />
       {/* 총 등록건은 전체 요약. 진행 단계와 구분해 화살표 대신 세로선으로 분리 */}
       <div
         className="hidden self-stretch lg:block lg:border-l lg:border-slate-200 lg:mx-1"
