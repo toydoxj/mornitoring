@@ -552,13 +552,10 @@ export default function StatisticsPage() {
         </CardContent>
       </Card>
 
+      {/* 팝업을 닫아도 통계를 다시 부르지 않는다 (검색·정렬 상태 유지) */}
       <BuildingDetailDialog
         buildingId={detailBuildingId}
-        onClose={() => {
-          setDetailBuildingId(null)
-          // 팝업에서 단계·판정을 바꿨을 수 있으므로 통계를 다시 불러온다.
-          fetchStats()
-        }}
+        onClose={() => setDetailBuildingId(null)}
       />
     </div>
   )

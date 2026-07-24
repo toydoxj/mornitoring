@@ -472,12 +472,10 @@ export default function InappropriateReviewPage() {
         </p>
       )}
 
+      {/* 팝업을 닫아도 목록을 다시 부르지 않는다 (필터·정렬·스크롤 유지) */}
       <BuildingDetailDialog
         buildingId={detailBuildingId}
-        onClose={() => {
-          setDetailBuildingId(null)
-          fetchData()
-        }}
+        onClose={() => setDetailBuildingId(null)}
       />
     </div>
   )

@@ -37,16 +37,6 @@ interface ReviewerOption {
   phone: string | null
 }
 
-interface GroupReviewerSummary {
-  reviewer_id: number
-  user_id: number
-  name: string
-  specialty: string | null
-  phone: string | null
-  is_assigned: boolean
-  assigned_count: number
-}
-
 const RESULT_VARIANT: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
   pass: "default",
   pass_supplement: "default",
@@ -128,8 +118,6 @@ export function BuildingDetailView({
   const [loadingReviewers, setLoadingReviewers] = useState(false)
   const [savingReviewer, setSavingReviewer] = useState(false)
   const [reviewerError, setReviewerError] = useState<string | null>(null)
-  const [groupNo, setGroupNo] = useState<number | null>(null)
-  const [groupReviewers, setGroupReviewers] = useState<GroupReviewerSummary[]>([])
 
   const canManage = user && ["team_leader", "chief_secretary", "secretary"].includes(user.role)
   const canChangePhase = user && ["team_leader", "chief_secretary"].includes(user.role)
@@ -177,25 +165,6 @@ export function BuildingDetailView({
     }
     fetchData()
   }, [buildingId, router, safeReturnTo, embedded, onNotFound])
-
-  // 조 검토위원 명단 (간사 이상만 조회 가능한 통계용 요약 API 재사용)
-  useEffect(() => {
-    if (!canManage) return
-    let cancelled = false
-    apiClient
-      .get<{ group_no: number | null; group_reviewers: GroupReviewerSummary[] }>(
-        `/api/buildings/${buildingId}/summary`,
-      )
-      .then(({ data }) => {
-        if (cancelled) return
-        setGroupNo(data.group_no)
-        setGroupReviewers(data.group_reviewers)
-      })
-      .catch(() => { /* 명단 없이 표시 */ })
-    return () => {
-      cancelled = true
-    }
-  }, [buildingId, canManage])
 
   // 문의사항 등에서 `?editPhase=1` 로 진입하면 로딩 완료 후 단계 변경 다이얼로그 자동 오픈.
   // building 갱신(저장) 시 재오픈되지 않도록 1회성 ref 가드를 쓴다.
@@ -691,56 +660,6 @@ export function BuildingDetailView({
           </div>
         </CardContent>
       </Card>
-
-      {/* 조 검토위원 명단 (간사 이상) */}
-      {canManage && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <span>{groupNo != null ? `${groupNo}조 검토위원 명단` : "검토위원 명단"}</span>
-              {groupNo != null && (
-                <Badge variant="secondary">{groupReviewers.length}명</Badge>
-              )}
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            {groupReviewers.length === 0 ? (
-              <p className="py-4 text-center text-sm text-muted-foreground">
-                {groupNo == null
-                  ? "조가 배정되지 않아 명단을 표시할 수 없습니다."
-                  : "해당 조에 등록된 검토위원이 없습니다."}
-              </p>
-            ) : (
-              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                {groupReviewers.map((reviewer) => (
-                  <div
-                    key={reviewer.reviewer_id}
-                    className={`rounded-md border px-3 py-2 text-sm ${
-                      reviewer.is_assigned ? "border-blue-200 bg-blue-50" : ""
-                    }`}
-                  >
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="font-medium">
-                        {reviewer.name}
-                        {reviewer.is_assigned && (
-                          <Badge className="ml-2" variant="default">담당</Badge>
-                        )}
-                      </span>
-                      <span className="text-xs text-muted-foreground">
-                        {reviewer.assigned_count.toLocaleString()}건
-                      </span>
-                    </div>
-                    <div className="mt-1 text-xs text-muted-foreground">
-                      {reviewer.specialty || "전문분야 미등록"}
-                      {reviewer.phone ? ` · ${reviewer.phone}` : ""}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      )}
 
       {/* 검토 진행 타임라인 */}
       <Card>
