@@ -45,6 +45,8 @@ type CountTableSortKey = "label" | "count"
 type QualityItemSortKey = "mgmt_no" | "group_no" | "reviewer_name" | "quality_decision"
 type OpinionDetailSortKey =
   | "mgmt_no"
+  | "group_no"
+  | "reviewer_name"
   | "phase"
   | "result"
   | "category"
@@ -274,6 +276,9 @@ interface RegionalColumn<T extends string> {
   key: T
   label: string
 }
+
+// 의견 심각도 지정 목록 페이지당 건수 (백엔드 size 상한과 동일)
+const OPINION_PAGE_SIZE = 200
 
 const SEVERITY_LABELS: SeverityLabel[] = ["L0", "L1", "L2", "L3", "L4"]
 const OPINION_SEVERITIES: OpinionSeverity[] = ["NA", ...SEVERITY_LABELS]
@@ -1913,6 +1918,7 @@ function OpinionSeverityManager({
   const [searchInput, setSearchInput] = useState("")
   const [search, setSearch] = useState("")
   const [severityFilter, setSeverityFilter] = useState<OpinionSeverity | "all">("NA")
+  const [page, setPage] = useState(1)
 
   const loadOpinions = useCallback(async () => {
     setIsLoading(true)
@@ -1921,7 +1927,8 @@ function OpinionSeverityManager({
         "/api/reviews/opinion-details",
         {
           params: {
-            size: 200,
+            page,
+            size: OPINION_PAGE_SIZE,
             search: search || undefined,
             severity: severityFilter === "all" ? undefined : severityFilter,
           },
@@ -1934,11 +1941,18 @@ function OpinionSeverityManager({
     } finally {
       setIsLoading(false)
     }
-  }, [search, severityFilter])
+  }, [page, search, severityFilter])
 
   useEffect(() => {
     loadOpinions()
   }, [loadOpinions])
+
+  // 검색어·필터가 바뀌면 첫 페이지로 되돌린다.
+  useEffect(() => {
+    setPage(1)
+  }, [search, severityFilter])
+
+  const totalPages = Math.max(1, Math.ceil(total / OPINION_PAGE_SIZE))
 
   const updateSeverity = async (item: OpinionDetailItem, severity: OpinionSeverity) => {
     setSavingId(item.id)
@@ -1997,6 +2011,10 @@ function OpinionSeverityManager({
       switch (key) {
         case "mgmt_no":
           return item.mgmt_no
+        case "group_no":
+          return item.group_no ?? Number.MAX_SAFE_INTEGER
+        case "reviewer_name":
+          return item.reviewer_name || "힣"
         case "phase":
           return PHASE_SORT_ORDER[item.phase] ?? Number.MAX_SAFE_INTEGER
         case "result":
@@ -2051,7 +2069,13 @@ function OpinionSeverityManager({
       </div>
 
       <div className="flex flex-wrap items-center justify-between gap-2 text-sm text-muted-foreground">
-        <span>표시 {items.length.toLocaleString()}건 / 전체 {total.toLocaleString()}건</span>
+        <span>
+          {total > 0
+            ? `${((page - 1) * OPINION_PAGE_SIZE + 1).toLocaleString()}–${(
+                (page - 1) * OPINION_PAGE_SIZE + items.length
+              ).toLocaleString()}건 표시 / 전체 ${total.toLocaleString()}건`
+            : `전체 ${total.toLocaleString()}건`}
+        </span>
         <span>
           관리번호를 클릭하면 상세 정보가 열립니다. 부적합 검토 체크는 검토 단계 단위로 적용됩니다.
         </span>
@@ -2074,6 +2098,23 @@ function OpinionSeverityManager({
                   className="min-w-[140px]"
                 >
                   관리번호
+                </SortableTableHead>
+                <SortableTableHead
+                  sortKey="group_no"
+                  sortState={sortState}
+                  onSort={handleSort}
+                  className="w-[70px] text-center"
+                >
+                  조
+                </SortableTableHead>
+                <SortableTableHead
+                  sortKey="reviewer_name"
+                  sortState={sortState}
+                  onSort={handleSort}
+                  align="left"
+                  className="min-w-[100px]"
+                >
+                  검토위원
                 </SortableTableHead>
                 <SortableTableHead
                   sortKey="phase"
@@ -2136,10 +2177,12 @@ function OpinionSeverityManager({
                         {item.building_name}
                       </div>
                     )}
-                    <div className="mt-1 text-xs text-muted-foreground">
-                      {item.group_no ? `${item.group_no}조` : "조 미배정"}
-                      {item.reviewer_name ? ` · ${item.reviewer_name}` : ""}
-                    </div>
+                  </TableCell>
+                  <TableCell className="text-center text-sm">
+                    {item.group_no ? `${item.group_no}조` : "-"}
+                  </TableCell>
+                  <TableCell className="text-sm font-medium">
+                    {item.reviewer_name || "-"}
                   </TableCell>
                   <TableCell>
                     <Badge variant="outline">
@@ -2202,6 +2245,32 @@ function OpinionSeverityManager({
               ))}
             </TableBody>
           </Table>
+        </div>
+      )}
+
+      {total > OPINION_PAGE_SIZE && (
+        <div className="flex items-center justify-center gap-3">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={page <= 1 || isLoading}
+            onClick={() => setPage((p) => Math.max(1, p - 1))}
+          >
+            이전
+          </Button>
+          <span className="text-sm text-muted-foreground">
+            {page} / {totalPages} 페이지
+          </span>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={page >= totalPages || isLoading}
+            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+          >
+            다음
+          </Button>
         </div>
       )}
     </div>
