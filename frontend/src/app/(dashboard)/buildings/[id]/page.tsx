@@ -759,17 +759,22 @@ export default function BuildingDetailPage() {
                             </dt>
                             <div className="flex flex-wrap gap-2">
                               {([
+                                { key: "collapse_risk", label: "붕괴우려" },
                                 { key: "confirmed_serious", label: "확정(심각)" },
                                 { key: "confirmed_simple", label: "확정(단순)" },
                                 { key: "pending", label: "대기" },
                                 { key: "excluded", label: "제외" },
                               ] as const).map((opt) => {
                                 const active = (stage.inappropriate_decision ?? "pending") === opt.key
+                                const activeVariant =
+                                  opt.key === "excluded" || opt.key === "collapse_risk"
+                                    ? "destructive"
+                                    : "default"
                                 return (
                                   <Button
                                     key={opt.key}
                                     size="sm"
-                                    variant={active ? (opt.key === "excluded" ? "destructive" : "default") : "outline"}
+                                    variant={active ? activeVariant : "outline"}
                                     onClick={() => handleInappropriateDecision(stage.id, opt.key)}
                                   >
                                     {opt.label}

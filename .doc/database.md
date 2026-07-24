@@ -140,7 +140,7 @@ Supabase PostgreSQL 17 (Seoul) | 마지막 갱신: 2026-04-19
 | s3_file_key | varchar(500) | S3 검토서 파일 경로 |
 | stage_remarks | text | 비고 |
 | inappropriate_review_needed | boolean | 부적정 사례 검토 필요 체크 |
-| inappropriate_decision | varchar(17) (enum) | `PENDING` / `CONFIRMED_SERIOUS` / `CONFIRMED_SIMPLE` / `EXCLUDED` |
+| inappropriate_decision | varchar(17) (enum) | `PENDING` / `COLLAPSE_RISK` / `CONFIRMED_SERIOUS` / `CONFIRMED_SIMPLE` / `EXCLUDED` |
 | created_at / updated_at | timestamp | |
 
 ### inappropriate_notes — 부적합 판정 간사진 의견 (다중)
@@ -258,6 +258,7 @@ users ─┐
 | 값 | 한글 | 의미 |
 |---|---|---|
 | `PENDING` | 대기 | 판정 미진행 (기본값) |
+| `COLLAPSE_RISK` | 붕괴우려 | 부적합 확정 — 확정(심각)보다 상위 단계 |
 | `CONFIRMED_SERIOUS` | 확정(심각) | 부적합 확정 — 심각한 사유 |
 | `CONFIRMED_SIMPLE` | 확정(단순) | 부적합 확정 — 단순한 사유 |
 | `EXCLUDED` | 제외 | 확정 후 추후 제외 |

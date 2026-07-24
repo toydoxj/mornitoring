@@ -26,6 +26,7 @@ class ResultType(str, enum.Enum):
 
 class InappropriateDecision(str, enum.Enum):
     PENDING = "pending"                     # 대기 (기본값)
+    COLLAPSE_RISK = "collapse_risk"         # 붕괴우려 (확정(심각)보다 상위)
     CONFIRMED_SERIOUS = "confirmed_serious" # 확정(심각)
     CONFIRMED_SIMPLE = "confirmed_simple"   # 확정(단순)
     EXCLUDED = "excluded"                   # 제외 (확정됐다가 추후 제외 가능)

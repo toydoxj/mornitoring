@@ -1154,8 +1154,9 @@ def test_secretary_quality_checks_filters_by_group_and_mark_suitable(
 
 
 # ===== 부적합 검토 (/api/reviews/inappropriate) =====
+# 부적합 검토는 간사진이 조 구분 없이 함께 판단하는 화면이라 전체를 노출한다.
 
-def test_secretary_inappropriate_filters_by_group(
+def test_secretary_inappropriate_includes_all_groups(
     client, db_session, make_user, make_reviewer, make_building
 ):
     sec, sec_h = make_user(UserRole.SECRETARY)
@@ -1176,8 +1177,7 @@ def test_secretary_inappropriate_filters_by_group(
     res = client.get("/api/reviews/inappropriate", headers=sec_h)
     assert res.status_code == 200
     mgmts = {item["mgmt_no"] for item in res.json()["items"]}
-    assert b1.mgmt_no in mgmts
-    assert b2.mgmt_no not in mgmts
+    assert {b1.mgmt_no, b2.mgmt_no}.issubset(mgmts)
 
 
 # ===== reviewer-names enumeration 차단 =====

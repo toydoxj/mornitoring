@@ -17,6 +17,7 @@ import {
 } from "@/components/ui/table"
 import apiClient from "@/lib/api/client"
 import { useAuthStore } from "@/stores/authStore"
+import { BuildingSummaryDialog } from "@/components/BuildingSummaryDialog"
 import { RESULT_LABELS, type PhaseType, type ResultType } from "@/types"
 
 type ActiveTab = "reviewer" | "regional" | "severity" | "keyword" | "quality" | "opinion"
@@ -240,6 +241,9 @@ interface OpinionDetailItem {
   severity: OpinionSeverity
   content: string
   result: string | null
+  group_no: number | null
+  reviewer_name: string | null
+  inappropriate_review_needed: boolean
 }
 
 interface OpinionDetailListResponse {
@@ -392,6 +396,7 @@ export default function StatisticsPage() {
   const [stats, setStats] = useState<StatsResponse | null>(null)
   const [activeTab, setActiveTab] = useState<ActiveTab>("reviewer")
   const [isLoading, setIsLoading] = useState(true)
+  const [detailBuildingId, setDetailBuildingId] = useState<number | null>(null)
 
   const isAdmin =
     !!user && ["team_leader", "chief_secretary", "secretary", "manager"].includes(user.role)
@@ -406,7 +411,10 @@ export default function StatisticsPage() {
     if (!isAdmin) return
     setIsLoading(true)
     try {
-      const { data } = await apiClient.get<StatsResponse>("/api/buildings/stats")
+      // 통계자료는 조 구분 없이 전체를 집계한다(간사 포함).
+      const { data } = await apiClient.get<StatsResponse>("/api/buildings/stats", {
+        params: { scope: "all" },
+      })
       setStats(data)
     } catch (err) {
       console.error("통계 조회 실패:", err)
@@ -431,7 +439,7 @@ export default function StatisticsPage() {
       <div>
         <h1 className="text-2xl font-bold">통계자료</h1>
         <p className="text-sm text-muted-foreground">
-          검토위원별 현황, 지역별 통계, 심각도, 키워드, 표현 품질
+          검토위원별 현황, 지역별 통계, 심각도, 키워드, 표현 품질 (조 구분 없는 전체 집계)
         </p>
       </div>
 
@@ -497,10 +505,18 @@ export default function StatisticsPage() {
             />
           )}
           {activeTab === "opinion" && (
-            <OpinionSeverityManager onChanged={fetchStats} />
+            <OpinionSeverityManager
+              onChanged={fetchStats}
+              onOpenBuilding={setDetailBuildingId}
+            />
           )}
         </CardContent>
       </Card>
+
+      <BuildingSummaryDialog
+        buildingId={detailBuildingId}
+        onClose={() => setDetailBuildingId(null)}
+      />
     </div>
   )
 }
@@ -1869,11 +1885,18 @@ function OpinionQualityStatsView({
   )
 }
 
-function OpinionSeverityManager({ onChanged }: { onChanged: () => Promise<void> }) {
+function OpinionSeverityManager({
+  onChanged,
+  onOpenBuilding,
+}: {
+  onChanged: () => Promise<void>
+  onOpenBuilding: (buildingId: number) => void
+}) {
   const [items, setItems] = useState<OpinionDetailItem[]>([])
   const [total, setTotal] = useState(0)
   const [isLoading, setIsLoading] = useState(false)
   const [savingId, setSavingId] = useState<number | null>(null)
+  const [savingInappropriateId, setSavingInappropriateId] = useState<number | null>(null)
   const [searchInput, setSearchInput] = useState("")
   const [search, setSearch] = useState("")
   const [severityFilter, setSeverityFilter] = useState<OpinionSeverity | "all">("NA")
@@ -1925,6 +1948,31 @@ function OpinionSeverityManager({ onChanged }: { onChanged: () => Promise<void> 
     }
   }
 
+  const updateInappropriate = async (item: OpinionDetailItem, needed: boolean) => {
+    setSavingInappropriateId(item.id)
+    try {
+      await apiClient.patch<OpinionDetailItem>(
+        `/api/reviews/opinion-details/${item.id}/inappropriate`,
+        { inappropriate_review_needed: needed },
+      )
+      // 부적합 검토는 검토 단계 단위이므로 같은 단계의 의견을 모두 갱신한다.
+      setItems((prev) =>
+        prev.map((current) =>
+          current.stage_id === item.stage_id
+            ? { ...current, inappropriate_review_needed: needed }
+            : current,
+        ),
+      )
+    } catch (err) {
+      const msg =
+        (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
+        ?? "부적합 검토 지정 실패"
+      alert(msg)
+    } finally {
+      setSavingInappropriateId(null)
+    }
+  }
+
   const submitSearch = () => {
     setSearch(searchInput.trim())
   }
@@ -1965,9 +2013,11 @@ function OpinionSeverityManager({ onChanged }: { onChanged: () => Promise<void> 
         </div>
       </div>
 
-      <div className="flex items-center justify-between text-sm text-muted-foreground">
+      <div className="flex flex-wrap items-center justify-between gap-2 text-sm text-muted-foreground">
         <span>표시 {items.length.toLocaleString()}건 / 전체 {total.toLocaleString()}건</span>
-        <span>심각도를 선택하면 통계가 즉시 갱신됩니다.</span>
+        <span>
+          관리번호를 클릭하면 상세 정보가 열립니다. 부적합 검토 체크는 검토 단계 단위로 적용됩니다.
+        </span>
       </div>
 
       {isLoading ? (
@@ -1985,18 +2035,29 @@ function OpinionSeverityManager({ onChanged }: { onChanged: () => Promise<void> 
                 <TableHead className="min-w-[140px]">분류</TableHead>
                 <TableHead className="min-w-[360px]">의견</TableHead>
                 <TableHead className="w-[130px] text-center">심각도</TableHead>
+                <TableHead className="w-[110px] text-center">부적합 검토</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {items.map((item) => (
                 <TableRow key={item.id}>
                   <TableCell>
-                    <div className="font-mono text-sm font-medium">{item.mgmt_no}</div>
+                    <button
+                      type="button"
+                      className="font-mono text-sm font-medium text-blue-600 underline-offset-2 hover:underline"
+                      onClick={() => onOpenBuilding(item.building_id)}
+                    >
+                      {item.mgmt_no}
+                    </button>
                     {item.building_name && (
                       <div className="mt-1 max-w-[220px] truncate text-xs text-muted-foreground">
                         {item.building_name}
                       </div>
                     )}
+                    <div className="mt-1 text-xs text-muted-foreground">
+                      {item.group_no ? `${item.group_no}조` : "조 미배정"}
+                      {item.reviewer_name ? ` · ${item.reviewer_name}` : ""}
+                    </div>
                   </TableCell>
                   <TableCell>
                     <Badge variant="outline">
@@ -2033,6 +2094,27 @@ function OpinionSeverityManager({ onChanged }: { onChanged: () => Promise<void> 
                         </option>
                       ))}
                     </select>
+                  </TableCell>
+                  <TableCell className="text-center">
+                    <label className="inline-flex cursor-pointer items-center justify-center gap-1.5 text-xs">
+                      <input
+                        type="checkbox"
+                        className="h-4 w-4 cursor-pointer accent-red-600"
+                        checked={item.inappropriate_review_needed}
+                        disabled={savingInappropriateId === item.id}
+                        onChange={(e) => updateInappropriate(item, e.target.checked)}
+                        aria-label={`${item.mgmt_no} 부적합 검토 대상 지정`}
+                      />
+                      <span
+                        className={
+                          item.inappropriate_review_needed
+                            ? "font-medium text-red-600"
+                            : "text-muted-foreground"
+                        }
+                      >
+                        {item.inappropriate_review_needed ? "포함" : "미포함"}
+                      </span>
+                    </label>
                   </TableCell>
                 </TableRow>
               ))}

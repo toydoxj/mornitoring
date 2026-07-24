@@ -149,6 +149,7 @@ export type ResultType = "pass" | "simple_error" | "recalculate"
 
 export type InappropriateDecisionType =
   | "pending"
+  | "collapse_risk"
   | "confirmed_serious"
   | "confirmed_simple"
   | "excluded"

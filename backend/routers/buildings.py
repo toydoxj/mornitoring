@@ -1,5 +1,6 @@
 """건축물(관리대장) 라우터"""
 
+from datetime import date
 from time import monotonic
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -443,7 +444,10 @@ def _merge_regional_rows(raw_rows, count_keys: tuple[str, ...]) -> list[dict[str
     return [total_row, *region_rows]
 
 
-def _stats_cache_key(current_user: User) -> tuple[str, str]:
+def _stats_cache_key(current_user: User, scope: str | None = None) -> tuple[str, str]:
+    # scope=all 은 조 구분 없는 전체 집계이므로 팀장/총괄과 동일한 캐시를 쓴다.
+    if scope == "all":
+        return ("all", "all")
     if current_user.role == UserRole.SECRETARY:
         group_key = str(current_user.group_no) if current_user.group_no is not None else "all"
         return (current_user.role.value, group_key)
@@ -486,10 +490,54 @@ class BuildingListResponse(BaseModel):
     total: int
 
 
+class GroupReviewerSummary(BaseModel):
+    """건물이 속한 조의 검토위원 명단 항목."""
+
+    reviewer_id: int
+    user_id: int
+    name: str
+    specialty: str | None = None
+    phone: str | None = None
+    is_assigned: bool = False       # 이 건물의 담당 위원인지
+    assigned_count: int = 0         # 해당 위원이 담당 중인 건물 수
+
+
+class BuildingStageSummary(BaseModel):
+    """요약 팝업용 검토 단계 정보."""
+
+    id: int
+    phase: str
+    phase_order: int
+    doc_received_at: date | None = None
+    doc_distributed_at: date | None = None
+    report_submitted_at: date | None = None
+    reviewer_name: str | None = None
+    result: str | None = None
+    severity_l0_count: int = 0
+    severity_l1_count: int = 0
+    severity_l2_count: int = 0
+    severity_l3_count: int = 0
+    severity_l4_count: int = 0
+    inappropriate_review_needed: bool = False
+    inappropriate_decision: str | None = None
+
+
+class BuildingSummaryResponse(BaseModel):
+    building: BuildingResponse
+    group_no: int | None = None
+    reviewer_name: str | None = None
+    group_reviewers: list[GroupReviewerSummary] = []
+    stages: list[BuildingStageSummary] = []
+
+
 # --- 엔드포인트 ---
 
 @router.get("/stats")
 def get_stats(
+    scope: str | None = Query(
+        None,
+        description="all이면 조 구분 없이 전체 집계 (통계자료 화면 전용)",
+    ),
     db: Session = Depends(get_db),
     current_user: User = Depends(
         require_roles(
@@ -507,7 +555,12 @@ def get_stats(
       2) phase별 건수 GROUP BY
       3) 위원별 집계 (총/단계/완료/면적/고위험)
       4) 위원별 doc_received 상태 중 예비검토서 제출/미제출 (LEFT JOIN + GROUP BY)
+
+    scope='all' 은 통계자료 화면 전용으로, 간사도 조 구분 없이 전체를 집계한다.
+    대시보드는 scope 를 넘기지 않으므로 기존대로 조별 집계를 유지한다.
     """
+    if scope not in (None, "", "all"):
+        raise HTTPException(status_code=400, detail="허용되지 않는 집계 범위입니다")
     from sqlalchemy import and_, case, func as sa_func, or_
     from engines.opinion_quality_analyzer import match_opinion_quality
     from engines.review_keyword_analyzer import match_keywords
@@ -516,16 +569,17 @@ def get_stats(
     from models.review_severity_summary import ReviewSeveritySummary
     from models.review_stage import ReviewStage, PhaseType, ResultType
 
-    cache_key = _stats_cache_key(current_user)
+    cache_key = _stats_cache_key(current_user, scope)
     cached_stats = _stats_cache_get(db, cache_key)
     if cached_stats is not None:
         _release_read_connection(db)
         return cached_stats
 
     # 가시성 필터: 간사가 자기 조 데이터만 보도록.
-    # visibility=None 이면 무필터(팀장/총괄/조 미배정 간사).
-    visibility = building_visibility_filter(current_user)
-    visible_ids_select = visible_building_ids_subquery(current_user)
+    # visibility=None 이면 무필터(팀장/총괄/조 미배정 간사/scope=all).
+    unrestricted = scope == "all"
+    visibility = None if unrestricted else building_visibility_filter(current_user)
+    visible_ids_select = None if unrestricted else visible_building_ids_subquery(current_user)
 
     def _scoped(q):
         return q.filter(visibility) if visibility is not None else q
@@ -2245,6 +2299,111 @@ def get_building(
 
     registered_names = _get_registered_names(db)
     return _to_response(building, registered_names)
+
+
+@router.get("/{building_id}/summary", response_model=BuildingSummaryResponse)
+def get_building_summary(
+    building_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(
+        require_roles(
+            UserRole.TEAM_LEADER,
+            UserRole.CHIEF_SECRETARY,
+            UserRole.SECRETARY,
+            UserRole.MANAGER,
+        )
+    ),
+):
+    """통계자료 팝업용 건축물 요약 (건물 정보 + 조 검토위원 명단 + 단계 이력).
+
+    통계자료 화면은 조 구분 없이 전체를 열람하므로 간사도 조 제한 없이 조회한다.
+    """
+    from models.review_stage import ReviewStage
+
+    building = (
+        db.query(Building)
+        .options(selectinload(Building.reviewer).selectinload(Reviewer.user))
+        .filter(Building.id == building_id)
+        .first()
+    )
+    if not building:
+        raise HTTPException(status_code=404, detail="건축물을 찾을 수 없습니다")
+
+    registered_names = _get_registered_names(db)
+    building_data = _to_response(building, registered_names)
+
+    group_no = building.reviewer.group_no if building.reviewer else None
+    reviewer_name = building_data.get("reviewer_name")
+
+    group_reviewers: list[GroupReviewerSummary] = []
+    if group_no is not None:
+        rows = (
+            db.query(
+                Reviewer.id,
+                Reviewer.user_id,
+                User.name,
+                Reviewer.specialty,
+                User.phone,
+                func.count(Building.id).label("assigned_count"),
+            )
+            .join(User, Reviewer.user_id == User.id)
+            .outerjoin(Building, Building.reviewer_id == Reviewer.id)
+            .filter(Reviewer.group_no == group_no)
+            .group_by(Reviewer.id, Reviewer.user_id, User.name, Reviewer.specialty, User.phone)
+            .order_by(User.name)
+            .all()
+        )
+        group_reviewers = [
+            GroupReviewerSummary(
+                reviewer_id=row.id,
+                user_id=row.user_id,
+                name=row.name,
+                specialty=row.specialty,
+                phone=row.phone,
+                is_assigned=row.id == building.reviewer_id,
+                assigned_count=int(row.assigned_count or 0),
+            )
+            for row in rows
+        ]
+
+    stages = (
+        db.query(ReviewStage)
+        .filter(ReviewStage.building_id == building_id)
+        .order_by(ReviewStage.phase_order)
+        .all()
+    )
+    stage_items = [
+        BuildingStageSummary(
+            id=stage.id,
+            phase=_stage_phase_value(stage),
+            phase_order=stage.phase_order,
+            doc_received_at=stage.doc_received_at,
+            doc_distributed_at=stage.doc_distributed_at,
+            report_submitted_at=stage.report_submitted_at,
+            reviewer_name=stage.reviewer_name,
+            result=stage.result.value if stage.result else None,
+            severity_l0_count=stage.severity_l0_count,
+            severity_l1_count=stage.severity_l1_count,
+            severity_l2_count=stage.severity_l2_count,
+            severity_l3_count=stage.severity_l3_count,
+            severity_l4_count=stage.severity_l4_count,
+            inappropriate_review_needed=bool(stage.inappropriate_review_needed),
+            inappropriate_decision=(
+                stage.inappropriate_decision.value
+                if stage.inappropriate_decision
+                else None
+            ),
+        )
+        for stage in stages
+    ]
+
+    return BuildingSummaryResponse(
+        building=BuildingResponse(**building_data),
+        group_no=group_no,
+        reviewer_name=reviewer_name,
+        group_reviewers=group_reviewers,
+        stages=stage_items,
+    )
 
 
 @router.patch("/{building_id}", response_model=BuildingResponse)

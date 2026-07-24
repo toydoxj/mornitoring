@@ -327,6 +327,9 @@ class OpinionDetailResponse(BaseModel):
     content: str
     quality_decision: str = "unsuitable"
     result: str | None = None
+    group_no: int | None = None
+    reviewer_name: str | None = None
+    inappropriate_review_needed: bool = False
 
 
 class OpinionDetailListResponse(BaseModel):
@@ -362,6 +365,10 @@ class OpinionSeverityUpdate(BaseModel):
 
 class OpinionQualityDecisionUpdate(BaseModel):
     quality_decision: str
+
+
+class OpinionInappropriateUpdate(BaseModel):
+    inappropriate_review_needed: bool
 
 
 class FieldChange(BaseModel):
@@ -837,6 +844,8 @@ def _opinion_detail_response(
     detail: ReviewOpinionDetail,
     stage: ReviewStage,
     building: Building,
+    group_no: int | None = None,
+    reviewer_name: str | None = None,
 ) -> OpinionDetailResponse:
     phase = stage.phase.value if hasattr(stage.phase, "value") else str(stage.phase)
     result = stage.result.value if stage.result else None
@@ -854,6 +863,11 @@ def _opinion_detail_response(
         content=detail.content,
         quality_decision=detail.quality_decision or "unsuitable",
         result=result,
+        group_no=group_no,
+        reviewer_name=(
+            stage.reviewer_name or reviewer_name or building.assigned_reviewer_name
+        ),
+        inappropriate_review_needed=bool(stage.inappropriate_review_needed),
     )
 
 
@@ -1197,14 +1211,14 @@ def list_opinion_details(
         )
     ),
 ):
+    # 통계자료 화면 전용 목록이므로 조 구분 없이 전체를 노출한다.
     query = (
-        db.query(ReviewOpinionDetail, ReviewStage, Building)
+        db.query(ReviewOpinionDetail, ReviewStage, Building, Reviewer.group_no, User.name)
         .join(ReviewStage, ReviewOpinionDetail.stage_id == ReviewStage.id)
         .join(Building, ReviewStage.building_id == Building.id)
+        .outerjoin(Reviewer, Building.reviewer_id == Reviewer.id)
+        .outerjoin(User, Reviewer.user_id == User.id)
     )
-    visibility = building_visibility_filter(current_user)
-    if visibility is not None:
-        query = query.filter(visibility)
 
     if severity:
         query = query.filter(
@@ -1237,8 +1251,8 @@ def list_opinion_details(
     )
     return OpinionDetailListResponse(
         items=[
-            _opinion_detail_response(detail, stage, building)
-            for detail, stage, building in rows
+            _opinion_detail_response(detail, stage, building, group_no, reviewer_name)
+            for detail, stage, building, group_no, reviewer_name in rows
         ],
         total=total,
     )
@@ -1259,15 +1273,13 @@ def update_opinion_detail_severity(
     ),
 ):
     severity = _normalize_editable_severity(body.severity)
+    # 통계자료 화면 전용 수정이므로 조 구분 없이 허용한다.
     query = (
         db.query(ReviewOpinionDetail, ReviewStage, Building)
         .join(ReviewStage, ReviewOpinionDetail.stage_id == ReviewStage.id)
         .join(Building, ReviewStage.building_id == Building.id)
         .filter(ReviewOpinionDetail.id == detail_id)
     )
-    visibility = building_visibility_filter(current_user)
-    if visibility is not None:
-        query = query.filter(visibility)
 
     row = query.first()
     if row is None:
@@ -1307,15 +1319,13 @@ def update_opinion_detail_quality_decision(
     if decision not in QUALITY_DECISIONS:
         raise HTTPException(status_code=400, detail="허용되지 않는 표현 품질 판정입니다")
 
+    # 통계자료 화면 전용 수정이므로 조 구분 없이 허용한다.
     query = (
         db.query(ReviewOpinionDetail, ReviewStage, Building)
         .join(ReviewStage, ReviewOpinionDetail.stage_id == ReviewStage.id)
         .join(Building, ReviewStage.building_id == Building.id)
         .filter(ReviewOpinionDetail.id == detail_id)
     )
-    visibility = building_visibility_filter(current_user)
-    if visibility is not None:
-        query = query.filter(visibility)
 
     row = query.first()
     if row is None:
@@ -1329,6 +1339,59 @@ def update_opinion_detail_quality_decision(
     clear_stats_cache()
     db.commit()
     db.refresh(detail)
+    return _opinion_detail_response(detail, stage, building)
+
+
+@router.patch(
+    "/opinion-details/{detail_id}/inappropriate",
+    response_model=OpinionDetailResponse,
+)
+def update_opinion_detail_inappropriate(
+    detail_id: int,
+    body: OpinionInappropriateUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(
+        require_roles(
+            UserRole.TEAM_LEADER,
+            UserRole.CHIEF_SECRETARY,
+            UserRole.SECRETARY,
+            UserRole.MANAGER,
+        )
+    ),
+):
+    """의견 상세가 속한 검토 단계를 부적합 검토 대상으로 지정/해제.
+
+    부적합 검토는 검토 단계(stage) 단위로 관리되므로, 같은 단계의 다른 의견도
+    함께 대상으로 묶인다. 통계자료 화면 전용이라 조 구분 없이 허용한다.
+    """
+    query = (
+        db.query(ReviewOpinionDetail, ReviewStage, Building)
+        .join(ReviewStage, ReviewOpinionDetail.stage_id == ReviewStage.id)
+        .join(Building, ReviewStage.building_id == Building.id)
+        .filter(ReviewOpinionDetail.id == detail_id)
+    )
+
+    row = query.first()
+    if row is None:
+        raise HTTPException(status_code=404, detail="의견 상세를 찾을 수 없습니다")
+
+    detail, stage, building = row
+    needed = bool(body.inappropriate_review_needed)
+    stage.inappropriate_review_needed = needed
+    if not needed:
+        # 대상에서 빠지면 이전 판정도 초기화해 부적합 목록과 상태를 일치시킨다.
+        stage.inappropriate_decision = None
+
+    log_action(
+        db,
+        current_user.id,
+        "inappropriate_review_needed",
+        "review_stage",
+        stage.id,
+        after_data={"inappropriate_review_needed": needed},
+    )
+    db.commit()
+    db.refresh(stage)
     return _opinion_detail_response(detail, stage, building)
 
 
@@ -2753,6 +2816,8 @@ class InappropriateReviewItem(BaseModel):
     latest_note_author: str | None = None
     note_count: int = 0
     phase: str
+    group_no: int | None = None
+    reviewer_name: str | None = None
 
 
 class InappropriateReviewListResponse(BaseModel):
@@ -2791,24 +2856,26 @@ def list_inappropriate_reviews(
 ):
     """부적합 검토 필요로 체크된 stage 목록 (간사 이상).
 
-    간사(조 배정)는 같은 조 건물의 stage 만 노출.
-    decision: 'pending' | 'confirmed' | 'rejected' 필터링 (선택)
+    부적합 검토는 조 구분 없이 간사진 전체가 함께 판단하는 화면이므로
+    간사도 다른 조 건을 모두 열람한다.
+    decision: 'pending' | 'collapse_risk' | 'confirmed_serious'
+              | 'confirmed_simple' | 'excluded' 필터링 (선택)
     """
     query = (
-        db.query(ReviewStage, Building)
+        db.query(ReviewStage, Building, Reviewer.group_no, User.name)
         .join(Building, ReviewStage.building_id == Building.id)
+        .outerjoin(Reviewer, Building.reviewer_id == Reviewer.id)
+        .outerjoin(User, Reviewer.user_id == User.id)
         .filter(ReviewStage.inappropriate_review_needed.is_(True))
     )
-
-    visibility = building_visibility_filter(current_user)
-    if visibility is not None:
-        query = query.filter(visibility)
 
     if decision == "pending":
         query = query.filter(
             (ReviewStage.inappropriate_decision.is_(None))
             | (ReviewStage.inappropriate_decision == InappropriateDecision.PENDING)
         )
+    elif decision == "collapse_risk":
+        query = query.filter(ReviewStage.inappropriate_decision == InappropriateDecision.COLLAPSE_RISK)
     elif decision == "confirmed_serious":
         query = query.filter(ReviewStage.inappropriate_decision == InappropriateDecision.CONFIRMED_SERIOUS)
     elif decision == "confirmed_simple":
@@ -2818,13 +2885,18 @@ def list_inappropriate_reviews(
 
     rows = query.order_by(Building.mgmt_no, ReviewStage.phase_order.desc()).all()
     # 건물별 최신 stage만
-    latest_by_building: dict[int, tuple[ReviewStage, Building]] = {}
-    for stage, building in rows:
+    latest_by_building: dict[int, tuple[ReviewStage, Building, int | None, str | None]] = {}
+    for stage, building, group_no, assigned_reviewer_name in rows:
         if building.id not in latest_by_building:
-            latest_by_building[building.id] = (stage, building)
+            latest_by_building[building.id] = (
+                stage,
+                building,
+                group_no,
+                assigned_reviewer_name,
+            )
 
     # 각 stage의 최신 의견과 개수 조회
-    stage_ids = [s.id for s, _ in latest_by_building.values()]
+    stage_ids = [row[0].id for row in latest_by_building.values()]
     latest_note_by_stage: dict[int, InappropriateNote] = {}
     note_count_by_stage: dict[int, int] = {}
     if stage_ids:
@@ -2840,7 +2912,7 @@ def list_inappropriate_reviews(
                 latest_note_by_stage[n.stage_id] = n
 
     items = []
-    for stage, b in latest_by_building.values():
+    for stage, b, group_no, assigned_reviewer_name in latest_by_building.values():
         latest_note = latest_note_by_stage.get(stage.id)
         items.append(
             InappropriateReviewItem(
@@ -2865,13 +2937,19 @@ def list_inappropriate_reviews(
                 latest_note_author=latest_note.author_name if latest_note else None,
                 note_count=note_count_by_stage.get(stage.id, 0),
                 phase=stage.phase.value,
+                group_no=group_no,
+                reviewer_name=(
+                    stage.reviewer_name
+                    or assigned_reviewer_name
+                    or b.assigned_reviewer_name
+                ),
             )
         )
     return InappropriateReviewListResponse(items=items, total=len(items))
 
 
 class InappropriateDecisionRequest(BaseModel):
-    decision: str  # pending / confirmed_serious / confirmed_simple / excluded
+    decision: str  # pending / collapse_risk / confirmed_serious / confirmed_simple / excluded
 
 
 @router.patch("/inappropriate/{stage_id}")
