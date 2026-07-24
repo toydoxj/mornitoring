@@ -1,0 +1,1334 @@
+"use client"
+
+import { useEffect, useRef, useState } from "react"
+import { useRouter } from "next/navigation"
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Separator } from "@/components/ui/separator"
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import { Label } from "@/components/ui/label"
+import apiClient from "@/lib/api/client"
+import { useAuthStore } from "@/stores/authStore"
+import type { Building, ReviewStage, PhaseType, ResultType, InappropriateDecisionType } from "@/types"
+import { PHASE_LABELS, RESULT_LABELS } from "@/types"
+import { AttachmentItem, type AttachmentDisplay } from "@/components/AttachmentItem"
+import { Paperclip, Trash2, UserRound, X } from "lucide-react"
+import { getAdjacentManualPhases } from "@/lib/phases"
+
+interface InquiryAttachmentData extends AttachmentDisplay {
+  inquiry_id: number
+  kind: "question" | "reply"
+}
+
+interface ReviewerOption {
+  reviewer_id: number
+  user_id: number
+  name: string
+  group_no: number | null
+  email: string | null
+  phone: string | null
+}
+
+interface GroupReviewerSummary {
+  reviewer_id: number
+  user_id: number
+  name: string
+  specialty: string | null
+  phone: string | null
+  is_assigned: boolean
+  assigned_count: number
+}
+
+const RESULT_VARIANT: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
+  pass: "default",
+  pass_supplement: "default",
+  simple_error: "secondary",
+  recalculate: "destructive",
+  // 최종판정(final_result) 코드
+  fail_simple_error: "destructive",
+  fail_recalculate: "destructive",
+  fail_no_response: "destructive",
+  fail: "destructive", // 레거시
+  excluded: "secondary",
+}
+
+/**
+ * 건축물 상세 화면 본문.
+ *
+ * `/buildings/[id]` 페이지와 목록 화면의 상세 팝업이 같은 화면을 쓰도록 분리했다.
+ * `embedded` 를 켜면 목록 복귀 버튼처럼 페이지 전용 UI를 숨긴다.
+ */
+export function BuildingDetailView({
+  buildingId,
+  from = null,
+  returnTo = null,
+  editPhaseParam = false,
+  embedded = false,
+  onNotFound,
+}: {
+  buildingId: string
+  from?: string | null
+  returnTo?: string | null
+  editPhaseParam?: boolean
+  embedded?: boolean
+  onNotFound?: () => void
+}) {
+  const router = useRouter()
+  const user = useAuthStore((s) => s.user)
+  const safeReturnTo =
+    returnTo && returnTo.startsWith("/buildings") && !returnTo.startsWith("//")
+      ? returnTo
+      : null
+  const defaultBackPath = user?.role === "reviewer" ? "/my-reviews" : "/buildings"
+  const defaultBackLabel = user?.role === "reviewer" ? "← 내 검토 대상" : "← 목록으로"
+  const backPath =
+    safeReturnTo ? safeReturnTo :
+    from === "my-reviews" ? "/my-reviews" :
+    from === "inquiries" ? "/inquiries" :
+    from === "ledger-phase-compare" ? "/ledger-phase-compare" :
+    defaultBackPath
+  const backLabel =
+    from === "my-reviews" ? "← 내 검토 대상" :
+    from === "inquiries" ? "← 문의사항" :
+    from === "ledger-phase-compare" ? "← 비교검토" :
+    defaultBackLabel
+  const [building, setBuilding] = useState<Building | null>(null)
+  const [stages, setStages] = useState<ReviewStage[]>([])
+  const [inquiries, setInquiries] = useState<{
+    id: number; submitter_id: number | null; phase: string; submitter_name: string; content: string;
+    reply: string | null; status: string; created_at: string; updated_at?: string;
+    attachments?: InquiryAttachmentData[]
+  }[]>([])
+  const [newInquiry, setNewInquiry] = useState("")
+  const [newInquiryFiles, setNewInquiryFiles] = useState<File[]>([])
+  const [editInquiryTarget, setEditInquiryTarget] = useState<{
+    id: number; content: string; mgmt_no?: string
+  } | null>(null)
+  const [editInquiryContent, setEditInquiryContent] = useState("")
+  const [savingInquiryEdit, setSavingInquiryEdit] = useState(false)
+  const [deletingInquiryId, setDeletingInquiryId] = useState<number | null>(null)
+  const [submittingInquiry, setSubmittingInquiry] = useState(false)
+  const [isLoading, setIsLoading] = useState(true)
+  const [phaseEditOpen, setPhaseEditOpen] = useState(false)
+  const [phaseDraft, setPhaseDraft] = useState<string>("")
+  const [savingPhase, setSavingPhase] = useState(false)
+  const [finalizingPass, setFinalizingPass] = useState(false)
+  const [reviewerDialogOpen, setReviewerDialogOpen] = useState(false)
+  const [deletingOpinionStageId, setDeletingOpinionStageId] = useState<number | null>(null)
+  const [reviewers, setReviewers] = useState<ReviewerOption[]>([])
+  const [reviewerDraftId, setReviewerDraftId] = useState("")
+  const [loadingReviewers, setLoadingReviewers] = useState(false)
+  const [savingReviewer, setSavingReviewer] = useState(false)
+  const [reviewerError, setReviewerError] = useState<string | null>(null)
+  const [groupNo, setGroupNo] = useState<number | null>(null)
+  const [groupReviewers, setGroupReviewers] = useState<GroupReviewerSummary[]>([])
+
+  const canManage = user && ["team_leader", "chief_secretary", "secretary"].includes(user.role)
+  const canChangePhase = user && ["team_leader", "chief_secretary"].includes(user.role)
+  const canChangeReviewer = user?.role === "chief_secretary"
+  const isAssigned =
+    !!user &&
+    !!building &&
+    (building.reviewer_name === user.name ||
+      building.assigned_reviewer_name === user.name)
+
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        const [buildingRes, stagesRes] = await Promise.all([
+          apiClient.get<Building>(`/api/buildings/${buildingId}`),
+          apiClient.get<ReviewStage[]>(`/api/reviews/stages/${buildingId}`),
+        ])
+        setBuilding(buildingRes.data)
+        setStages(stagesRes.data)
+
+        // 부적합 체크된 단계의 의견 선로딩
+        const inappropriateStages = stagesRes.data.filter((s) => s.inappropriate_review_needed)
+        for (const s of inappropriateStages) {
+          try {
+            const { data: notes } = await apiClient.get(`/api/reviews/inappropriate/${s.id}/notes`)
+            setNotesByStage((prev) => ({ ...prev, [s.id]: notes }))
+          } catch { /* 의견 없음 */ }
+        }
+
+        // 문의사항 조회
+        try {
+          const { data: inqData } = await apiClient.get(`/api/reviews/building-inquiries/${buildingRes.data.mgmt_no}`)
+          setInquiries(inqData)
+        } catch { /* 문의 없음 */ }
+      } catch {
+        // 팝업으로 열렸을 때는 화면을 이동시키지 않고 호출부에 알린다.
+        if (embedded) {
+          onNotFound?.()
+        } else {
+          router.push(safeReturnTo ?? "/buildings")
+        }
+      } finally {
+        setIsLoading(false)
+      }
+    }
+    fetchData()
+  }, [buildingId, router, safeReturnTo, embedded, onNotFound])
+
+  // 조 검토위원 명단 (간사 이상만 조회 가능한 통계용 요약 API 재사용)
+  useEffect(() => {
+    if (!canManage) return
+    let cancelled = false
+    apiClient
+      .get<{ group_no: number | null; group_reviewers: GroupReviewerSummary[] }>(
+        `/api/buildings/${buildingId}/summary`,
+      )
+      .then(({ data }) => {
+        if (cancelled) return
+        setGroupNo(data.group_no)
+        setGroupReviewers(data.group_reviewers)
+      })
+      .catch(() => { /* 명단 없이 표시 */ })
+    return () => {
+      cancelled = true
+    }
+  }, [buildingId, canManage])
+
+  // 문의사항 등에서 `?editPhase=1` 로 진입하면 로딩 완료 후 단계 변경 다이얼로그 자동 오픈.
+  // building 갱신(저장) 시 재오픈되지 않도록 1회성 ref 가드를 쓴다.
+  const autoOpenedRef = useRef(false)
+  useEffect(() => {
+    if (autoOpenedRef.current) return
+    if (!isLoading && building && editPhaseParam && canChangePhase) {
+      autoOpenedRef.current = true
+      setPhaseDraft("")
+      setPhaseEditOpen(true)
+    }
+  }, [isLoading, building, editPhaseParam, canChangePhase])
+
+  useEffect(() => {
+    if (!reviewerDialogOpen || !canChangeReviewer || !building) return
+
+    let canceled = false
+    setReviewerDraftId(building.reviewer_id ? String(building.reviewer_id) : "")
+    setReviewerError(null)
+    setLoadingReviewers(true)
+
+    apiClient
+      .get<ReviewerOption[]>("/api/buildings/reviewer-options")
+      .then(({ data }) => {
+        if (canceled) return
+        const activeReviewers = data
+          .filter((reviewer) => reviewer.name.trim().length > 0)
+          .sort((a, b) => {
+            const groupA = a.group_no ?? 999
+            const groupB = b.group_no ?? 999
+            if (groupA !== groupB) return groupA - groupB
+            return a.name.localeCompare(b.name, "ko-KR")
+          })
+        setReviewers(activeReviewers)
+      })
+      .catch((err) => {
+        if (canceled) return
+        const msg =
+          (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
+          ?? "검토위원 목록 조회 실패"
+        setReviewerError(msg)
+      })
+      .finally(() => {
+        if (!canceled) setLoadingReviewers(false)
+      })
+
+    return () => {
+      canceled = true
+    }
+  }, [reviewerDialogOpen, canChangeReviewer, building])
+
+  interface NoteItem {
+    id: number
+    stage_id: number
+    author_id: number
+    author_name: string
+    content: string
+    created_at: string
+  }
+  const [notesByStage, setNotesByStage] = useState<Record<number, NoteItem[]>>({})
+  const [newNoteDraft, setNewNoteDraft] = useState<Record<number, string>>({})
+  const [savingNote, setSavingNote] = useState<number | null>(null)
+
+  const fetchNotes = async (stageId: number) => {
+    try {
+      const { data } = await apiClient.get<NoteItem[]>(
+        `/api/reviews/inappropriate/${stageId}/notes`
+      )
+      setNotesByStage((prev) => ({ ...prev, [stageId]: data }))
+    } catch {
+      // 무시
+    }
+  }
+
+  const handleAddNote = async (stageId: number) => {
+    const content = (newNoteDraft[stageId] ?? "").trim()
+    if (!content) return
+    setSavingNote(stageId)
+    try {
+      await apiClient.post(`/api/reviews/inappropriate/${stageId}/notes`, { content })
+      setNewNoteDraft((prev) => ({ ...prev, [stageId]: "" }))
+      await fetchNotes(stageId)
+    } catch (err) {
+      const msg =
+        (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
+        ?? "등록 실패"
+      alert(msg)
+    } finally {
+      setSavingNote(null)
+    }
+  }
+
+  const handleDeleteNote = async (stageId: number, noteId: number) => {
+    if (!confirm("이 의견을 삭제하시겠습니까?")) return
+    try {
+      await apiClient.delete(`/api/reviews/inappropriate/notes/${noteId}`)
+      await fetchNotes(stageId)
+    } catch (err) {
+      const msg =
+        (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
+        ?? "삭제 실패"
+      alert(msg)
+    }
+  }
+
+  const handleSavePhase = async () => {
+    if (!building || !phaseDraft) return
+    const allowed = getAdjacentManualPhases(building.current_phase)
+    if (!allowed.includes(phaseDraft)) {
+      alert("현재 단계에서 선택할 수 없는 단계입니다. 새로고침 후 다시 선택해주세요.")
+      return
+    }
+    setSavingPhase(true)
+    try {
+      const { data } = await apiClient.post<Building>(
+        `/api/buildings/${building.id}/phase`,
+        { to_phase: phaseDraft, reason: "manual_change" }
+      )
+      setBuilding(data)
+      setPhaseEditOpen(false)
+      setPhaseDraft("")
+    } catch (err) {
+      const msg =
+        (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
+        ?? "단계 변경 실패"
+      alert(msg)
+    } finally {
+      setSavingPhase(false)
+    }
+  }
+
+  const handleFinalizePass = async () => {
+    if (!building) return
+    const latestStage = [...stages]
+      .filter((stage) => stage.result)
+      .sort((a, b) => b.phase_order - a.phase_order)[0]
+    if (!latestStage || latestStage.result !== "pass") return
+
+    const finalResult = latestStage.phase === "preliminary" ? "pass" : "pass_supplement"
+    const label = RESULT_LABELS[finalResult] || finalResult
+    if (!confirm(`최근 판정이 적합입니다. 최종완료(${label}) 처리할까요?`)) return
+
+    setFinalizingPass(true)
+    try {
+      const { data } = await apiClient.post<Building>(
+        `/api/buildings/${building.id}/finalize-pass`,
+      )
+      setBuilding(data)
+      const { data: stagesRes } = await apiClient.get<ReviewStage[]>(
+        `/api/reviews/stages/${building.id}`,
+      )
+      setStages(stagesRes)
+    } catch (err) {
+      const msg =
+        (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
+        ?? "최종완료 처리 실패"
+      alert(msg)
+    } finally {
+      setFinalizingPass(false)
+    }
+  }
+
+  const handleSaveReviewer = async () => {
+    if (!building) return
+    const reviewerId = Number(reviewerDraftId)
+    if (!Number.isInteger(reviewerId) || reviewerId <= 0) {
+      alert("교체할 검토자를 선택해주세요")
+      return
+    }
+
+    setSavingReviewer(true)
+    setReviewerError(null)
+    try {
+      const { data } = await apiClient.patch<Building>(
+        `/api/buildings/${building.id}`,
+        { reviewer_id: reviewerId }
+      )
+      setBuilding(data)
+      setReviewerDialogOpen(false)
+    } catch (err) {
+      const msg =
+        (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
+        ?? "검토자 교체 실패"
+      setReviewerError(msg)
+      alert(msg)
+    } finally {
+      setSavingReviewer(false)
+    }
+  }
+
+  const handleInappropriateDecision = async (
+    stageId: number,
+    decision: InappropriateDecisionType
+  ) => {
+    try {
+      await apiClient.patch(`/api/reviews/inappropriate/${stageId}`, { decision })
+      // 단계 목록 재조회
+      const { data: stagesRes } = await apiClient.get<ReviewStage[]>(`/api/reviews/stages/${buildingId}`)
+      setStages(stagesRes)
+    } catch (err) {
+      const msg =
+        (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
+        ?? "변경 실패"
+      alert(msg)
+    }
+  }
+
+  const handleDeleteReviewHistory = async (stageId: number) => {
+    const confirmed = confirm(
+      "이 검토 이력을 삭제하시겠습니까?\n제출일, 검토자, 판정결과, 검토의견, 상세의견, 첨부 검토서 이력이 모두 삭제됩니다."
+    )
+    if (!confirmed) return
+
+    setDeletingOpinionStageId(stageId)
+    try {
+      await apiClient.delete(`/api/reviews/stages/${stageId}`)
+      setStages((prev) =>
+        prev.filter((stage) => stage.id !== stageId)
+      )
+    } catch (err) {
+      const msg =
+        (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
+        ?? "검토 이력 삭제에 실패했습니다"
+      alert(msg)
+    } finally {
+      setDeletingOpinionStageId(null)
+    }
+  }
+
+  const handleSubmitInquiry = async () => {
+    if (!building || !newInquiry.trim()) return
+    setSubmittingInquiry(true)
+    try {
+      const { data: created } = await apiClient.post<{ id: number }>(
+        "/api/reviews/inquiry",
+        {
+          mgmt_no: building.mgmt_no,
+          phase: building.current_phase || "preliminary",
+          content: newInquiry.trim(),
+        },
+      )
+      // 첨부 파일이 있으면 순차 업로드 (문의 생성 후 id 로 연결)
+      if (created.id && newInquiryFiles.length > 0) {
+        for (const file of newInquiryFiles) {
+          const formData = new FormData()
+          formData.append("file", file)
+          try {
+            await apiClient.post(
+              `/api/reviews/inquiry/${created.id}/attachments?kind=question`,
+              formData,
+              { headers: { "Content-Type": "multipart/form-data" } },
+            )
+          } catch {
+            // 개별 첨부 실패는 무시하고 다음으로 (사용자가 재시도 가능)
+          }
+        }
+      }
+      setNewInquiry("")
+      setNewInquiryFiles([])
+      const { data: inqData } = await apiClient.get(`/api/reviews/building-inquiries/${building.mgmt_no}`)
+      setInquiries(inqData)
+    } catch (err) {
+      const msg =
+        (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
+        ?? "문의 등록 실패"
+      alert(msg)
+    } finally {
+      setSubmittingInquiry(false)
+    }
+  }
+
+  const handleDeleteInquiryAttachment = async (attId: number) => {
+    if (!building) return
+    if (!confirm("첨부파일을 삭제하시겠습니까?")) return
+    try {
+      await apiClient.delete(`/api/reviews/inquiry-attachments/${attId}`)
+      const { data: inqData } = await apiClient.get(`/api/reviews/building-inquiries/${building.mgmt_no}`)
+      setInquiries(inqData)
+    } catch (err) {
+      const msg =
+        (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
+        ?? "삭제 실패"
+      alert(msg)
+    }
+  }
+
+  const refreshInquiries = async () => {
+    if (!building) return
+    const { data: inqData } = await apiClient.get(
+      `/api/reviews/building-inquiries/${building.mgmt_no}`
+    )
+    setInquiries(inqData)
+  }
+
+  const openInquiryEditDialog = (inq: { id: number; content: string }) => {
+    setEditInquiryTarget({ id: inq.id, content: inq.content, mgmt_no: building?.mgmt_no })
+    setEditInquiryContent(inq.content)
+  }
+
+  const handleSaveInquiryContent = async () => {
+    if (!editInquiryTarget) return
+    const content = editInquiryContent.trim()
+    if (!content) {
+      alert("문의 내용을 입력해주세요")
+      return
+    }
+    setSavingInquiryEdit(true)
+    try {
+      await apiClient.patch(`/api/reviews/inquiry/${editInquiryTarget.id}/content`, {
+        content,
+      })
+      setEditInquiryTarget(null)
+      setEditInquiryContent("")
+      await refreshInquiries()
+    } catch (err) {
+      const msg =
+        (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
+        ?? "수정 실패"
+      alert(msg)
+    } finally {
+      setSavingInquiryEdit(false)
+    }
+  }
+
+  const handleDeleteInquiry = async (inquiryId: number) => {
+    if (!confirm("이 문의를 삭제하시겠습니까?")) return
+    setDeletingInquiryId(inquiryId)
+    try {
+      await apiClient.delete(`/api/reviews/inquiry/${inquiryId}`)
+      await refreshInquiries()
+    } catch (err) {
+      const msg =
+        (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
+        ?? "삭제 실패"
+      alert(msg)
+    } finally {
+      setDeletingInquiryId(null)
+    }
+  }
+
+  if (isLoading) {
+    return <div className="flex justify-center py-20 text-muted-foreground">로딩 중...</div>
+  }
+
+  if (!building) return null
+
+  const phaseOptions = getAdjacentManualPhases(building.current_phase)
+  const reviewerDetail = building.reviewer_detail
+  const reviewerDisplayName = building.reviewer_name ?? building.assigned_reviewer_name
+  const latestResultStage = [...stages]
+    .filter((stage) => stage.result)
+    .sort((a, b) => b.phase_order - a.phase_order)[0]
+  const canFinalizePass =
+    user?.role === "chief_secretary" &&
+    !building.final_result &&
+    latestResultStage?.result === "pass"
+  const currentReviewerDraftId = building.reviewer_id ? String(building.reviewer_id) : ""
+  const reviewerDraftChanged = reviewerDraftId !== currentReviewerDraftId
+
+  return (
+    <div className="space-y-6">
+      {/* 헤더 */}
+      <div className="flex items-center justify-between">
+        <div>
+          {!embedded && (
+            <Button variant="ghost" size="sm" onClick={() => router.push(backPath)}>
+              {backLabel}
+            </Button>
+          )}
+          <h1 className="mt-2 text-2xl font-bold">
+            <span className="font-mono">{building.mgmt_no}</span>
+            {building.building_name && (
+              <span className="ml-3 text-muted-foreground">{building.building_name}</span>
+            )}
+          </h1>
+        </div>
+        <div className="flex items-center gap-2">
+          {building.current_phase && (
+            <Badge variant="outline" className="text-base px-3 py-1">
+              {PHASE_LABELS[building.current_phase as PhaseType] || building.current_phase}
+            </Badge>
+          )}
+          {canChangePhase && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => {
+                setPhaseDraft("")
+                setPhaseEditOpen(true)
+              }}
+            >
+              단계 수정
+            </Button>
+          )}
+          {canFinalizePass && (
+            <Button
+              size="sm"
+              onClick={handleFinalizePass}
+              loading={finalizingPass}
+              loadingText="처리 중..."
+            >
+              최종완료
+            </Button>
+          )}
+          {building.final_result && (
+            <Badge variant={RESULT_VARIANT[building.final_result] || "outline"} className="text-base px-3 py-1">
+              최종: {RESULT_LABELS[building.final_result as ResultType] || building.final_result}
+            </Badge>
+          )}
+        </div>
+      </div>
+
+      {/* 기본 정보 */}
+      <Card>
+        <CardHeader>
+          <CardTitle>건축물 기본정보</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-5">
+          <div className="grid grid-cols-2 gap-4 text-sm md:grid-cols-4">
+            <InfoItem label="시도" value={building.sido} />
+            <InfoItem label="시군구" value={building.sigungu} />
+            <InfoItem label="법정동" value={building.beopjeongdong} />
+            <InfoItem label="주구조" value={building.main_structure} />
+            <InfoItem label="주용도" value={building.main_usage} />
+            <InfoItem label="연면적" value={building.gross_area ? `${building.gross_area.toLocaleString()} ㎡` : null} />
+            <InfoItem label="지상층수" value={building.floors_above?.toString()} />
+            <InfoItem label="지하층수" value={building.floors_below?.toString()} />
+            <InfoItem label="고위험유형" value={building.high_risk_type} />
+            <InfoItem
+              label="준다중이용"
+              value={building.is_quasi_multi_use == null ? null : building.is_quasi_multi_use ? "예" : "아니오"}
+            />
+            <InfoItem label="내진등급" value={building.seismic_level} />
+            <InfoItem
+              label="검토자"
+              value={
+                canChangeReviewer ? (
+                  <Button
+                    type="button"
+                    variant="link"
+                    className="h-auto gap-1 p-0 text-sm font-medium"
+                    onClick={() => setReviewerDialogOpen(true)}
+                    aria-label={`${reviewerDisplayName ?? "미배정"} 검토자 교체`}
+                  >
+                    <UserRound className="h-3.5 w-3.5" />
+                    <span>{reviewerDisplayName ?? "미배정"}</span>
+                  </Button>
+                ) : reviewerDisplayName ? (
+                  reviewerDetail ? (
+                    <Button
+                      type="button"
+                      variant="link"
+                      className="h-auto gap-1 p-0 text-sm font-medium"
+                      onClick={() => setReviewerDialogOpen(true)}
+                      aria-label={`${reviewerDisplayName} 검토자 정보 보기`}
+                    >
+                      <UserRound className="h-3.5 w-3.5" />
+                      <span>{reviewerDisplayName}</span>
+                    </Button>
+                  ) : (
+                    reviewerDisplayName
+                  )
+                ) : (
+                  null
+                )
+              }
+            />
+          </div>
+
+          <Separator />
+
+          <div className="grid grid-cols-1 gap-4 text-sm md:grid-cols-3">
+            <div>
+              <p className="mb-1 text-muted-foreground font-medium">건축사사무소</p>
+              <div className="space-y-1">
+                <InfoItem label="소속" value={building.architect_firm} />
+                <InfoItem label="성명" value={building.architect_name} />
+              </div>
+            </div>
+            <div>
+              <p className="mb-1 text-muted-foreground font-medium">책임구조기술자 사무소</p>
+              <div className="space-y-1">
+                <InfoItem label="소속" value={building.struct_eng_firm} />
+                <InfoItem label="성명" value={building.struct_eng_name} />
+              </div>
+            </div>
+            <div>
+              <p className="mb-1 text-muted-foreground font-medium">도면작성자</p>
+              <div className="space-y-1">
+                <InfoItem label="자격" value={building.drawing_creator_qualification} />
+              </div>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* 조 검토위원 명단 (간사 이상) */}
+      {canManage && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <span>{groupNo != null ? `${groupNo}조 검토위원 명단` : "검토위원 명단"}</span>
+              {groupNo != null && (
+                <Badge variant="secondary">{groupReviewers.length}명</Badge>
+              )}
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {groupReviewers.length === 0 ? (
+              <p className="py-4 text-center text-sm text-muted-foreground">
+                {groupNo == null
+                  ? "조가 배정되지 않아 명단을 표시할 수 없습니다."
+                  : "해당 조에 등록된 검토위원이 없습니다."}
+              </p>
+            ) : (
+              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                {groupReviewers.map((reviewer) => (
+                  <div
+                    key={reviewer.reviewer_id}
+                    className={`rounded-md border px-3 py-2 text-sm ${
+                      reviewer.is_assigned ? "border-blue-200 bg-blue-50" : ""
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-medium">
+                        {reviewer.name}
+                        {reviewer.is_assigned && (
+                          <Badge className="ml-2" variant="default">담당</Badge>
+                        )}
+                      </span>
+                      <span className="text-xs text-muted-foreground">
+                        {reviewer.assigned_count.toLocaleString()}건
+                      </span>
+                    </div>
+                    <div className="mt-1 text-xs text-muted-foreground">
+                      {reviewer.specialty || "전문분야 미등록"}
+                      {reviewer.phone ? ` · ${reviewer.phone}` : ""}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* 검토 진행 타임라인 */}
+      <Card>
+        <CardHeader>
+          <CardTitle>검토 진행 현황</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {stages.length === 0 ? (
+            <p className="text-sm text-muted-foreground py-8 text-center">
+              아직 검토 이력이 없습니다
+            </p>
+          ) : (
+            <div className="space-y-4">
+              {stages.map((stage, idx) => (
+                <div key={stage.id}>
+                  {idx > 0 && <Separator className="my-4" />}
+                  <div className="flex items-start gap-4">
+                    {/* 단계 라벨 */}
+                    <div className="w-24 shrink-0">
+                      <Badge
+                        variant={stage.result ? (RESULT_VARIANT[stage.result] || "outline") : "outline"}
+                        className="w-full justify-center"
+                      >
+                        {PHASE_LABELS[stage.phase as PhaseType] || stage.phase}
+                      </Badge>
+                    </div>
+
+                    {/* 상세 정보 */}
+                    <div className="flex-1 space-y-2 text-sm">
+                      <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+                        {stage.doc_received_at && (
+                          <InfoItem label="도서접수일" value={stage.doc_received_at} />
+                        )}
+                        {stage.report_submitted_at && (
+                          <InfoItem label="검토서 제출일" value={stage.report_submitted_at} />
+                        )}
+                        {stage.reviewer_name && (
+                          <InfoItem label="검토자" value={stage.reviewer_name} />
+                        )}
+                        {stage.result && (
+                          <InfoItem
+                            label="판정결과"
+                            value={RESULT_LABELS[stage.result as ResultType] || stage.result}
+                          />
+                        )}
+                      </div>
+
+                      {/* 부적합 유형 */}
+                      {(stage.defect_type_1 || stage.defect_type_2 || stage.defect_type_3) && (
+                        <div>
+                          <dt className="text-muted-foreground mb-1">부적합 유형</dt>
+                          <div className="flex flex-wrap gap-1">
+                            {[stage.defect_type_1, stage.defect_type_2, stage.defect_type_3]
+                              .filter(Boolean)
+                              .map((dt, i) => (
+                                <Badge key={i} variant="destructive" className="text-xs">
+                                  {dt}
+                                </Badge>
+                              ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {([
+                        ["L0", stage.severity_l0_count],
+                        ["L1", stage.severity_l1_count],
+                        ["L2", stage.severity_l2_count],
+                        ["L3", stage.severity_l3_count],
+                        ["L4", stage.severity_l4_count],
+                      ] as const).some(([, count]) => count > 0) && (
+                        <div>
+                          <dt className="text-muted-foreground mb-1">심각도 집계</dt>
+                          <div className="flex flex-wrap gap-1">
+                            {([
+                              ["L0", stage.severity_l0_count],
+                              ["L1", stage.severity_l1_count],
+                              ["L2", stage.severity_l2_count],
+                              ["L3", stage.severity_l3_count],
+                              ["L4", stage.severity_l4_count],
+                            ] as const).map(([label, count]) => (
+                              <Badge key={label} variant={count > 0 ? "secondary" : "outline"} className="text-xs">
+                                {label}: {count}
+                              </Badge>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* 검토의견 */}
+                      {stage.review_opinion && (
+                        <div>
+                          <div className="mb-1 flex items-center justify-between gap-2">
+                            <dt className="text-muted-foreground">검토의견</dt>
+                            {canManage && (
+                              <Button
+                                size="xs"
+                                variant="destructive"
+                                onClick={() => handleDeleteReviewHistory(stage.id)}
+                                loading={deletingOpinionStageId === stage.id}
+                                loadingText="삭제 중..."
+                              >
+                                <Trash2 className="h-3 w-3" />
+                                삭제
+                              </Button>
+                            )}
+                          </div>
+                          <div className="rounded-md bg-muted p-3 text-sm whitespace-pre-wrap break-words max-h-60 overflow-y-auto">
+                            {stage.review_opinion}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* 부적합 검토 판정 (간사 이상 + 부적합 체크된 단계만) */}
+                      {stage.inappropriate_review_needed && canManage && (
+                        <div className="rounded-md border border-orange-200 bg-orange-50 p-3 space-y-3">
+                          <div>
+                            <dt className="text-sm font-medium text-orange-900 mb-2">
+                              부적합 대상 검토 판정
+                            </dt>
+                            <div className="flex flex-wrap gap-2">
+                              {([
+                                { key: "collapse_risk", label: "붕괴우려" },
+                                { key: "confirmed_serious", label: "확정(심각)" },
+                                { key: "confirmed_simple", label: "확정(단순)" },
+                                { key: "pending", label: "대기" },
+                                { key: "excluded", label: "제외" },
+                              ] as const).map((opt) => {
+                                const active = (stage.inappropriate_decision ?? "pending") === opt.key
+                                const activeVariant =
+                                  opt.key === "excluded" || opt.key === "collapse_risk"
+                                    ? "destructive"
+                                    : "default"
+                                return (
+                                  <Button
+                                    key={opt.key}
+                                    size="sm"
+                                    variant={active ? activeVariant : "outline"}
+                                    onClick={() => handleInappropriateDecision(stage.id, opt.key)}
+                                  >
+                                    {opt.label}
+                                  </Button>
+                                )
+                              })}
+                            </div>
+                          </div>
+
+                          {/* 간사진 의견 (다중, 작성자 기록) */}
+                          <div>
+                            <dt className="text-sm font-medium text-orange-900 mb-2">
+                              간사진 의견
+                              {notesByStage[stage.id]?.length > 0 && (
+                                <span className="ml-2 text-xs text-orange-700">
+                                  ({notesByStage[stage.id].length})
+                                </span>
+                              )}
+                            </dt>
+
+                            {/* 의견 리스트 */}
+                            <div className="space-y-2 mb-3">
+                              {(notesByStage[stage.id] ?? []).map((n) => {
+                                const isOwner = user?.id === n.author_id
+                                const isAdmin = user && ["team_leader", "chief_secretary"].includes(user.role)
+                                return (
+                                  <div
+                                    key={n.id}
+                                    className="rounded-md border border-orange-200 bg-white p-3 text-sm"
+                                  >
+                                    <div className="flex items-start justify-between gap-2">
+                                      <div className="flex items-center gap-2">
+                                        <span className="font-medium">{n.author_name}</span>
+                                        <span className="text-xs text-muted-foreground">
+                                          {new Date(n.created_at).toLocaleString("ko-KR")}
+                                        </span>
+                                      </div>
+                                      {(isOwner || isAdmin) && (
+                                        <Button
+                                          size="icon-xs"
+                                          variant="ghost"
+                                          onClick={() => handleDeleteNote(stage.id, n.id)}
+                                          aria-label="삭제"
+                                        >
+                                          ×
+                                        </Button>
+                                      )}
+                                    </div>
+                                    <p className="mt-1 whitespace-pre-wrap break-words">
+                                      {n.content}
+                                    </p>
+                                  </div>
+                                )
+                              })}
+                              {(!notesByStage[stage.id] || notesByStage[stage.id].length === 0) && (
+                                <p className="text-xs text-muted-foreground">
+                                  아직 등록된 의견이 없습니다.
+                                </p>
+                              )}
+                            </div>
+
+                            {/* 새 의견 입력 */}
+                            <textarea
+                              className="w-full min-h-[60px] rounded-md border border-orange-200 bg-white px-3 py-2 text-sm"
+                              placeholder="새 의견을 작성하세요"
+                              value={newNoteDraft[stage.id] ?? ""}
+                              onChange={(e) =>
+                                setNewNoteDraft({ ...newNoteDraft, [stage.id]: e.target.value })
+                              }
+                            />
+                            <div className="flex justify-end mt-2">
+                              <Button
+                                size="sm"
+                                onClick={() => handleAddNote(stage.id)}
+                                disabled={!(newNoteDraft[stage.id] ?? "").trim()}
+                                loading={savingNote === stage.id}
+                                loadingText="등록 중..."
+                              >
+                                의견 등록
+                              </Button>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* 문의사항 */}
+      <Card>
+        <CardHeader>
+          <CardTitle>문의사항</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {/* 문의 등록 — 해당 건물의 담당 검토자만 가능 (역할 무관) */}
+          {isAssigned && (
+            <div className="space-y-2">
+              <div className="flex gap-2">
+                <Input
+                  placeholder="문의 내용을 입력하세요"
+                  value={newInquiry}
+                  onChange={(e) => setNewInquiry(e.target.value)}
+                  className="flex-1"
+                />
+                <Button
+                  onClick={handleSubmitInquiry}
+                  disabled={!newInquiry.trim()}
+                  loading={submittingInquiry}
+                  loadingText="등록 중..."
+                >
+                  문의 등록
+                </Button>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <label className="inline-flex cursor-pointer items-center gap-1 rounded-md border px-2 py-1 text-xs text-muted-foreground hover:bg-muted">
+                  <Paperclip className="h-3.5 w-3.5" />
+                  파일 추가
+                  <input
+                    type="file"
+                    className="hidden"
+                    multiple
+                    onChange={(e) => {
+                      const files = Array.from(e.target.files ?? [])
+                      if (files.length > 0) setNewInquiryFiles((prev) => [...prev, ...files])
+                      e.target.value = ""
+                    }}
+                  />
+                </label>
+                {newInquiryFiles.map((f, i) => (
+                  <span
+                    key={`${f.name}-${i}`}
+                    className="inline-flex items-center gap-1 rounded-md bg-slate-100 px-2 py-1 text-xs text-slate-700"
+                  >
+                    <span className="max-w-[160px] truncate">{f.name}</span>
+                    <button
+                      type="button"
+                      className="text-slate-500 hover:text-slate-900"
+                      onClick={() =>
+                        setNewInquiryFiles((prev) => prev.filter((_, idx) => idx !== i))
+                      }
+                      aria-label="제거"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* 문의 이력 */}
+          {inquiries.length === 0 ? (
+            <p className="text-sm text-muted-foreground py-4 text-center">
+              문의 이력이 없습니다
+            </p>
+          ) : (
+            <div className="space-y-3">
+              {inquiries.map((inq) => (
+                <div key={inq.id} className="rounded-md border p-3 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-medium">{inq.submitter_name}</span>
+                      <Badge variant="outline" className="text-xs">
+                        {PHASE_LABELS[inq.phase] || inq.phase}
+                      </Badge>
+                      <Badge variant={
+                        inq.status === "open" ? "destructive" :
+                        inq.status === "asking_agency" ? "secondary" : "default"
+                      } className="text-xs">
+                        {inq.status === "open" ? "접수" :
+                         inq.status === "asking_agency" ? "관리원문의중" :
+                        "완료"}
+                      </Badge>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-muted-foreground">
+                        {new Date(inq.created_at).toLocaleString("ko-KR")}
+                      </span>
+                      {((user?.id === inq.submitter_id && inq.status !== "completed") || canManage) && (
+                        <div className="flex gap-1">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => openInquiryEditDialog(inq)}
+                          >
+                            수정
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="destructive"
+                            loading={deletingInquiryId === inq.id}
+                            loadingText="삭제 중..."
+                            onClick={() => handleDeleteInquiry(inq.id)}
+                          >
+                            삭제
+                          </Button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  <p className="text-sm">{inq.content}</p>
+                  {/* 질문 첨부 */}
+                  {(inq.attachments ?? []).filter((a) => a.kind === "question").length > 0 && (
+                    <div className="space-y-2">
+                      {inq.attachments!
+                        .filter((a) => a.kind === "question")
+                        .map((a) => (
+                          <AttachmentItem
+                            key={a.id}
+                            attachment={a}
+                            canDelete={user?.id === a.uploaded_by || !!canManage}
+                            onDelete={() => handleDeleteInquiryAttachment(a.id)}
+                          />
+                        ))}
+                    </div>
+                  )}
+                  {inq.reply && (
+                    <div className="rounded bg-muted p-2 text-sm">
+                      <span className="text-muted-foreground">답변: </span>
+                      {inq.reply}
+                    </div>
+                  )}
+                  {/* 답변 첨부 */}
+                  {(inq.attachments ?? []).filter((a) => a.kind === "reply").length > 0 && (
+                    <div className="space-y-2">
+                      {inq.attachments!
+                        .filter((a) => a.kind === "reply")
+                        .map((a) => (
+                          <AttachmentItem
+                            key={a.id}
+                            attachment={a}
+                            canDelete={user?.id === a.uploaded_by || !!canManage}
+                            onDelete={() => handleDeleteInquiryAttachment(a.id)}
+                          />
+                        ))}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* 문의 내용 수정 다이얼로그 */}
+      <Dialog
+        open={!!editInquiryTarget}
+        onOpenChange={(open) => {
+          if (!open) {
+            setEditInquiryTarget(null)
+            setEditInquiryContent("")
+          }
+        }}
+      >
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>문의 내용 수정</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <p className="text-xs text-muted-foreground">
+              관리번호{" "}
+              <span className="font-mono font-medium">{editInquiryTarget?.mgmt_no ?? building.mgmt_no}</span>
+            </p>
+            <textarea
+              className="min-h-[140px] w-full rounded-md border px-3 py-2 text-sm"
+              value={editInquiryContent}
+              onChange={(e) => setEditInquiryContent(e.target.value)}
+              placeholder="문의 내용을 입력해주세요"
+            />
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setEditInquiryTarget(null)
+                setEditInquiryContent("")
+              }}
+              disabled={savingInquiryEdit}
+            >
+              취소
+            </Button>
+            <Button
+              onClick={handleSaveInquiryContent}
+              loading={savingInquiryEdit}
+              loadingText="저장 중..."
+            >
+              저장
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* 검토자 정보/교체 */}
+      <Dialog
+        open={reviewerDialogOpen}
+        onOpenChange={(open) => {
+          if (!savingReviewer) setReviewerDialogOpen(open)
+        }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>{canChangeReviewer ? "검토자 교체" : "검토자 정보"}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            {reviewerDetail ? (
+              <div className="grid grid-cols-[84px_1fr] gap-x-3 gap-y-2 text-sm">
+                <span className="text-muted-foreground">이름</span>
+                <span className="font-medium">{reviewerDetail.name}</span>
+                <span className="text-muted-foreground">조</span>
+                <span className="font-medium">
+                  {reviewerDetail.group_no ? `${reviewerDetail.group_no}조` : "-"}
+                </span>
+                <span className="text-muted-foreground">이메일주소</span>
+                <span className="break-all font-medium">{reviewerDetail.email || "-"}</span>
+                <span className="text-muted-foreground">전화번호</span>
+                <span className="font-medium">{reviewerDetail.phone || "-"}</span>
+              </div>
+            ) : (
+              <div className="grid grid-cols-[84px_1fr] gap-x-3 gap-y-2 text-sm">
+                <span className="text-muted-foreground">현재</span>
+                <span className="font-medium">{reviewerDisplayName ?? "미배정"}</span>
+              </div>
+            )}
+
+            {canChangeReviewer && (
+              <>
+                <Separator />
+                <div className="space-y-2">
+                  <Label htmlFor="reviewer-select">교체할 검토자</Label>
+                  <select
+                    id="reviewer-select"
+                    className="w-full rounded-md border px-3 py-2 text-sm"
+                    value={reviewerDraftId}
+                    onChange={(e) => setReviewerDraftId(e.target.value)}
+                    disabled={loadingReviewers || savingReviewer}
+                  >
+                    <option value="">
+                      {loadingReviewers ? "불러오는 중..." : "검토자를 선택해주세요"}
+                    </option>
+                    {reviewers.map((reviewer) => (
+                      <option key={reviewer.reviewer_id} value={reviewer.reviewer_id}>
+                        {reviewer.group_no ? `${reviewer.group_no}조 · ` : ""}
+                        {reviewer.name}
+                        {reviewer.email ? ` · ${reviewer.email}` : ""}
+                      </option>
+                    ))}
+                  </select>
+                  {reviewerError && (
+                    <p className="text-sm text-destructive">{reviewerError}</p>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+          {canChangeReviewer && (
+            <DialogFooter>
+              <Button
+                variant="outline"
+                onClick={() => setReviewerDialogOpen(false)}
+                disabled={savingReviewer}
+              >
+                취소
+              </Button>
+              <Button
+                onClick={handleSaveReviewer}
+                loading={savingReviewer}
+                loadingText="저장 중..."
+                disabled={
+                  savingReviewer ||
+                  loadingReviewers ||
+                  !reviewerDraftId ||
+                  !reviewerDraftChanged
+                }
+              >
+                저장
+              </Button>
+            </DialogFooter>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* 현재 단계 수정 다이얼로그 (간사 이상) */}
+      <Dialog open={phaseEditOpen} onOpenChange={setPhaseEditOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>현재 단계 수정</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-1 text-xs text-muted-foreground">
+              <p>
+                현재 단계:{" "}
+                <span className="font-medium text-foreground">
+                  {PHASE_LABELS[building.current_phase ?? ""] || building.current_phase || "-"}
+                </span>
+              </p>
+              <p>단계 변경은 현재 단계 기준 바로 이전/다음 1단계만 선택할 수 있습니다.</p>
+            </div>
+            <div className="space-y-2">
+              <Label>단계 선택</Label>
+              <select
+                className="w-full rounded-md border px-3 py-2 text-sm"
+                value={phaseDraft}
+                onChange={(e) => setPhaseDraft(e.target.value)}
+                disabled={phaseOptions.length === 0}
+              >
+                <option value="">
+                  {phaseOptions.length === 0 ? "변경 가능한 단계 없음" : "선택해주세요"}
+                </option>
+                {phaseOptions.map((value) => (
+                  <option key={value} value={value}>
+                    {PHASE_LABELS[value] || value}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPhaseEditOpen(false)} disabled={savingPhase}>
+              취소
+            </Button>
+            <Button
+              onClick={handleSavePhase}
+              loading={savingPhase}
+              loadingText="저장 중..."
+              disabled={savingPhase || !phaseDraft || phaseOptions.length === 0}
+            >
+              저장
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  )
+}
+
+function InfoItem({
+  label,
+  value,
+}: {
+  label: string
+  value: React.ReactNode | null | undefined
+}) {
+  return (
+    <div>
+      <dt className="text-muted-foreground">{label}</dt>
+      <dd className="font-medium">{value || "-"}</dd>
+    </div>
+  )
+}

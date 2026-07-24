@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useState, type ReactNode } from "react"
 import { useRouter } from "next/navigation"
-import { ArrowDown, ArrowUp, ArrowUpDown } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -17,7 +16,14 @@ import {
 } from "@/components/ui/table"
 import apiClient from "@/lib/api/client"
 import { useAuthStore } from "@/stores/authStore"
-import { BuildingSummaryDialog } from "@/components/BuildingSummaryDialog"
+import { BuildingDetailDialog } from "@/components/BuildingDetailDialog"
+import {
+  SortableTableHead,
+  TABLE_SORT_COLLATOR,
+  sortRowsBy,
+  useTableSort,
+  type SortState,
+} from "@/components/SortableTableHead"
 import { RESULT_LABELS, type PhaseType, type ResultType } from "@/types"
 
 type ActiveTab = "reviewer" | "regional" | "severity" | "keyword" | "quality" | "opinion"
@@ -27,8 +33,23 @@ type OpinionSeverity = "NA" | SeverityLabel
 type ReportMaxLabel = "pass" | SeverityLabel
 type RelatedTechCoopStatus = "cooperated" | "not_cooperated"
 type OpinionQualityDecision = "suitable" | "unsuitable"
-type SortDirection = "asc" | "desc"
 type SeverityTableSortKey<TLabel extends string> = "label" | "total" | TLabel
+type RegionalSortKey<T extends string> = "region" | "total" | T
+type KeywordSortKey =
+  | "keyword"
+  | "total"
+  | "preliminary"
+  | "supplement"
+  | SeverityLabel
+type CountTableSortKey = "label" | "count"
+type QualityItemSortKey = "mgmt_no" | "group_no" | "reviewer_name" | "quality_decision"
+type OpinionDetailSortKey =
+  | "mgmt_no"
+  | "phase"
+  | "result"
+  | "category"
+  | "severity"
+  | "inappropriate"
 type ReviewerSortKey =
   | "group_no"
   | "name"
@@ -89,16 +110,6 @@ interface ReviewerPhaseStat {
   doc_received: number
   report_submitted: number
   results: Record<ResultType, number>
-}
-
-interface ReviewerSortState {
-  key: ReviewerSortKey
-  direction: SortDirection
-}
-
-interface SeverityTableSortState<TLabel extends string> {
-  key: SeverityTableSortKey<TLabel>
-  direction: SortDirection
 }
 
 interface ReviewerTotals {
@@ -324,6 +335,20 @@ const RESULT_BADGE_VARIANT: Record<string, "default" | "secondary" | "destructiv
   recalculate: "destructive",
 }
 const REVIEW_RESULT_KEYS: ResultType[] = ["pass", "simple_error", "recalculate"]
+// 정렬 시 심각한 판정·앞 단계가 위로 오도록 하는 순서
+const RESULT_SORT_ORDER: Record<string, number> = {
+  recalculate: 0,
+  simple_error: 1,
+  pass: 2,
+}
+const PHASE_SORT_ORDER: Record<string, number> = {
+  preliminary: 0,
+  supplement_1: 1,
+  supplement_2: 2,
+  supplement_3: 3,
+  supplement_4: 4,
+  supplement_5: 5,
+}
 const REVIEWER_RESULT_SORT_KEYS: Record<"preliminary" | "supplement", Record<ResultType, ReviewerSortKey>> = {
   preliminary: {
     pass: "preliminary_pass_rate",
@@ -336,10 +361,24 @@ const REVIEWER_RESULT_SORT_KEYS: Record<"preliminary" | "supplement", Record<Res
     recalculate: "supplement_recalculate_rate",
   },
 }
-const REVIEWER_NAME_COLLATOR = new Intl.Collator("ko-KR", {
-  numeric: true,
-  sensitivity: "base",
-})
+// 첫 클릭에서 큰 값부터 보여 줄 숫자 열 (조·이름은 오름차순이 자연스럽다)
+const REVIEWER_NUMERIC_SORT_KEYS: ReviewerSortKey[] = [
+  "preliminary_doc_received",
+  "preliminary_report_submitted",
+  "preliminary_pass_rate",
+  "preliminary_simple_error_rate",
+  "preliminary_recalculate_rate",
+  "supplement_doc_received",
+  "supplement_report_submitted",
+  "supplement_pass_rate",
+  "supplement_simple_error_rate",
+  "supplement_recalculate_rate",
+  "total",
+  "total_area",
+  "area_over_1000",
+  "high_risk",
+  "completed",
+]
 
 const REPORT_MAX_STYLE: Record<ReportMaxLabel, string> = {
   pass: "border-emerald-200 bg-emerald-50 text-emerald-700",
@@ -513,9 +552,13 @@ export default function StatisticsPage() {
         </CardContent>
       </Card>
 
-      <BuildingSummaryDialog
+      <BuildingDetailDialog
         buildingId={detailBuildingId}
-        onClose={() => setDetailBuildingId(null)}
+        onClose={() => {
+          setDetailBuildingId(null)
+          // 팝업에서 단계·판정을 바꿨을 수 있으므로 통계를 다시 불러온다.
+          fetchStats()
+        }}
       />
     </div>
   )
@@ -558,19 +601,18 @@ function ReviewerStatsTable({
   isLoading: boolean
   rows: ReviewerStat[]
 }) {
-  const [sortState, setSortState] = useState<ReviewerSortState>({
-    key: "group_no",
-    direction: "asc",
+  const { sortState, handleSort } = useTableSort<ReviewerSortKey>({
+    initial: { key: "group_no", direction: "asc" },
+    numericKeys: REVIEWER_NUMERIC_SORT_KEYS,
   })
 
-  const sortedRows = [...rows].sort((a, b) => compareReviewerRows(a, b, sortState))
+  const sortedRows = sortRowsBy(
+    rows,
+    sortState,
+    getReviewerSortValue,
+    compareReviewerRowsTiebreak,
+  )
   const totals = buildReviewerTotals(rows)
-  const handleSort = (key: ReviewerSortKey) => {
-    setSortState((current) => ({
-      key,
-      direction: current.key === key && current.direction === "asc" ? "desc" : "asc",
-    }))
-  }
 
   if (isLoading) {
     return <LoadingMessage />
@@ -584,7 +626,7 @@ function ReviewerStatsTable({
       <Table className="min-w-[1180px]">
         <TableHeader>
           <TableRow>
-            <ReviewerSortableHead
+            <SortableTableHead
               rowSpan={2}
               sortKey="group_no"
               sortState={sortState}
@@ -592,8 +634,8 @@ function ReviewerStatsTable({
               className="w-[64px] text-center"
             >
               조
-            </ReviewerSortableHead>
-            <ReviewerSortableHead
+            </SortableTableHead>
+            <SortableTableHead
               rowSpan={2}
               sortKey="name"
               sortState={sortState}
@@ -602,30 +644,30 @@ function ReviewerStatsTable({
               className="min-w-[120px]"
             >
               이름
-            </ReviewerSortableHead>
+            </SortableTableHead>
             <TableHead colSpan={5} className="border-l text-center">예비</TableHead>
             <TableHead colSpan={5} className="border-l text-center">보완</TableHead>
             <TableHead colSpan={5} className="border-l text-center">요약</TableHead>
           </TableRow>
           <TableRow>
-            <ReviewerSortableHead
+            <SortableTableHead
               sortKey="preliminary_doc_received"
               sortState={sortState}
               onSort={handleSort}
               className="border-l text-center"
             >
               예비도서
-            </ReviewerSortableHead>
-            <ReviewerSortableHead
+            </SortableTableHead>
+            <SortableTableHead
               sortKey="preliminary_report_submitted"
               sortState={sortState}
               onSort={handleSort}
               className="text-center"
             >
               예비검토서
-            </ReviewerSortableHead>
+            </SortableTableHead>
             {REVIEW_RESULT_KEYS.map((result) => (
-              <ReviewerSortableHead
+              <SortableTableHead
                 key={`preliminary-${result}`}
                 sortKey={REVIEWER_RESULT_SORT_KEYS.preliminary[result]}
                 sortState={sortState}
@@ -633,26 +675,26 @@ function ReviewerStatsTable({
                 className="text-center"
               >
                 {RESULT_LABELS[result]}
-              </ReviewerSortableHead>
+              </SortableTableHead>
             ))}
-            <ReviewerSortableHead
+            <SortableTableHead
               sortKey="supplement_doc_received"
               sortState={sortState}
               onSort={handleSort}
               className="border-l text-center"
             >
               보완도서
-            </ReviewerSortableHead>
-            <ReviewerSortableHead
+            </SortableTableHead>
+            <SortableTableHead
               sortKey="supplement_report_submitted"
               sortState={sortState}
               onSort={handleSort}
               className="text-center"
             >
               보완검토서
-            </ReviewerSortableHead>
+            </SortableTableHead>
             {REVIEW_RESULT_KEYS.map((result) => (
-              <ReviewerSortableHead
+              <SortableTableHead
                 key={`supplement-${result}`}
                 sortKey={REVIEWER_RESULT_SORT_KEYS.supplement[result]}
                 sortState={sortState}
@@ -660,17 +702,17 @@ function ReviewerStatsTable({
                 className="text-center"
               >
                 {RESULT_LABELS[result]}
-              </ReviewerSortableHead>
+              </SortableTableHead>
             ))}
-            <ReviewerSortableHead
+            <SortableTableHead
               sortKey="total"
               sortState={sortState}
               onSort={handleSort}
               className="border-l text-center"
             >
               배정
-            </ReviewerSortableHead>
-            <ReviewerSortableHead
+            </SortableTableHead>
+            <SortableTableHead
               sortKey="total_area"
               sortState={sortState}
               onSort={handleSort}
@@ -678,31 +720,31 @@ function ReviewerStatsTable({
               className="text-right"
             >
               연면적 합
-            </ReviewerSortableHead>
-            <ReviewerSortableHead
+            </SortableTableHead>
+            <SortableTableHead
               sortKey="area_over_1000"
               sortState={sortState}
               onSort={handleSort}
               className="text-center"
             >
               1000㎡ 이상
-            </ReviewerSortableHead>
-            <ReviewerSortableHead
+            </SortableTableHead>
+            <SortableTableHead
               sortKey="high_risk"
               sortState={sortState}
               onSort={handleSort}
               className="text-center"
             >
               고위험
-            </ReviewerSortableHead>
-            <ReviewerSortableHead
+            </SortableTableHead>
+            <SortableTableHead
               sortKey="completed"
               sortState={sortState}
               onSort={handleSort}
               className="text-center"
             >
               완료
-            </ReviewerSortableHead>
+            </SortableTableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -852,68 +894,10 @@ function ReviewerResultRateBadge({
   )
 }
 
-function ReviewerSortableHead({
-  sortKey,
-  sortState,
-  onSort,
-  children,
-  align = "center",
-  className = "",
-  rowSpan,
-}: {
-  sortKey: ReviewerSortKey
-  sortState: ReviewerSortState
-  onSort: (key: ReviewerSortKey) => void
-  children: ReactNode
-  align?: "left" | "center" | "right"
-  className?: string
-  rowSpan?: number
-}) {
-  const isActive = sortState.key === sortKey
-  const Icon = isActive ? (sortState.direction === "asc" ? ArrowUp : ArrowDown) : ArrowUpDown
-  const ariaSort = isActive
-    ? sortState.direction === "asc"
-      ? "ascending"
-      : "descending"
-    : "none"
-  const justifyClass = {
-    left: "justify-start",
-    center: "justify-center",
-    right: "justify-end",
-  }[align]
-
-  return (
-    <TableHead rowSpan={rowSpan} aria-sort={ariaSort} className={className}>
-      <button
-        type="button"
-        className={`inline-flex w-full items-center gap-1 ${justifyClass} rounded px-1 py-1 text-sm font-medium hover:bg-muted`}
-        onClick={() => onSort(sortKey)}
-      >
-        <span>{children}</span>
-        <Icon className="h-3.5 w-3.5 text-muted-foreground" aria-hidden />
-      </button>
-    </TableHead>
-  )
-}
-
-function compareReviewerRows(
-  a: ReviewerStat,
-  b: ReviewerStat,
-  sortState: ReviewerSortState,
-) {
-  const aValue = getReviewerSortValue(a, sortState.key)
-  const bValue = getReviewerSortValue(b, sortState.key)
-  const direction = sortState.direction === "asc" ? 1 : -1
-  const primary =
-    typeof aValue === "string" || typeof bValue === "string"
-      ? REVIEWER_NAME_COLLATOR.compare(String(aValue), String(bValue))
-      : aValue - bValue
-
-  if (primary !== 0) return primary * direction
-
+function compareReviewerRowsTiebreak(a: ReviewerStat, b: ReviewerStat) {
   const groupCompare = compareNullableNumber(a.group_no, b.group_no)
   if (groupCompare !== 0) return groupCompare
-  return REVIEWER_NAME_COLLATOR.compare(a.name, b.name)
+  return TABLE_SORT_COLLATOR.compare(a.name, b.name)
 }
 
 function getReviewerSortValue(row: ReviewerStat, key: ReviewerSortKey) {
@@ -1076,6 +1060,10 @@ function RegionalStatsTable<T extends string>({
   rows: RegionalStatRow<T>[]
   columns: RegionalColumn<T>[]
 }) {
+  const { sortState, handleSort } = useTableSort<RegionalSortKey<T>>({
+    numericKeys: ["total", ...columns.map((column) => column.key)],
+  })
+
   if (rows.length === 0) {
     return <EmptyMessage>집계된 지역이 없습니다.</EmptyMessage>
   }
@@ -1085,22 +1073,54 @@ function RegionalStatsTable<T extends string>({
     row.total ?? columns.reduce((sum, column) => sum + (row[column.key] ?? 0), 0)
   const grandTotal = getRowTotal(totalRow)
 
+  // 합계 행("전체")은 정렬과 무관하게 항상 맨 위에 둔다.
+  const dataRows = rows.filter((row) => row !== totalRow)
+  const sortedRows = [
+    totalRow,
+    ...sortRowsBy(dataRows, sortState, (row, key) => {
+      if (key === "region") return row.region
+      if (key === "total") return getRowTotal(row)
+      return row[key as T] ?? 0
+    }),
+  ]
+
   return (
     <div className="overflow-x-auto rounded-md border">
       <Table>
         <TableHeader>
           <TableRow>
-            <TableHead className="min-w-[180px]">지역</TableHead>
+            <SortableTableHead
+              sortKey="region"
+              sortState={sortState}
+              onSort={handleSort}
+              align="left"
+              className="min-w-[180px]"
+            >
+              지역
+            </SortableTableHead>
             {columns.map((column) => (
-              <TableHead key={column.key} className="min-w-[92px] text-center">
+              <SortableTableHead
+                key={column.key}
+                sortKey={column.key}
+                sortState={sortState}
+                onSort={handleSort}
+                className="min-w-[92px] text-center"
+              >
                 {column.label}
-              </TableHead>
+              </SortableTableHead>
             ))}
-            <TableHead className="min-w-[80px] text-center">합계</TableHead>
+            <SortableTableHead
+              sortKey="total"
+              sortState={sortState}
+              onSort={handleSort}
+              className="min-w-[80px] text-center"
+            >
+              합계
+            </SortableTableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
-          {rows.map((row) => {
+          {sortedRows.map((row) => {
             const isTotal = row.region === "전체"
             const rowTotal = getRowTotal(row)
             return (
@@ -1221,7 +1241,7 @@ function SeverityStatsView({
             getColumnLabel={(label) => label}
             getLabel={(row) => row.category}
             emptyText="분류별 심각도 집계가 없습니다."
-            enableSorting
+            initialSort={{ key: "total", direction: "desc" }}
           />
         </section>
 
@@ -1288,7 +1308,7 @@ function SeverityTable<
   getColumnLabel,
   getLabel,
   emptyText,
-  enableSorting = false,
+  initialSort,
 }: {
   labels: TLabel[]
   labelHeader: string
@@ -1296,75 +1316,57 @@ function SeverityTable<
   getColumnLabel: (label: TLabel) => string
   getLabel: (row: TRow) => string
   emptyText: string
-  enableSorting?: boolean
+  /** 지정하지 않으면 서버가 준 순서를 유지하고, 헤더 클릭 시에만 정렬한다. */
+  initialSort?: SortState<SeverityTableSortKey<TLabel>>
 }) {
-  const [sortState, setSortState] = useState<SeverityTableSortState<TLabel>>({
-    key: "total",
-    direction: "desc",
+  const { sortState, handleSort } = useTableSort<SeverityTableSortKey<TLabel>>({
+    initial: initialSort,
+    numericKeys: ["total", ...labels],
   })
 
   if (rows.length === 0) {
     return <EmptyMessage>{emptyText}</EmptyMessage>
   }
 
-  const sortedRows = enableSorting
-    ? [...rows].sort((a, b) => compareSeverityRows(a, b, sortState, getLabel))
-    : rows
-  const handleSort = (key: SeverityTableSortKey<TLabel>) => {
-    setSortState((current) => {
-      if (current.key === key) {
-        return { key, direction: current.direction === "asc" ? "desc" : "asc" }
-      }
-      return { key, direction: key === "label" ? "asc" : "desc" }
-    })
-  }
+  const sortedRows = sortRowsBy(
+    rows,
+    sortState,
+    (row, key) => getSeveritySortValue(row, key, getLabel),
+    (a, b) => TABLE_SORT_COLLATOR.compare(getLabel(a), getLabel(b)),
+  )
 
   return (
     <div className="overflow-x-auto rounded-md border">
       <Table>
         <TableHeader>
           <TableRow>
-            {enableSorting ? (
-              <SeveritySortableHead
-                sortKey="label"
-                sortState={sortState}
-                onSort={handleSort}
-                align="left"
-              >
-                {labelHeader}
-              </SeveritySortableHead>
-            ) : (
-              <TableHead>{labelHeader}</TableHead>
-            )}
+            <SortableTableHead
+              sortKey="label"
+              sortState={sortState}
+              onSort={handleSort}
+              align="left"
+            >
+              {labelHeader}
+            </SortableTableHead>
             {labels.map((label) => (
-              enableSorting ? (
-                <SeveritySortableHead
-                  key={label}
-                  sortKey={label}
-                  sortState={sortState}
-                  onSort={handleSort}
-                  className="w-[70px] text-center"
-                >
-                  {getColumnLabel(label)}
-                </SeveritySortableHead>
-              ) : (
-                <TableHead key={label} className="w-[70px] text-center">
-                  {getColumnLabel(label)}
-                </TableHead>
-              )
-            ))}
-            {enableSorting ? (
-              <SeveritySortableHead
-                sortKey="total"
+              <SortableTableHead
+                key={label}
+                sortKey={label}
                 sortState={sortState}
                 onSort={handleSort}
-                className="w-[80px] text-center"
+                className="w-[70px] text-center"
               >
-                합계
-              </SeveritySortableHead>
-            ) : (
-              <TableHead className="w-[80px] text-center">합계</TableHead>
-            )}
+                {getColumnLabel(label)}
+              </SortableTableHead>
+            ))}
+            <SortableTableHead
+              sortKey="total"
+              sortState={sortState}
+              onSort={handleSort}
+              className="w-[80px] text-center"
+            >
+              합계
+            </SortableTableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -1404,69 +1406,6 @@ function SeverityTable<
   )
 }
 
-function SeveritySortableHead<TLabel extends string>({
-  sortKey,
-  sortState,
-  onSort,
-  children,
-  align = "center",
-  className = "",
-}: {
-  sortKey: SeverityTableSortKey<TLabel>
-  sortState: SeverityTableSortState<TLabel>
-  onSort: (key: SeverityTableSortKey<TLabel>) => void
-  children: ReactNode
-  align?: "left" | "center" | "right"
-  className?: string
-}) {
-  const isActive = sortState.key === sortKey
-  const Icon = isActive ? (sortState.direction === "asc" ? ArrowUp : ArrowDown) : ArrowUpDown
-  const ariaSort = isActive
-    ? sortState.direction === "asc"
-      ? "ascending"
-      : "descending"
-    : "none"
-  const justifyClass = {
-    left: "justify-start",
-    center: "justify-center",
-    right: "justify-end",
-  }[align]
-
-  return (
-    <TableHead aria-sort={ariaSort} className={className}>
-      <button
-        type="button"
-        className={`inline-flex w-full items-center gap-1 ${justifyClass} rounded px-1 py-1 text-sm font-medium hover:bg-muted`}
-        onClick={() => onSort(sortKey)}
-      >
-        <span>{children}</span>
-        <Icon className="h-3.5 w-3.5 text-muted-foreground" aria-hidden />
-      </button>
-    </TableHead>
-  )
-}
-
-function compareSeverityRows<
-  TLabel extends string,
-  TRow extends { counts: Record<TLabel, number>; total: number },
->(
-  a: TRow,
-  b: TRow,
-  sortState: SeverityTableSortState<TLabel>,
-  getLabel: (row: TRow) => string,
-) {
-  const aValue = getSeveritySortValue(a, sortState.key, getLabel)
-  const bValue = getSeveritySortValue(b, sortState.key, getLabel)
-  const direction = sortState.direction === "asc" ? 1 : -1
-  const primary =
-    typeof aValue === "string" || typeof bValue === "string"
-      ? REVIEWER_NAME_COLLATOR.compare(String(aValue), String(bValue))
-      : aValue - bValue
-
-  if (primary !== 0) return primary * direction
-  return REVIEWER_NAME_COLLATOR.compare(getLabel(a), getLabel(b))
-}
-
 function getSeveritySortValue<
   TLabel extends string,
   TRow extends { counts: Record<TLabel, number>; total: number },
@@ -1487,12 +1426,20 @@ function KeywordStatsView({
   isLoading: boolean
   stats: KeywordStats | null
 }) {
+  const { sortState, handleSort } = useTableSort<KeywordSortKey>({
+    numericKeys: ["total", "preliminary", "supplement", ...SEVERITY_LABELS],
+  })
+
   if (isLoading) {
     return <LoadingMessage />
   }
   if (!stats || stats.total_details === 0) {
     return <EmptyMessage>상세검토 내용 분석 자료가 없습니다.</EmptyMessage>
   }
+
+  const sortedKeywords = sortRowsBy(stats.by_keyword, sortState, (row, key) =>
+    key === "keyword" ? row.keyword : row[key] ?? 0,
+  )
 
   return (
     <div className="space-y-5">
@@ -1523,19 +1470,53 @@ function KeywordStatsView({
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>키워드</TableHead>
-                  <TableHead className="w-[90px] text-center">합계</TableHead>
-                  <TableHead className="w-[90px] text-center">예비</TableHead>
-                  <TableHead className="w-[90px] text-center">보완</TableHead>
+                  <SortableTableHead
+                    sortKey="keyword"
+                    sortState={sortState}
+                    onSort={handleSort}
+                    align="left"
+                  >
+                    키워드
+                  </SortableTableHead>
+                  <SortableTableHead
+                    sortKey="total"
+                    sortState={sortState}
+                    onSort={handleSort}
+                    className="w-[90px] text-center"
+                  >
+                    합계
+                  </SortableTableHead>
+                  <SortableTableHead
+                    sortKey="preliminary"
+                    sortState={sortState}
+                    onSort={handleSort}
+                    className="w-[90px] text-center"
+                  >
+                    예비
+                  </SortableTableHead>
+                  <SortableTableHead
+                    sortKey="supplement"
+                    sortState={sortState}
+                    onSort={handleSort}
+                    className="w-[90px] text-center"
+                  >
+                    보완
+                  </SortableTableHead>
                   {SEVERITY_LABELS.map((label) => (
-                    <TableHead key={label} className="w-[70px] text-center">
+                    <SortableTableHead
+                      key={label}
+                      sortKey={label}
+                      sortState={sortState}
+                      onSort={handleSort}
+                      className="w-[70px] text-center"
+                    >
                       {label}
-                    </TableHead>
+                    </SortableTableHead>
                   ))}
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {stats.by_keyword.map((row) => (
+                {sortedKeywords.map((row) => (
                   <TableRow key={row.keyword}>
                     <TableCell className="font-medium">{row.keyword}</TableCell>
                     <TableCell className="text-center font-semibold">
@@ -1602,6 +1583,66 @@ function KeywordSummaryCard({
   )
 }
 
+/** 라벨 + 건수 2열짜리 집계표 (정렬 가능). */
+function CountTable({
+  labelHeader,
+  rows,
+  emptyText,
+  labelClassName = "font-medium",
+}: {
+  labelHeader: string
+  rows: { label: string; count: number }[]
+  emptyText: string
+  labelClassName?: string
+}) {
+  const { sortState, handleSort } = useTableSort<CountTableSortKey>({
+    numericKeys: ["count"],
+  })
+
+  if (rows.length === 0) {
+    return <EmptyMessage>{emptyText}</EmptyMessage>
+  }
+
+  const sortedRows = sortRowsBy(rows, sortState, (row, key) =>
+    key === "label" ? row.label : row.count,
+  )
+
+  return (
+    <div className="overflow-x-auto rounded-md border">
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <SortableTableHead
+              sortKey="label"
+              sortState={sortState}
+              onSort={handleSort}
+              align="left"
+            >
+              {labelHeader}
+            </SortableTableHead>
+            <SortableTableHead
+              sortKey="count"
+              sortState={sortState}
+              onSort={handleSort}
+              className="w-[90px] text-center"
+            >
+              건수
+            </SortableTableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {sortedRows.map((row) => (
+            <TableRow key={row.label}>
+              <TableCell className={labelClassName}>{row.label}</TableCell>
+              <TableCell className="text-center font-semibold">{row.count}</TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+    </div>
+  )
+}
+
 function OpinionQualityStatsView({
   isLoading,
   stats,
@@ -1612,6 +1653,7 @@ function OpinionQualityStatsView({
   onChanged: () => Promise<void>
 }) {
   const [updatingId, setUpdatingId] = useState<number | null>(null)
+  const itemSort = useTableSort<QualityItemSortKey>({ numericKeys: ["group_no"] })
 
   if (isLoading) {
     return <LoadingMessage />
@@ -1621,6 +1663,23 @@ function OpinionQualityStatsView({
   }
 
   const flaggedRate = formatPercent(stats.flagged_details, stats.total_details)
+  const sortedItems = sortRowsBy(
+    stats.items,
+    itemSort.sortState,
+    (item, key) => {
+      switch (key) {
+        case "mgmt_no":
+          return item.mgmt_no
+        case "group_no":
+          return item.group_no ?? Number.MAX_SAFE_INTEGER
+        case "reviewer_name":
+          return item.reviewer_name || "힣"
+        case "quality_decision":
+          return item.quality_decision
+      }
+    },
+    (a, b) => TABLE_SORT_COLLATOR.compare(a.mgmt_no, b.mgmt_no),
+  )
   const updateQualityDecision = async (
     item: OpinionQualityItem,
     qualityDecision: OpinionQualityDecision,
@@ -1667,117 +1726,43 @@ function OpinionQualityStatsView({
       <div className="grid gap-5 lg:grid-cols-3">
         <section className="space-y-2">
           <h2 className="text-sm font-semibold">유형별 현황</h2>
-          {stats.by_category.length === 0 ? (
-            <EmptyMessage>점검 대상 유형이 없습니다.</EmptyMessage>
-          ) : (
-            <div className="overflow-x-auto rounded-md border">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>유형</TableHead>
-                    <TableHead className="w-[90px] text-center">건수</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {stats.by_category.map((row) => (
-                    <TableRow key={row.category}>
-                      <TableCell className="font-medium">{row.category}</TableCell>
-                      <TableCell className="text-center font-semibold">
-                        {row.count}
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
-          )}
+          <CountTable
+            labelHeader="유형"
+            rows={stats.by_category.map((row) => ({
+              label: row.category,
+              count: row.count,
+            }))}
+            emptyText="점검 대상 유형이 없습니다."
+          />
         </section>
 
         <section className="space-y-2">
           <h2 className="text-sm font-semibold">태그별 현황</h2>
-          {stats.by_tag.length === 0 ? (
-            <EmptyMessage>점검 태그가 없습니다.</EmptyMessage>
-          ) : (
-            <div className="overflow-x-auto rounded-md border">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>태그</TableHead>
-                    <TableHead className="w-[90px] text-center">건수</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {stats.by_tag.map((row) => (
-                    <TableRow key={row.tag}>
-                      <TableCell className="font-mono text-sm font-medium">
-                        {row.tag}
-                      </TableCell>
-                      <TableCell className="text-center font-semibold">
-                        {row.count}
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
-          )}
+          <CountTable
+            labelHeader="태그"
+            rows={stats.by_tag.map((row) => ({ label: row.tag, count: row.count }))}
+            emptyText="점검 태그가 없습니다."
+            labelClassName="font-mono text-sm font-medium"
+          />
         </section>
 
         <section className="space-y-2">
           <h2 className="text-sm font-semibold">금지·주의 현황</h2>
-          {stats.by_level.length === 0 ? (
-            <EmptyMessage>점검 단계가 없습니다.</EmptyMessage>
-          ) : (
-            <div className="overflow-x-auto rounded-md border">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>단계</TableHead>
-                    <TableHead className="w-[90px] text-center">건수</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {stats.by_level.map((row) => (
-                    <TableRow key={row.level}>
-                      <TableCell className="font-medium">{row.level}</TableCell>
-                      <TableCell className="text-center font-semibold">
-                        {row.count}
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
-          )}
+          <CountTable
+            labelHeader="단계"
+            rows={stats.by_level.map((row) => ({ label: row.level, count: row.count }))}
+            emptyText="점검 단계가 없습니다."
+          />
         </section>
       </div>
 
       <section className="space-y-2">
         <h2 className="text-sm font-semibold">표현별 현황</h2>
-        {stats.by_term.length === 0 ? (
-          <EmptyMessage>점검 대상 표현이 없습니다.</EmptyMessage>
-        ) : (
-          <div className="overflow-x-auto rounded-md border">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>표현</TableHead>
-                  <TableHead className="w-[90px] text-center">건수</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {stats.by_term.map((row) => (
-                  <TableRow key={row.term}>
-                    <TableCell className="font-medium">{row.term}</TableCell>
-                    <TableCell className="text-center font-semibold">
-                      {row.count}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
-        )}
+        <CountTable
+          labelHeader="표현"
+          rows={stats.by_term.map((row) => ({ label: row.term, count: row.count }))}
+          emptyText="점검 대상 표현이 없습니다."
+        />
       </section>
 
       <section className="space-y-2">
@@ -1794,15 +1779,45 @@ function OpinionQualityStatsView({
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead className="min-w-[140px]">관리번호</TableHead>
-                  <TableHead className="w-[80px] text-center">조</TableHead>
-                  <TableHead className="min-w-[120px]">검토자</TableHead>
+                  <SortableTableHead
+                    sortKey="mgmt_no"
+                    sortState={itemSort.sortState}
+                    onSort={itemSort.handleSort}
+                    align="left"
+                    className="min-w-[140px]"
+                  >
+                    관리번호
+                  </SortableTableHead>
+                  <SortableTableHead
+                    sortKey="group_no"
+                    sortState={itemSort.sortState}
+                    onSort={itemSort.handleSort}
+                    className="w-[80px] text-center"
+                  >
+                    조
+                  </SortableTableHead>
+                  <SortableTableHead
+                    sortKey="reviewer_name"
+                    sortState={itemSort.sortState}
+                    onSort={itemSort.handleSort}
+                    align="left"
+                    className="min-w-[120px]"
+                  >
+                    검토자
+                  </SortableTableHead>
                   <TableHead className="min-w-[420px]">의견</TableHead>
-                  <TableHead className="w-[150px] text-center">판정</TableHead>
+                  <SortableTableHead
+                    sortKey="quality_decision"
+                    sortState={itemSort.sortState}
+                    onSort={itemSort.handleSort}
+                    className="w-[150px] text-center"
+                  >
+                    판정
+                  </SortableTableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {stats.items.map((item) => {
+                {sortedItems.map((item) => {
                   const isUpdating = updatingId === item.id
                   return (
                     <TableRow key={item.id}>
@@ -1897,6 +1912,7 @@ function OpinionSeverityManager({
   const [isLoading, setIsLoading] = useState(false)
   const [savingId, setSavingId] = useState<number | null>(null)
   const [savingInappropriateId, setSavingInappropriateId] = useState<number | null>(null)
+  const { sortState, handleSort } = useTableSort<OpinionDetailSortKey>()
   const [searchInput, setSearchInput] = useState("")
   const [search, setSearch] = useState("")
   const [severityFilter, setSeverityFilter] = useState<OpinionSeverity | "all">("NA")
@@ -1977,6 +1993,30 @@ function OpinionSeverityManager({
     setSearch(searchInput.trim())
   }
 
+  const sortedItems = sortRowsBy(
+    items,
+    sortState,
+    (item, key) => {
+      switch (key) {
+        case "mgmt_no":
+          return item.mgmt_no
+        case "phase":
+          return PHASE_SORT_ORDER[item.phase] ?? Number.MAX_SAFE_INTEGER
+        case "result":
+          return item.result
+            ? RESULT_SORT_ORDER[item.result] ?? Number.MAX_SAFE_INTEGER
+            : Number.MAX_SAFE_INTEGER
+        case "category":
+          return item.category
+        case "severity":
+          return OPINION_SEVERITIES.indexOf(item.severity)
+        case "inappropriate":
+          return item.inappropriate_review_needed ? 0 : 1
+      }
+    },
+    (a, b) => TABLE_SORT_COLLATOR.compare(a.mgmt_no, b.mgmt_no),
+  )
+
   return (
     <div className="space-y-4">
       <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
@@ -2029,17 +2069,62 @@ function OpinionSeverityManager({
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead className="min-w-[140px]">관리번호</TableHead>
-                <TableHead className="min-w-[110px]">단계</TableHead>
-                <TableHead className="w-[110px] text-center">판정결과</TableHead>
-                <TableHead className="min-w-[140px]">분류</TableHead>
+                <SortableTableHead
+                  sortKey="mgmt_no"
+                  sortState={sortState}
+                  onSort={handleSort}
+                  align="left"
+                  className="min-w-[140px]"
+                >
+                  관리번호
+                </SortableTableHead>
+                <SortableTableHead
+                  sortKey="phase"
+                  sortState={sortState}
+                  onSort={handleSort}
+                  align="left"
+                  className="min-w-[110px]"
+                >
+                  단계
+                </SortableTableHead>
+                <SortableTableHead
+                  sortKey="result"
+                  sortState={sortState}
+                  onSort={handleSort}
+                  className="w-[110px] text-center"
+                >
+                  판정결과
+                </SortableTableHead>
+                <SortableTableHead
+                  sortKey="category"
+                  sortState={sortState}
+                  onSort={handleSort}
+                  align="left"
+                  className="min-w-[140px]"
+                >
+                  분류
+                </SortableTableHead>
                 <TableHead className="min-w-[360px]">의견</TableHead>
-                <TableHead className="w-[130px] text-center">심각도</TableHead>
-                <TableHead className="w-[110px] text-center">부적합 검토</TableHead>
+                <SortableTableHead
+                  sortKey="severity"
+                  sortState={sortState}
+                  onSort={handleSort}
+                  className="w-[130px] text-center"
+                >
+                  심각도
+                </SortableTableHead>
+                <SortableTableHead
+                  sortKey="inappropriate"
+                  sortState={sortState}
+                  onSort={handleSort}
+                  className="w-[110px] text-center"
+                >
+                  부적합 검토
+                </SortableTableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {items.map((item) => (
+              {sortedItems.map((item) => (
                 <TableRow key={item.id}>
                   <TableCell>
                     <button

@@ -1,10 +1,10 @@
 "use client"
 
 import { useCallback, useEffect, useState, type ReactNode } from "react"
-import { useRouter } from "next/navigation"
 import { ArrowDown, ArrowUp, ArrowUpDown } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { BuildingDetailDialog } from "@/components/BuildingDetailDialog"
 import {
   Table,
   TableBody,
@@ -128,8 +128,8 @@ const TEXT_COLLATOR = new Intl.Collator("ko-KR", {
 })
 
 export default function InappropriateReviewPage() {
-  const router = useRouter()
   const user = useAuthStore((s) => s.user)
+  const [detailBuildingId, setDetailBuildingId] = useState<number | null>(null)
   const [items, setItems] = useState<InappropriateItem[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [filter, setFilter] = useState<"all" | Decision>("all")
@@ -333,7 +333,7 @@ export default function InappropriateReviewPage() {
                   <TableRow
                     key={b.stage_id}
                     className="cursor-pointer hover:bg-muted/30"
-                    onClick={() => router.push(`/buildings/${b.building_id}?from=inappropriate-review`)}
+                    onClick={() => setDetailBuildingId(b.building_id)}
                   >
                     <TableCell className="font-mono font-medium text-blue-600 text-center">
                       {b.mgmt_no}
@@ -468,9 +468,17 @@ export default function InappropriateReviewPage() {
       </div>
       {items.length > 0 && canEditDecision && (
         <p className="text-xs text-muted-foreground">
-          현재 선택된 판정은 진하게 표시됩니다. 언제든 다른 상태로 변경 가능합니다. 붕괴우려는 확정(심각)보다 상위 단계입니다.
+          행을 클릭하면 상세 화면이 팝업으로 열립니다. 현재 선택된 판정은 진하게 표시되며, 붕괴우려는 확정(심각)보다 상위 단계입니다.
         </p>
       )}
+
+      <BuildingDetailDialog
+        buildingId={detailBuildingId}
+        onClose={() => {
+          setDetailBuildingId(null)
+          fetchData()
+        }}
+      />
     </div>
   )
 }
