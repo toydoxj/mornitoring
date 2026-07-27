@@ -279,6 +279,8 @@ interface RegionalColumn<T extends string> {
 
 // 의견 심각도 지정 목록 페이지당 건수 (백엔드 size 상한과 동일)
 const OPINION_PAGE_SIZE = 200
+// 조 필터 선택지 (검토위원 조는 1~7)
+const OPINION_GROUP_OPTIONS = [1, 2, 3, 4, 5, 6, 7] as const
 
 const SEVERITY_LABELS: SeverityLabel[] = ["L0", "L1", "L2", "L3", "L4"]
 const OPINION_SEVERITIES: OpinionSeverity[] = ["NA", ...SEVERITY_LABELS]
@@ -1918,6 +1920,7 @@ function OpinionSeverityManager({
   const [searchInput, setSearchInput] = useState("")
   const [search, setSearch] = useState("")
   const [severityFilter, setSeverityFilter] = useState<OpinionSeverity | "all">("NA")
+  const [groupFilter, setGroupFilter] = useState<number | "all">("all")
   const [page, setPage] = useState(1)
 
   const loadOpinions = useCallback(async () => {
@@ -1931,6 +1934,7 @@ function OpinionSeverityManager({
             size: OPINION_PAGE_SIZE,
             search: search || undefined,
             severity: severityFilter === "all" ? undefined : severityFilter,
+            group_no: groupFilter === "all" ? undefined : groupFilter,
           },
         },
       )
@@ -1941,7 +1945,7 @@ function OpinionSeverityManager({
     } finally {
       setIsLoading(false)
     }
-  }, [page, search, severityFilter])
+  }, [page, search, severityFilter, groupFilter])
 
   useEffect(() => {
     loadOpinions()
@@ -1950,7 +1954,7 @@ function OpinionSeverityManager({
   // 검색어·필터가 바뀌면 첫 페이지로 되돌린다.
   useEffect(() => {
     setPage(1)
-  }, [search, severityFilter])
+  }, [search, severityFilter, groupFilter])
 
   const totalPages = Math.max(1, Math.ceil(total / OPINION_PAGE_SIZE))
 
@@ -2052,8 +2056,24 @@ function OpinionSeverityManager({
         <div className="flex items-center gap-2">
           <select
             className="h-10 rounded-md border bg-background px-3 text-sm"
+            value={groupFilter}
+            onChange={(e) =>
+              setGroupFilter(e.target.value === "all" ? "all" : Number(e.target.value))
+            }
+            aria-label="조 필터"
+          >
+            <option value="all">전체 조</option>
+            {OPINION_GROUP_OPTIONS.map((group) => (
+              <option key={group} value={group}>
+                {group}조
+              </option>
+            ))}
+          </select>
+          <select
+            className="h-10 rounded-md border bg-background px-3 text-sm"
             value={severityFilter}
             onChange={(e) => setSeverityFilter(e.target.value as OpinionSeverity | "all")}
+            aria-label="심각도 필터"
           >
             <option value="all">전체</option>
             {OPINION_SEVERITIES.map((severity) => (

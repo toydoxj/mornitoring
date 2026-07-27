@@ -1199,6 +1199,7 @@ def list_opinion_details(
     search: str | None = None,
     severity: str | None = None,
     phase_group: str | None = None,
+    group_no: int | None = Query(None, ge=1, le=7),
     page: int = Query(1, ge=1),
     size: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db),
@@ -1224,6 +1225,8 @@ def list_opinion_details(
         query = query.filter(
             ReviewOpinionDetail.severity == _normalize_editable_severity(severity)
         )
+    if group_no is not None:
+        query = query.filter(Reviewer.group_no == group_no)
     if phase_group:
         if phase_group not in ("preliminary", "supplement"):
             raise HTTPException(status_code=400, detail="허용되지 않는 단계 구분입니다")

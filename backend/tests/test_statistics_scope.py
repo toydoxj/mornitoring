@@ -110,6 +110,36 @@ def test_secretary_opinion_details_include_other_group(
     assert by_mgmt["STAT-G2"]["inappropriate_review_needed"] is False
 
 
+def test_opinion_details_filter_by_group(
+    client, db_session, make_user, make_reviewer, make_building
+):
+    _, headers = make_user(UserRole.CHIEF_SECRETARY)
+    _, b1, _, b2 = _two_group_buildings(make_reviewer, make_building, db_session)
+    _make_opinion(db_session, b1, content="1조 의견")
+    _make_opinion(db_session, b2, content="2조 의견")
+
+    res = client.get(
+        "/api/reviews/opinion-details", params={"group_no": 2}, headers=headers
+    )
+    assert res.status_code == 200
+    body = res.json()
+    mgmts = {item["mgmt_no"] for item in body["items"]}
+    assert mgmts == {"STAT-G2"}
+    assert body["total"] == 1
+    assert all(item["group_no"] == 2 for item in body["items"])
+
+
+def test_opinion_details_group_filter_rejects_out_of_range(
+    client, db_session, make_user
+):
+    _, headers = make_user(UserRole.CHIEF_SECRETARY)
+
+    res = client.get(
+        "/api/reviews/opinion-details", params={"group_no": 8}, headers=headers
+    )
+    assert res.status_code == 422
+
+
 def test_secretary_can_update_other_group_opinion_severity(
     client, db_session, make_user, make_reviewer, make_building
 ):
