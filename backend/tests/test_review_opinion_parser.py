@@ -137,7 +137,8 @@ def test_validate_review_file_accepts_supplement_procedure_suffix(tmp_path):
     assert result.is_valid is True
 
 
-def test_validate_review_file_accepts_supplement_common_procedure(tmp_path):
+def test_validate_review_file_rejects_supplement_common_procedure(tmp_path):
+    """숫자 없는 '2차 적정성 검토'는 거부 — 반드시 차수 표기가 있어야 한다."""
     path = tmp_path / "2026-0001.xlsm"
     _make_workbook(path)
 
@@ -156,7 +157,10 @@ def test_validate_review_file_accepts_supplement_common_procedure(tmp_path):
         expected_phase="supplement_4",
     )
 
-    assert result.is_valid is True
+    assert result.is_valid is False
+    assert any(
+        "'2차 적정성 검토(4)'여야 합니다" in error for error in result.errors
+    )
 
 
 def test_validate_review_file_accepts_filename_starting_with_mgmt_no(tmp_path):
@@ -196,7 +200,7 @@ def test_validate_review_file_rejects_wrong_supplement_procedure_suffix(tmp_path
 
     assert result.is_valid is False
     assert any(
-        "'2차 적정성 검토(3)' 또는 '2차 적정성 검토'여야 합니다" in error
+        "'2차 적정성 검토(3)'여야 합니다" in error
         for error in result.errors
     )
 

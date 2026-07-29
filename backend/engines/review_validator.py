@@ -60,7 +60,7 @@ def _expected_phase_labels(
         supplement_order = match.group(1)
         return (
             f"보완검토({supplement_order}차)",
-            (f"2차 적정성 검토({supplement_order})", "2차 적정성 검토"),
+            (f"2차 적정성 검토({supplement_order})",),
             "2차",
         )
 
@@ -185,7 +185,7 @@ def validate_review_file(
     5. 적정성 검토 결과에 내용이 있는데 부적합유형이 "적합" 또는 비어있는 경우
     6. 차수 라벨 검증 (시트명 + 절차 C5)
        - expected_phase=preliminary → "1차 적정성 검토" / "검토서(1차)"
-       - expected_phase=supplement_N → "2차 적정성 검토(N)" 또는 "2차 적정성 검토" / "검토서(2차)"
+       - expected_phase=supplement_N → "2차 적정성 검토(N)" / "검토서(2차)"
     7. 시트가 2개 이상이면 안됨
     """
     result = ValidationResult()
@@ -255,7 +255,7 @@ def validate_review_file(
 
     # 6. 절차 (C5) 및 시트명 검증 — expected_phase에 맞춰 차수 검증
     #   예비검토(preliminary)     → "1차 적정성 검토" / "검토서(1차)"
-    #   보완검토(supplement_N)    → "2차 적정성 검토(N)" 또는 "2차 적정성 검토" / "검토서(2차)"
+    #   보완검토(supplement_N)    → "2차 적정성 검토(N)" / "검토서(2차)"
     procedure = _cell_str(ws, "C5")
     expected_labels = _expected_phase_labels(expected_phase)
 
