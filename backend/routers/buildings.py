@@ -823,6 +823,7 @@ def get_stats(
                 reviewer_name_expr.label("name"),
                 sa_func.min(Reviewer.group_no).label("group_no"),
                 sa_func.count(Building.id).label("total"),
+                sa_func.count(Building.id).filter(Building.current_phase == "assigned").label("assigned"),
                 sa_func.count(Building.id).filter(Building.current_phase == "doc_received").label("doc_received"),
                 sa_func.count(Building.id).filter(Building.final_result.isnot(None)).label("completed"),
                 sa_func.sum(sa_func.coalesce(Building.gross_area, 0)).label("total_area"),
@@ -1009,6 +1010,7 @@ def get_stats(
             "name": name,
             "group_no": row.group_no,
             "total": row.total or 0,
+            "assigned": row.assigned or 0,  # 배정완료(assigned) 단계 = 도서 미배포/검토서 미접수
             "total_area": float(row.total_area or 0),
             "area_over_1000": row.area_over_1000 or 0,
             "high_risk": row.high_risk or 0,

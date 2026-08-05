@@ -55,6 +55,7 @@ type OpinionDetailSortKey =
 type ReviewerSortKey =
   | "group_no"
   | "name"
+  | "assigned"
   | "preliminary_doc_received"
   | "preliminary_report_submitted"
   | "preliminary_pass_rate"
@@ -97,6 +98,7 @@ interface ReviewerStat {
   name: string
   group_no: number | null
   total: number
+  assigned: number
   total_area: number
   area_over_1000: number
   high_risk: number
@@ -117,6 +119,7 @@ interface ReviewerPhaseStat {
 interface ReviewerTotals {
   reviewerCount: number
   total: number
+  assigned: number
   total_area: number
   area_over_1000: number
   high_risk: number
@@ -370,6 +373,7 @@ const REVIEWER_RESULT_SORT_KEYS: Record<"preliminary" | "supplement", Record<Res
 }
 // 첫 클릭에서 큰 값부터 보여 줄 숫자 열 (조·이름은 오름차순이 자연스럽다)
 const REVIEWER_NUMERIC_SORT_KEYS: ReviewerSortKey[] = [
+  "assigned",
   "preliminary_doc_received",
   "preliminary_report_submitted",
   "preliminary_pass_rate",
@@ -627,7 +631,7 @@ function ReviewerStatsTable({
 
   return (
     <div className="max-h-[70vh] overflow-auto rounded-md border">
-      <Table className="min-w-[1180px]">
+      <Table className="min-w-[1280px]">
         <TableHeader>
           <TableRow>
             <SortableTableHead
@@ -649,9 +653,27 @@ function ReviewerStatsTable({
             >
               이름
             </SortableTableHead>
+            <SortableTableHead
+              rowSpan={2}
+              sortKey="total"
+              sortState={sortState}
+              onSort={handleSort}
+              className="border-l text-center"
+            >
+              배정
+            </SortableTableHead>
+            <SortableTableHead
+              rowSpan={2}
+              sortKey="assigned"
+              sortState={sortState}
+              onSort={handleSort}
+              className="text-center"
+            >
+              미접수
+            </SortableTableHead>
             <TableHead colSpan={5} className="border-l text-center">예비</TableHead>
             <TableHead colSpan={5} className="border-l text-center">보완</TableHead>
-            <TableHead colSpan={5} className="border-l text-center">요약</TableHead>
+            <TableHead colSpan={4} className="border-l text-center">요약</TableHead>
           </TableRow>
           <TableRow>
             <SortableTableHead
@@ -709,19 +731,11 @@ function ReviewerStatsTable({
               </SortableTableHead>
             ))}
             <SortableTableHead
-              sortKey="total"
-              sortState={sortState}
-              onSort={handleSort}
-              className="border-l text-center"
-            >
-              배정
-            </SortableTableHead>
-            <SortableTableHead
               sortKey="total_area"
               sortState={sortState}
               onSort={handleSort}
               align="right"
-              className="text-right"
+              className="border-l text-right"
             >
               연면적 합
             </SortableTableHead>
@@ -759,6 +773,8 @@ function ReviewerStatsTable({
                 {row.group_no ? `${row.group_no}조` : "-"}
               </TableCell>
               <TableCell className="font-medium">{row.name}</TableCell>
+              <TableCell className="border-l text-center">{row.total}</TableCell>
+              <TableCell className="text-center">{row.assigned}</TableCell>
               <TableCell className="border-l text-center">
                 {row.preliminary.doc_received}
               </TableCell>
@@ -789,8 +805,7 @@ function ReviewerStatsTable({
                   />
                 </TableCell>
               ))}
-              <TableCell className="border-l text-center">{row.total}</TableCell>
-              <TableCell className="text-right font-mono text-sm">
+              <TableCell className="border-l text-right font-mono text-sm">
                 {row.total_area.toLocaleString(undefined, { maximumFractionDigits: 0 })}
               </TableCell>
               <TableCell className="text-center">
@@ -826,6 +841,8 @@ function ReviewerTotalRow({ totals }: { totals: ReviewerTotals }) {
           ({totals.reviewerCount.toLocaleString()}명)
         </span>
       </TableCell>
+      <TableCell className="border-l text-center">{totals.total}</TableCell>
+      <TableCell className="text-center">{totals.assigned}</TableCell>
       <TableCell className="border-l text-center">{totals.preliminary.doc_received}</TableCell>
       <TableCell className="text-center">
         <ReviewerCountBadge value={totals.preliminary.report_submitted} />
@@ -852,8 +869,7 @@ function ReviewerTotalRow({ totals }: { totals: ReviewerTotals }) {
           />
         </TableCell>
       ))}
-      <TableCell className="border-l text-center">{totals.total}</TableCell>
-      <TableCell className="text-right font-mono text-sm">
+      <TableCell className="border-l text-right font-mono text-sm">
         {totals.total_area.toLocaleString(undefined, { maximumFractionDigits: 0 })}
       </TableCell>
       <TableCell className="text-center">
@@ -932,6 +948,8 @@ function getReviewerSortValue(row: ReviewerStat, key: ReviewerSortKey) {
       return resultRate(row.supplement.results.recalculate, row.supplement.report_submitted)
     case "total":
       return row.total
+    case "assigned":
+      return row.assigned
     case "total_area":
       return row.total_area
     case "area_over_1000":
@@ -959,6 +977,7 @@ function buildReviewerTotals(rows: ReviewerStat[]): ReviewerTotals {
     (totals, row) => {
       totals.reviewerCount += 1
       totals.total += row.total
+      totals.assigned += row.assigned
       totals.total_area += row.total_area
       totals.area_over_1000 += row.area_over_1000
       totals.high_risk += row.high_risk
@@ -970,6 +989,7 @@ function buildReviewerTotals(rows: ReviewerStat[]): ReviewerTotals {
     {
       reviewerCount: 0,
       total: 0,
+      assigned: 0,
       total_area: 0,
       area_over_1000: 0,
       high_risk: 0,
