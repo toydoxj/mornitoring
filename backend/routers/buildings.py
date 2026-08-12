@@ -656,10 +656,13 @@ def get_stats(
 
     # 1-1-1) 배포차수별 진행 현황
     # 배포차수 필터를 걸어도 차수별 분해는 전체를 보여줘야 하므로 가시성만 적용한다.
-    # 열 정의는 통계자료 검토위원별 현황과 맞춘다:
-    #   배정   = 검토위원이 배정된 건(관리대장 배정 총 건수)
-    #   미배포 = 배정완료 단계(current_phase == "assigned") — 통계 화면의 "미접수"
+    #
+    # 네 구간(미배포/예비검토/보완검토/최종완료)의 합이 총합과 정확히 일치하도록
+    # 서로 겹치지 않게 센다. 최종완료(final_result 지정)를 우선으로 두고 예비·보완은
+    # 최종완료가 아직 없는 건만 세며, 미배포는 나머지(총합 - 셋)로 계산한다.
+    # 미배포에는 배정완료 단계와 미배정 건이 함께 들어간다.
     deploy_batch_col = deploy_batch_expr(Building.mgmt_no)
+    in_progress_cond = Building.final_result.is_(None)
     preliminary_progress_phases = ("doc_received", "preliminary")
     supplement_progress_phases = tuple(
         phase
@@ -670,19 +673,16 @@ def get_stats(
         deploy_batch_col.label("batch"),
         sa_func.count(Building.id).label("total"),
         sa_func.count(Building.id).filter(
-            or_(
-                Building.reviewer_id.isnot(None),
-                Building.assigned_reviewer_name.isnot(None),
+            and_(
+                in_progress_cond,
+                Building.current_phase.in_(preliminary_progress_phases),
             )
-        ).label("assigned"),
-        sa_func.count(Building.id).filter(
-            Building.current_phase == "assigned"
-        ).label("not_distributed"),
-        sa_func.count(Building.id).filter(
-            Building.current_phase.in_(preliminary_progress_phases)
         ).label("preliminary"),
         sa_func.count(Building.id).filter(
-            Building.current_phase.in_(supplement_progress_phases)
+            and_(
+                in_progress_cond,
+                Building.current_phase.in_(supplement_progress_phases),
+            )
         ).label("supplement"),
         sa_func.count(Building.id).filter(
             Building.final_result.isnot(None)
@@ -699,17 +699,20 @@ def get_stats(
     deploy_batch_progress: list[dict[str, int | None]] = []
     for batch_key in (*DEPLOY_BATCH_NUMBERS, None):
         row = progress_by_batch.get(batch_key)
-        deploy_batch_counts[str(batch_key) if batch_key is not None else "none"] = (
-            row.total if row else 0
-        )
+        batch_total = row.total if row else 0
+        batch_preliminary = row.preliminary if row else 0
+        batch_supplement = row.supplement if row else 0
+        batch_completed = row.completed if row else 0
+        deploy_batch_counts[str(batch_key) if batch_key is not None else "none"] = batch_total
         deploy_batch_progress.append({
             "batch": batch_key,
-            "assigned": row.assigned if row else 0,
-            "not_distributed": row.not_distributed if row else 0,
-            "preliminary": row.preliminary if row else 0,
-            "supplement": row.supplement if row else 0,
-            "completed": row.completed if row else 0,
-            "total": row.total if row else 0,
+            "not_distributed": (
+                batch_total - batch_preliminary - batch_supplement - batch_completed
+            ),
+            "preliminary": batch_preliminary,
+            "supplement": batch_supplement,
+            "completed": batch_completed,
+            "total": batch_total,
         })
 
     # 1-2) 문의사항 상태별 건수

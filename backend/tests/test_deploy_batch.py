@@ -125,14 +125,15 @@ def test_통계_배포차수별_진행_현황(client, db_session, make_user, mak
     _, headers = make_user(UserRole.CHIEF_SECRETARY)
     _, reviewer, _ = make_reviewer()
 
-    # 1차수: 미배포 1건(배정됨) + 예비검토 1건(배정됨)
+    # 1차수: 배정완료 1건 + 미배정 1건 + 예비검토 1건 → 미배포 2건
     db_session.add(Building(
         mgmt_no="2025-0100", reviewer_id=reviewer.id, current_phase="assigned"
     ))
+    db_session.add(Building(mgmt_no="2025-0102"))
     db_session.add(Building(
         mgmt_no="2025-0101", reviewer_id=reviewer.id, current_phase="doc_received"
     ))
-    # 4차수: 보완검토 1건 + 최종완료 1건(미배정)
+    # 4차수: 보완검토 1건 + 최종완료 1건
     db_session.add(Building(
         mgmt_no="2025-3000", reviewer_id=reviewer.id, current_phase="supplement_2"
     ))
@@ -148,16 +149,14 @@ def test_통계_배포차수별_진행_현황(client, db_session, make_user, mak
 
     assert progress[1] == {
         "batch": 1,
-        "assigned": 2,
-        "not_distributed": 1,
+        "not_distributed": 2,
         "preliminary": 1,
         "supplement": 0,
         "completed": 0,
-        "total": 2,
+        "total": 3,
     }
     assert progress[4] == {
         "batch": 4,
-        "assigned": 1,
         "not_distributed": 0,
         "preliminary": 0,
         "supplement": 1,
@@ -166,12 +165,39 @@ def test_통계_배포차수별_진행_현황(client, db_session, make_user, mak
     }
     assert progress[2]["total"] == 0
 
+    # 네 구간의 합은 항상 총합과 일치한다
+    for row in body["deploy_batch_progress"]:
+        assert (
+            row["not_distributed"] + row["preliminary"] + row["supplement"] + row["completed"]
+            == row["total"]
+        )
+
     # 배포차수 필터를 걸어도 차수별 분해는 전체를 유지한다
     filtered = client.get(
         "/api/buildings/stats", params={"batch": 1}, headers=headers
     ).json()
-    assert filtered["total"] == 2
+    assert filtered["total"] == 3
     assert filtered["deploy_batch_progress"] == body["deploy_batch_progress"]
+
+
+def test_최종완료된_보완단계_건은_최종완료로만_센다(client, db_session, make_user):
+    """단계가 보완으로 남은 채 최종완료된 건이 중복 집계되지 않는지 확인."""
+    _, headers = make_user(UserRole.CHIEF_SECRETARY)
+    db_session.add(Building(
+        mgmt_no="2025-0100", current_phase="supplement_2", final_result="pass_supplement"
+    ))
+    db_session.commit()
+
+    body = client.get("/api/buildings/stats", headers=headers).json()
+    progress = {row["batch"]: row for row in body["deploy_batch_progress"]}
+    assert progress[1] == {
+        "batch": 1,
+        "not_distributed": 0,
+        "preliminary": 0,
+        "supplement": 0,
+        "completed": 1,
+        "total": 1,
+    }
 
 
 def test_통계_허용되지_않는_배포차수는_400(client, make_user):

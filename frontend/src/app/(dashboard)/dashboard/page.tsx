@@ -45,11 +45,11 @@ interface InquiryCounts {
   completed: number
 }
 
-// 배포차수별 진행 현황 한 줄. batch가 null이면 관리번호가 정규 형식이 아닌 건
+// 배포차수별 진행 현황 한 줄. batch가 null이면 관리번호가 정규 형식이 아닌 건.
+// 네 구간은 서로 겹치지 않아 합이 total과 일치한다.
 interface DeployBatchProgress {
   batch: number | null
-  assigned: number        // 검토위원 배정 건수
-  not_distributed: number // 배정완료 단계(도서 미배포)
+  not_distributed: number // 총합 - (예비 + 보완 + 최종) — 미배정·배정완료 단계
   preliminary: number     // 예비도서 접수 + 예비검토서 제출
   supplement: number      // 보완도서 접수 + 보완검토서 제출 (1~5차)
   completed: number       // 최종완료
@@ -1066,7 +1066,6 @@ function OnTimeRateBar({ rate }: { rate: number | null }) {
 }
 
 const DEPLOY_BATCH_PROGRESS_COLUMNS = [
-  { key: "assigned", label: "배정" },
   { key: "not_distributed", label: "미배포" },
   { key: "preliminary", label: "예비검토" },
   { key: "supplement", label: "보완검토" },
@@ -1079,7 +1078,6 @@ function DeployBatchProgressTable({ rows }: { rows: DeployBatchProgress[] }) {
   const visibleRows = rows.filter((row) => row.batch !== null || row.total > 0)
   const totals = visibleRows.reduce(
     (acc, row) => ({
-      assigned: acc.assigned + row.assigned,
       not_distributed: acc.not_distributed + row.not_distributed,
       preliminary: acc.preliminary + row.preliminary,
       supplement: acc.supplement + row.supplement,
@@ -1087,7 +1085,6 @@ function DeployBatchProgressTable({ rows }: { rows: DeployBatchProgress[] }) {
       total: acc.total + row.total,
     }),
     {
-      assigned: 0,
       not_distributed: 0,
       preliminary: 0,
       supplement: 0,
@@ -1148,8 +1145,7 @@ function DeployBatchProgressTable({ rows }: { rows: DeployBatchProgress[] }) {
         </TableBody>
       </Table>
       <p className="mt-2 text-xs text-muted-foreground">
-        배정 = 검토위원이 배정된 건 / 미배포 = 배정완료 단계(설계도서 미배포).
-        배정은 이후 단계를 포함하므로 각 열의 합은 총합과 다를 수 있습니다.
+        미배포 = 총합 - (예비검토 + 보완검토 + 최종완료). 미배정 건과 배정완료 단계가 함께 들어갑니다.
       </p>
     </div>
   )
