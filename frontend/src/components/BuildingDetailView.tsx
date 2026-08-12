@@ -18,7 +18,7 @@ import { Label } from "@/components/ui/label"
 import apiClient from "@/lib/api/client"
 import { useAuthStore } from "@/stores/authStore"
 import type { Building, ReviewStage, PhaseType, ResultType, InappropriateDecisionType } from "@/types"
-import { PHASE_LABELS, RESULT_LABELS } from "@/types"
+import { PHASE_LABELS, RESULT_LABELS, deployBatchLabel } from "@/types"
 import { AttachmentItem, type AttachmentDisplay } from "@/components/AttachmentItem"
 import { Paperclip, Trash2, UserRound, X } from "lucide-react"
 import { getAdjacentManualPhases } from "@/lib/phases"
@@ -542,6 +542,11 @@ export function BuildingDetailView({
           </h1>
         </div>
         <div className="flex items-center gap-2">
+          {building.deploy_batch && (
+            <Badge variant="secondary" className="text-base px-3 py-1">
+              배포 {deployBatchLabel(building.deploy_batch)}
+            </Badge>
+          )}
           {building.current_phase && (
             <Badge variant="outline" className="text-base px-3 py-1">
               {PHASE_LABELS[building.current_phase as PhaseType] || building.current_phase}

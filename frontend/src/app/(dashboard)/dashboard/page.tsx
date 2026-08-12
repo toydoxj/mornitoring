@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { useRouter } from "next/navigation"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -15,6 +15,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton"
 import apiClient from "@/lib/api/client"
 import { useAuthStore } from "@/stores/authStore"
+import { DeployBatchFilter } from "@/components/DeployBatchFilter"
 
 interface ReviewerStat {
   name: string
@@ -71,6 +72,8 @@ interface DashboardStats {
   due_date_submission_stats: DueDateSubmissionStat[]
   completed: number
   final_counts: FinalCounts
+  // 배포차수별 건수 — 배포차수 필터와 무관한 전체 분포. 키는 "1"~"5" 및 "none"
+  deploy_batch_counts?: Record<string, number>
   inquiry_counts: InquiryCounts
   // 기존 호환
   doc_received: number
@@ -171,6 +174,10 @@ export default function DashboardPage() {
   // 병렬 호출 진행률 표시용
   const [loadedCount, setLoadedCount] = useState(0)
   const [totalTasks, setTotalTasks] = useState(0)
+  // 배포차수 필터 — 관리자 집계(stats)에만 적용된다
+  const [batchFilter, setBatchFilter] = useState<number | "all">("all")
+  const [statsRefreshing, setStatsRefreshing] = useState(false)
+  const skipBatchRefetch = useRef(true)
 
   const isAdmin =
     !!user && ["team_leader", "chief_secretary", "secretary", "manager"].includes(user.role)
@@ -284,17 +291,62 @@ export default function DashboardPage() {
     }
   }, [isAdmin])
 
+  // 배포차수 필터가 바뀌면 관리자 집계만 다시 부른다(최초 로드는 위 useEffect 담당).
+  useEffect(() => {
+    if (!isAdmin) return
+    if (skipBatchRefetch.current) {
+      skipBatchRefetch.current = false
+      return
+    }
+    let cancelled = false
+    apiClient
+      .get<DashboardStats>("/api/buildings/stats", {
+        params: { batch: batchFilter === "all" ? undefined : batchFilter },
+      })
+      .then(({ data }) => {
+        if (!cancelled) setStats(data)
+      })
+      .catch((err) => console.error("전체 통계 조회 실패:", err))
+      .finally(() => {
+        if (!cancelled) setStatsRefreshing(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [batchFilter, isAdmin])
+
+  // 갱신 표시는 이벤트 시점에 켠다(effect 본문에서 setState 하지 않기 위함).
+  const handleBatchChange = (value: number | "all") => {
+    if (value === batchFilter) return
+    setStatsRefreshing(true)
+    setBatchFilter(value)
+  }
+
   const loadingPercent = totalTasks > 0
     ? Math.min(100, Math.round((loadedCount / totalTasks) * 100))
     : 0
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold">대시보드</h1>
-        <p className="text-sm text-muted-foreground">
-          {user?.name}님, 환영합니다
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-bold">대시보드</h1>
+          <p className="text-sm text-muted-foreground">
+            {user?.name}님, 환영합니다
+          </p>
+        </div>
+        {isAdmin && (
+          <div className="flex items-center gap-2">
+            {statsRefreshing && (
+              <span className="text-xs text-muted-foreground">집계 갱신 중...</span>
+            )}
+            <DeployBatchFilter
+              value={batchFilter}
+              onChange={handleBatchChange}
+              counts={stats?.deploy_batch_counts}
+            />
+          </div>
+        )}
       </div>
 
       {isLoading && (

@@ -17,6 +17,7 @@ import {
 import apiClient from "@/lib/api/client"
 import { useAuthStore } from "@/stores/authStore"
 import { BuildingDetailDialog } from "@/components/BuildingDetailDialog"
+import { DeployBatchFilter } from "@/components/DeployBatchFilter"
 import {
   SortableTableHead,
   TABLE_SORT_COLLATOR,
@@ -268,6 +269,8 @@ interface OpinionDetailListResponse {
 }
 
 interface StatsResponse {
+  // 배포차수별 건수 — 배포차수 필터와 무관한 전체 분포. 키는 "1"~"5" 및 "none"
+  deploy_batch_counts?: Record<string, number>
   reviewer_stats: ReviewerStat[]
   regional_stats: RegionalStats
   severity_stats: SeverityStats
@@ -447,6 +450,7 @@ export default function StatisticsPage() {
   const [activeTab, setActiveTab] = useState<ActiveTab>("reviewer")
   const [isLoading, setIsLoading] = useState(true)
   const [detailBuildingId, setDetailBuildingId] = useState<number | null>(null)
+  const [batchFilter, setBatchFilter] = useState<number | "all">("all")
 
   const isAdmin =
     !!user && ["team_leader", "chief_secretary", "secretary", "manager"].includes(user.role)
@@ -463,7 +467,10 @@ export default function StatisticsPage() {
     try {
       // 통계자료는 조 구분 없이 전체를 집계한다(간사 포함).
       const { data } = await apiClient.get<StatsResponse>("/api/buildings/stats", {
-        params: { scope: "all" },
+        params: {
+          scope: "all",
+          batch: batchFilter === "all" ? undefined : batchFilter,
+        },
       })
       setStats(data)
     } catch (err) {
@@ -471,7 +478,7 @@ export default function StatisticsPage() {
     } finally {
       setIsLoading(false)
     }
-  }, [isAdmin])
+  }, [isAdmin, batchFilter])
 
   useEffect(() => {
     fetchStats()
@@ -486,11 +493,18 @@ export default function StatisticsPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold">통계자료</h1>
-        <p className="text-sm text-muted-foreground">
-          검토위원별 현황, 지역별 통계, 심각도, 키워드, 표현 품질 (조 구분 없는 전체 집계)
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-bold">통계자료</h1>
+          <p className="text-sm text-muted-foreground">
+            검토위원별 현황, 지역별 통계, 심각도, 키워드, 표현 품질 (조 구분 없는 전체 집계)
+          </p>
+        </div>
+        <DeployBatchFilter
+          value={batchFilter}
+          onChange={setBatchFilter}
+          counts={stats?.deploy_batch_counts}
+        />
       </div>
 
       <div
@@ -556,6 +570,7 @@ export default function StatisticsPage() {
           )}
           {activeTab === "opinion" && (
             <OpinionSeverityManager
+              batch={batchFilter}
               onChanged={fetchStats}
               onOpenBuilding={setDetailBuildingId}
             />
@@ -1925,9 +1940,11 @@ function OpinionQualityStatsView({
 }
 
 function OpinionSeverityManager({
+  batch,
   onChanged,
   onOpenBuilding,
 }: {
+  batch: number | "all"
   onChanged: () => Promise<void>
   onOpenBuilding: (buildingId: number) => void
 }) {
@@ -1955,6 +1972,7 @@ function OpinionSeverityManager({
             search: search || undefined,
             severity: severityFilter === "all" ? undefined : severityFilter,
             group_no: groupFilter === "all" ? undefined : groupFilter,
+            batch: batch === "all" ? undefined : batch,
           },
         },
       )
@@ -1965,7 +1983,7 @@ function OpinionSeverityManager({
     } finally {
       setIsLoading(false)
     }
-  }, [page, search, severityFilter, groupFilter])
+  }, [page, search, severityFilter, groupFilter, batch])
 
   useEffect(() => {
     loadOpinions()
@@ -1974,7 +1992,7 @@ function OpinionSeverityManager({
   // 검색어·필터가 바뀌면 첫 페이지로 되돌린다.
   useEffect(() => {
     setPage(1)
-  }, [search, severityFilter, groupFilter])
+  }, [search, severityFilter, groupFilter, batch])
 
   const totalPages = Math.max(1, Math.ceil(total / OPINION_PAGE_SIZE))
 

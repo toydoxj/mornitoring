@@ -22,6 +22,7 @@ from models.review_stage import ReviewStage, PhaseType
 from models.reviewer import Reviewer
 from models.user import User, UserRole
 from routers.auth import get_current_user, require_roles
+from engines.deploy_batch import DEPLOY_BATCH_NUMBERS, deploy_batch_filter
 from engines.review_validator import validate_review_file
 from engines.review_extractor import extract_review_data
 from engines.opinion_text import clean_opinion_detail_content
@@ -1200,6 +1201,7 @@ def list_opinion_details(
     severity: str | None = None,
     phase_group: str | None = None,
     group_no: int | None = Query(None, ge=1, le=7),
+    batch: int | None = Query(None, description="배포차수(1~5) 필터"),
     page: int = Query(1, ge=1),
     size: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db),
@@ -1227,6 +1229,10 @@ def list_opinion_details(
         )
     if group_no is not None:
         query = query.filter(Reviewer.group_no == group_no)
+    if batch is not None:
+        if batch not in DEPLOY_BATCH_NUMBERS:
+            raise HTTPException(status_code=400, detail="허용되지 않는 배포차수입니다")
+        query = query.filter(deploy_batch_filter(Building.mgmt_no, batch))
     if phase_group:
         if phase_group not in ("preliminary", "supplement"):
             raise HTTPException(status_code=400, detail="허용되지 않는 단계 구분입니다")

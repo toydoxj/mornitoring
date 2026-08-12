@@ -10,6 +10,12 @@ from sqlalchemy.orm import Session, aliased, load_only, selectinload
 
 from config import settings
 from database import get_db
+from engines.deploy_batch import (
+    DEPLOY_BATCH_NUMBERS,
+    deploy_batch_expr,
+    deploy_batch_filter,
+    deploy_batch_of,
+)
 from models.building import Building
 from models.reviewer import Reviewer
 from models.user import User, UserRole
@@ -26,7 +32,7 @@ from services.scope import (
 
 router = APIRouter()
 
-_STATS_CACHE: dict[tuple[str, str], tuple[float, dict[str, object]]] = {}
+_STATS_CACHE: dict[tuple[str, str, str], tuple[float, dict[str, object]]] = {}
 
 
 RECEIVED_TO_SUBMIT_PHASE = {
@@ -147,6 +153,8 @@ class ReviewerOptionResponse(BaseModel):
 class BuildingResponse(BaseModel):
     id: int
     mgmt_no: str
+    # 관리번호 일련번호 구간으로 판별한 배포차수(1~5). 정규 형식이 아니면 None
+    deploy_batch: int | None = None
     building_name: str | None = None
     sido: str | None = None
     sigungu: str | None = None
@@ -250,6 +258,7 @@ def _to_my_review_response(
     return {
         "id": building.id,
         "mgmt_no": building.mgmt_no,
+        "deploy_batch": deploy_batch_of(building.mgmt_no),
         "building_name": building.building_name,
         "sido": building.sido,
         "sigungu": building.sigungu,
@@ -294,6 +303,7 @@ def _to_my_review_response(
 def _to_response(building: Building, registered_names: set[str]) -> dict:
     """Building 모델을 응답 dict로 변환 (검토위원 이름 + 등록 여부 포함)"""
     data = {c.name: getattr(building, c.name) for c in Building.__table__.columns}
+    data["deploy_batch"] = deploy_batch_of(building.mgmt_no)
     data["reviewer_name"] = None
     data["reviewer_registered"] = False
     data["reviewer_detail"] = None
@@ -444,17 +454,23 @@ def _merge_regional_rows(raw_rows, count_keys: tuple[str, ...]) -> list[dict[str
     return [total_row, *region_rows]
 
 
-def _stats_cache_key(current_user: User, scope: str | None = None) -> tuple[str, str]:
+def _stats_cache_key(
+    current_user: User,
+    scope: str | None = None,
+    batch: int | None = None,
+) -> tuple[str, str, str]:
+    # 배포차수 필터가 다르면 집계 결과도 달라지므로 캐시 키에 포함한다.
+    batch_key = str(batch) if batch is not None else "all"
     # scope=all 은 조 구분 없는 전체 집계이므로 팀장/총괄과 동일한 캐시를 쓴다.
     if scope == "all":
-        return ("all", "all")
+        return ("all", "all", batch_key)
     if current_user.role == UserRole.SECRETARY:
         group_key = str(current_user.group_no) if current_user.group_no is not None else "all"
-        return (current_user.role.value, group_key)
-    return ("all", "all")
+        return (current_user.role.value, group_key, batch_key)
+    return ("all", "all", batch_key)
 
 
-def _stats_cache_get(db: Session, key: tuple[str, str]) -> dict[str, object] | None:
+def _stats_cache_get(db: Session, key: tuple[str, str, str]) -> dict[str, object] | None:
     ttl = settings.stats_cache_ttl_seconds
     # 테스트 SQLite에서는 데이터 변경 직후 검증이 많으므로 캐시를 끈다.
     if ttl <= 0 or db.get_bind().dialect.name == "sqlite":
@@ -469,7 +485,9 @@ def _stats_cache_get(db: Session, key: tuple[str, str]) -> dict[str, object] | N
     return payload
 
 
-def _stats_cache_set(db: Session, key: tuple[str, str], payload: dict[str, object]) -> None:
+def _stats_cache_set(
+    db: Session, key: tuple[str, str, str], payload: dict[str, object]
+) -> None:
     ttl = settings.stats_cache_ttl_seconds
     if ttl <= 0 or db.get_bind().dialect.name == "sqlite":
         return
@@ -538,6 +556,7 @@ def get_stats(
         None,
         description="all이면 조 구분 없이 전체 집계 (통계자료 화면 전용)",
     ),
+    batch: int | None = Query(None, description="배포차수(1~5)로 집계 대상 제한"),
     db: Session = Depends(get_db),
     current_user: User = Depends(
         require_roles(
@@ -561,6 +580,8 @@ def get_stats(
     """
     if scope not in (None, "", "all"):
         raise HTTPException(status_code=400, detail="허용되지 않는 집계 범위입니다")
+    if batch is not None and batch not in DEPLOY_BATCH_NUMBERS:
+        raise HTTPException(status_code=400, detail="허용되지 않는 배포차수입니다")
     from sqlalchemy import and_, case, func as sa_func, or_
     from engines.opinion_quality_analyzer import match_opinion_quality
     from engines.review_keyword_analyzer import match_keywords
@@ -569,7 +590,7 @@ def get_stats(
     from models.review_severity_summary import ReviewSeveritySummary
     from models.review_stage import ReviewStage, PhaseType, ResultType
 
-    cache_key = _stats_cache_key(current_user, scope)
+    cache_key = _stats_cache_key(current_user, scope, batch)
     cached_stats = _stats_cache_get(db, cache_key)
     if cached_stats is not None:
         _release_read_connection(db)
@@ -581,13 +602,27 @@ def get_stats(
     visibility = None if unrestricted else building_visibility_filter(current_user)
     visible_ids_select = None if unrestricted else visible_building_ids_subquery(current_user)
 
+    # 배포차수 필터: 관리번호 일련번호 구간으로 집계 대상을 좁힌다(None이면 전체).
+    batch_condition = (
+        deploy_batch_filter(Building.mgmt_no, batch) if batch is not None else None
+    )
+    batch_ids_select = (
+        select(Building.id).where(batch_condition) if batch_condition is not None else None
+    )
+
     def _scoped(q):
-        return q.filter(visibility) if visibility is not None else q
+        if visibility is not None:
+            q = q.filter(visibility)
+        if batch_condition is not None:
+            q = q.filter(batch_condition)
+        return q
 
     def _scoped_by_building_id(q, building_id_col):
-        if visible_ids_select is None:
-            return q
-        return q.filter(building_id_col.in_(visible_ids_select))
+        if visible_ids_select is not None:
+            q = q.filter(building_id_col.in_(visible_ids_select))
+        if batch_ids_select is not None:
+            q = q.filter(building_id_col.in_(batch_ids_select))
+        return q
 
     # 1) 총 건수 + 최종 완료 건수 (단일 쿼리)
     totals_row = _scoped(db.query(
@@ -618,6 +653,20 @@ def get_stats(
     for key, count in final_rows:
         if key in final_counts:
             final_counts[key] = count
+
+    # 1-1-1) 배포차수별 건수
+    # 배포차수 필터를 걸어도 선택지별 전체 분포를 보여줘야 하므로 가시성만 적용한다.
+    deploy_batch_col = deploy_batch_expr(Building.mgmt_no)
+    deploy_batch_query = db.query(
+        deploy_batch_col.label("batch"),
+        sa_func.count(Building.id).label("count"),
+    )
+    if visibility is not None:
+        deploy_batch_query = deploy_batch_query.filter(visibility)
+    deploy_batch_counts = {str(no): 0 for no in DEPLOY_BATCH_NUMBERS}
+    deploy_batch_counts["none"] = 0   # 관리번호가 정규 형식이 아닌 건
+    for batch_key, count in deploy_batch_query.group_by(deploy_batch_col).all():
+        deploy_batch_counts[str(batch_key) if batch_key is not None else "none"] = count
 
     # 1-2) 문의사항 상태별 건수
     inquiry_rows = (
@@ -1476,6 +1525,8 @@ def get_stats(
         # 최종 판정 6분류(+레거시)
         # (적합/보완적합/부적합(단순오류)/부적합(재계산)/부적합(미회신)/대상제외 + 레거시 부적합)
         "final_counts": final_counts,
+        # 배포차수별 건수 (배포차수 필터와 무관한 전체 분포)
+        "deploy_batch_counts": deploy_batch_counts,
         # 문의사항 상태별 건수 (전체)
         "inquiry_counts": inquiry_counts,
         # 기존 호환 필드 (프론트 기존 코드 참조)
@@ -1524,6 +1575,7 @@ def list_buildings(
     sido: str | None = None,
     phase: str | None = None,
     reviewer: str | None = None,
+    batch: int | None = Query(None, description="배포차수(1~5) 필터"),
     sort_by: str | None = None,
     sort_order: str = "asc",
     page: int = Query(1, ge=1),
@@ -1562,6 +1614,10 @@ def list_buildings(
     # reviewer 필터는 관리자(REVIEWER 외)만 적용
     if reviewer and not is_reviewer:
         query = query.filter(Building.assigned_reviewer_name == reviewer)
+    if batch is not None:
+        if batch not in DEPLOY_BATCH_NUMBERS:
+            raise HTTPException(status_code=400, detail="허용되지 않는 배포차수입니다")
+        query = query.filter(deploy_batch_filter(Building.mgmt_no, batch))
 
     total = query.count()
 
@@ -1631,6 +1687,7 @@ def list_buildings(
     else:
         sort_map = {
             "mgmt_no": [Building.mgmt_no],
+            "deploy_batch": [deploy_batch_expr(Building.mgmt_no)],
             "assigned_reviewer_name": [Building.assigned_reviewer_name],
             "reviewer_name": [Building.assigned_reviewer_name],
             "address": [

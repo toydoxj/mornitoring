@@ -88,10 +88,20 @@ export interface ReviewerDetail {
   phone: string | null
 }
 
+// 배포차수 — 관리번호 일련번호 구간으로 구분한 설계도서 배포 배치.
+// 예비/보완 1~5차(PhaseType)와는 다른 개념이다.
+export const DEPLOY_BATCH_NUMBERS = [1, 2, 3, 4, 5] as const
+export type DeployBatch = (typeof DEPLOY_BATCH_NUMBERS)[number]
+
+export function deployBatchLabel(batch: number | null | undefined) {
+  return batch ? `${batch}차수` : "-"
+}
+
 // 건축물 (통합관리대장)
 export interface Building {
   id: number
   mgmt_no: string
+  deploy_batch?: number | null
   building_name: string | null
   sido: string | null
   sigungu: string | null

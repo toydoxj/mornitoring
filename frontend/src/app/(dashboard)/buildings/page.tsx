@@ -29,7 +29,14 @@ import {
 } from "@/components/ui/dialog"
 import apiClient from "@/lib/api/client"
 import type { Building, BuildingListResponse } from "@/types"
-import { RESULT_LABELS, PHASE_LABELS, type ResultType, type PhaseType } from "@/types"
+import {
+  DEPLOY_BATCH_NUMBERS,
+  RESULT_LABELS,
+  PHASE_LABELS,
+  deployBatchLabel,
+  type ResultType,
+  type PhaseType,
+} from "@/types"
 import { useAuthStore } from "@/stores/authStore"
 
 const RESULT_VARIANT: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
@@ -107,6 +114,7 @@ type SortOrder = "asc" | "desc"
 
 const SORTABLE_FIELDS = new Set([
   "mgmt_no",
+  "deploy_batch",
   "assigned_reviewer_name",
   "address",
   "building_name",
@@ -125,6 +133,11 @@ function parsePositivePage(value: string | null) {
 
 function parseSortOrder(value: string | null): SortOrder {
   return value === "desc" ? "desc" : "asc"
+}
+
+function parseBatch(value: string | null) {
+  const parsed = Number(value)
+  return DEPLOY_BATCH_NUMBERS.some((batch) => batch === parsed) ? String(parsed) : ""
 }
 
 function parseSortValue(value: string) {
@@ -151,6 +164,7 @@ export default function BuildingsPage() {
   const [searchInput, setSearchInput] = useState(() => searchParams.get("search") ?? "")
   const [filterPhase, setFilterPhase] = useState(() => searchParams.get("phase") ?? "")
   const [filterReviewer, setFilterReviewer] = useState(() => searchParams.get("reviewer") ?? "")
+  const [filterBatch, setFilterBatch] = useState(() => parseBatch(searchParams.get("batch")))
   const [sortBy, setSortBy] = useState(() => {
     const value = searchParams.get("sort_by") ?? ""
     return SORTABLE_FIELDS.has(value) ? value : ""
@@ -203,12 +217,13 @@ export default function BuildingsPage() {
     if (search) params.set("search", search)
     if (filterPhase) params.set("phase", filterPhase)
     if (filterReviewer) params.set("reviewer", filterReviewer)
+    if (filterBatch) params.set("batch", filterBatch)
     if (sortBy) {
       params.set("sort_by", sortBy)
       params.set("sort_order", sortOrder)
     }
     return params.toString()
-  }, [filterPhase, filterReviewer, page, search, sortBy, sortOrder])
+  }, [filterBatch, filterPhase, filterReviewer, page, search, sortBy, sortOrder])
 
   const currentListPath = listQueryString ? `/buildings?${listQueryString}` : "/buildings"
 
@@ -239,6 +254,7 @@ export default function BuildingsPage() {
       if (search) params.search = search
       if (filterPhase) params.phase = filterPhase
       if (filterReviewer) params.reviewer = filterReviewer
+      if (filterBatch) params.batch = filterBatch
       if (sortBy) {
         params.sort_by = sortBy
         params.sort_order = sortOrder
@@ -251,7 +267,7 @@ export default function BuildingsPage() {
     } finally {
       setIsLoading(false)
     }
-  }, [filterPhase, filterReviewer, page, search, sortBy, sortOrder])
+  }, [filterBatch, filterPhase, filterReviewer, page, search, sortBy, sortOrder])
 
   useEffect(() => {
     fetchBuildings()
@@ -693,6 +709,16 @@ export default function BuildingsPage() {
         ),
       },
       {
+        accessorKey: "deploy_batch",
+        header: () => renderSortableHeader("deploy_batch", "배포차수"),
+        size: 90,
+        cell: ({ getValue }) => {
+          const value = getValue<number | null>()
+          if (!value) return <span className="text-muted-foreground">-</span>
+          return <Badge variant="outline">{deployBatchLabel(value)}</Badge>
+        },
+      },
+      {
         accessorKey: "reviewer_name",
         header: () => renderSortableHeader("assigned_reviewer_name", "검토자"),
         size: 80,
@@ -1025,6 +1051,17 @@ export default function BuildingsPage() {
 
         <select
           className="rounded-md border px-3 py-2 text-sm"
+          value={filterBatch}
+          onChange={(e) => { setFilterBatch(e.target.value); setPage(1) }}
+        >
+          <option value="">전체 배포차수</option>
+          {DEPLOY_BATCH_NUMBERS.map((batch) => (
+            <option key={batch} value={batch}>{deployBatchLabel(batch)}</option>
+          ))}
+        </select>
+
+        <select
+          className="rounded-md border px-3 py-2 text-sm"
           value={filterReviewer}
           onChange={(e) => { setFilterReviewer(e.target.value); setPage(1) }}
         >
@@ -1047,6 +1084,8 @@ export default function BuildingsPage() {
           <option value="">기본 정렬</option>
           <option value="mgmt_no_asc">관리번호 ↑</option>
           <option value="mgmt_no_desc">관리번호 ↓</option>
+          <option value="deploy_batch_asc">배포차수 ↑</option>
+          <option value="deploy_batch_desc">배포차수 ↓</option>
           <option value="assigned_reviewer_name_asc">검토위원 ↑</option>
           <option value="assigned_reviewer_name_desc">검토위원 ↓</option>
           <option value="address_asc">주소 ↑</option>
@@ -1063,11 +1102,18 @@ export default function BuildingsPage() {
           <option value="final_result_desc">최종완료 ↓</option>
         </select>
 
-        {(filterPhase || filterReviewer || sortBy) && (
+        {(filterPhase || filterReviewer || filterBatch || sortBy) && (
           <Button
             variant="ghost"
             size="sm"
-            onClick={() => { setFilterPhase(""); setFilterReviewer(""); setSortBy(""); setSortOrder("asc"); setPage(1) }}
+            onClick={() => {
+              setFilterPhase("")
+              setFilterReviewer("")
+              setFilterBatch("")
+              setSortBy("")
+              setSortOrder("asc")
+              setPage(1)
+            }}
           >
             필터 초기화
           </Button>
