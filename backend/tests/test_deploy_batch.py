@@ -121,6 +121,59 @@ def test_통계_배포차수_필터와_분포(client, db_session, make_user):
     assert filtered["deploy_batch_counts"] == body["deploy_batch_counts"]
 
 
+def test_통계_배포차수별_진행_현황(client, db_session, make_user, make_reviewer):
+    _, headers = make_user(UserRole.CHIEF_SECRETARY)
+    _, reviewer, _ = make_reviewer()
+
+    # 1차수: 미배포 1건(배정됨) + 예비검토 1건(배정됨)
+    db_session.add(Building(
+        mgmt_no="2025-0100", reviewer_id=reviewer.id, current_phase="assigned"
+    ))
+    db_session.add(Building(
+        mgmt_no="2025-0101", reviewer_id=reviewer.id, current_phase="doc_received"
+    ))
+    # 4차수: 보완검토 1건 + 최종완료 1건(미배정)
+    db_session.add(Building(
+        mgmt_no="2025-3000", reviewer_id=reviewer.id, current_phase="supplement_2"
+    ))
+    db_session.add(Building(
+        mgmt_no="2025-3001", current_phase="completed", final_result="pass"
+    ))
+    db_session.commit()
+
+    body = client.get("/api/buildings/stats", headers=headers).json()
+    progress = {row["batch"]: row for row in body["deploy_batch_progress"]}
+    # 1~5차수 + 미분류(None) 행이 항상 존재한다
+    assert set(progress) == {1, 2, 3, 4, 5, None}
+
+    assert progress[1] == {
+        "batch": 1,
+        "assigned": 2,
+        "not_distributed": 1,
+        "preliminary": 1,
+        "supplement": 0,
+        "completed": 0,
+        "total": 2,
+    }
+    assert progress[4] == {
+        "batch": 4,
+        "assigned": 1,
+        "not_distributed": 0,
+        "preliminary": 0,
+        "supplement": 1,
+        "completed": 1,
+        "total": 2,
+    }
+    assert progress[2]["total"] == 0
+
+    # 배포차수 필터를 걸어도 차수별 분해는 전체를 유지한다
+    filtered = client.get(
+        "/api/buildings/stats", params={"batch": 1}, headers=headers
+    ).json()
+    assert filtered["total"] == 2
+    assert filtered["deploy_batch_progress"] == body["deploy_batch_progress"]
+
+
 def test_통계_허용되지_않는_배포차수는_400(client, make_user):
     _, headers = make_user(UserRole.CHIEF_SECRETARY)
     res = client.get("/api/buildings/stats", params={"batch": 0}, headers=headers)

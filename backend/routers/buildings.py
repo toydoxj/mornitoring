@@ -654,19 +654,63 @@ def get_stats(
         if key in final_counts:
             final_counts[key] = count
 
-    # 1-1-1) 배포차수별 건수
-    # 배포차수 필터를 걸어도 선택지별 전체 분포를 보여줘야 하므로 가시성만 적용한다.
+    # 1-1-1) 배포차수별 진행 현황
+    # 배포차수 필터를 걸어도 차수별 분해는 전체를 보여줘야 하므로 가시성만 적용한다.
+    # 열 정의는 통계자료 검토위원별 현황과 맞춘다:
+    #   배정   = 검토위원이 배정된 건(관리대장 배정 총 건수)
+    #   미배포 = 배정완료 단계(current_phase == "assigned") — 통계 화면의 "미접수"
     deploy_batch_col = deploy_batch_expr(Building.mgmt_no)
+    preliminary_progress_phases = ("doc_received", "preliminary")
+    supplement_progress_phases = tuple(
+        phase
+        for n in range(1, 6)
+        for phase in (f"supplement_{n}_received", f"supplement_{n}")
+    )
     deploy_batch_query = db.query(
         deploy_batch_col.label("batch"),
-        sa_func.count(Building.id).label("count"),
+        sa_func.count(Building.id).label("total"),
+        sa_func.count(Building.id).filter(
+            or_(
+                Building.reviewer_id.isnot(None),
+                Building.assigned_reviewer_name.isnot(None),
+            )
+        ).label("assigned"),
+        sa_func.count(Building.id).filter(
+            Building.current_phase == "assigned"
+        ).label("not_distributed"),
+        sa_func.count(Building.id).filter(
+            Building.current_phase.in_(preliminary_progress_phases)
+        ).label("preliminary"),
+        sa_func.count(Building.id).filter(
+            Building.current_phase.in_(supplement_progress_phases)
+        ).label("supplement"),
+        sa_func.count(Building.id).filter(
+            Building.final_result.isnot(None)
+        ).label("completed"),
     )
     if visibility is not None:
         deploy_batch_query = deploy_batch_query.filter(visibility)
+    progress_by_batch = {
+        row.batch: row for row in deploy_batch_query.group_by(deploy_batch_col).all()
+    }
+
     deploy_batch_counts = {str(no): 0 for no in DEPLOY_BATCH_NUMBERS}
     deploy_batch_counts["none"] = 0   # 관리번호가 정규 형식이 아닌 건
-    for batch_key, count in deploy_batch_query.group_by(deploy_batch_col).all():
-        deploy_batch_counts[str(batch_key) if batch_key is not None else "none"] = count
+    deploy_batch_progress: list[dict[str, int | None]] = []
+    for batch_key in (*DEPLOY_BATCH_NUMBERS, None):
+        row = progress_by_batch.get(batch_key)
+        deploy_batch_counts[str(batch_key) if batch_key is not None else "none"] = (
+            row.total if row else 0
+        )
+        deploy_batch_progress.append({
+            "batch": batch_key,
+            "assigned": row.assigned if row else 0,
+            "not_distributed": row.not_distributed if row else 0,
+            "preliminary": row.preliminary if row else 0,
+            "supplement": row.supplement if row else 0,
+            "completed": row.completed if row else 0,
+            "total": row.total if row else 0,
+        })
 
     # 1-2) 문의사항 상태별 건수
     inquiry_rows = (
@@ -1525,8 +1569,9 @@ def get_stats(
         # 최종 판정 6분류(+레거시)
         # (적합/보완적합/부적합(단순오류)/부적합(재계산)/부적합(미회신)/대상제외 + 레거시 부적합)
         "final_counts": final_counts,
-        # 배포차수별 건수 (배포차수 필터와 무관한 전체 분포)
+        # 배포차수별 건수·진행 현황 (배포차수 필터와 무관한 전체 분포)
         "deploy_batch_counts": deploy_batch_counts,
+        "deploy_batch_progress": deploy_batch_progress,
         # 문의사항 상태별 건수 (전체)
         "inquiry_counts": inquiry_counts,
         # 기존 호환 필드 (프론트 기존 코드 참조)

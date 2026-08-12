@@ -45,6 +45,17 @@ interface InquiryCounts {
   completed: number
 }
 
+// 배포차수별 진행 현황 한 줄. batch가 null이면 관리번호가 정규 형식이 아닌 건
+interface DeployBatchProgress {
+  batch: number | null
+  assigned: number        // 검토위원 배정 건수
+  not_distributed: number // 배정완료 단계(도서 미배포)
+  preliminary: number     // 예비도서 접수 + 예비검토서 제출
+  supplement: number      // 보완도서 접수 + 보완검토서 제출 (1~5차)
+  completed: number       // 최종완료
+  total: number
+}
+
 interface DueDateSubmissionStat {
   doc_received_at: string | null
   report_due_date: string
@@ -74,6 +85,7 @@ interface DashboardStats {
   final_counts: FinalCounts
   // 배포차수별 건수 — 배포차수 필터와 무관한 전체 분포. 키는 "1"~"5" 및 "none"
   deploy_batch_counts?: Record<string, number>
+  deploy_batch_progress?: DeployBatchProgress[]
   inquiry_counts: InquiryCounts
   // 기존 호환
   doc_received: number
@@ -434,6 +446,18 @@ export default function DashboardPage() {
             </CardContent>
           </Card>
         </div>
+      )}
+
+      {/* 배포차수별 진행 현황 — 차수 필터와 무관하게 항상 전체 분해를 보여준다 */}
+      {isAdmin && stats?.deploy_batch_progress && (
+        <Card>
+          <CardHeader>
+            <CardTitle>배포차수별 진행 현황</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <DeployBatchProgressTable rows={stats.deploy_batch_progress} />
+          </CardContent>
+        </Card>
       )}
 
       {/* 내 담당 현황 (상단, 버킷 스타일) */}
@@ -1037,6 +1061,96 @@ function OnTimeRateBar({ rate }: { rate: number | null }) {
         />
       </div>
       <span className="w-10 text-right text-xs font-medium text-slate-700">{rate}%</span>
+    </div>
+  )
+}
+
+const DEPLOY_BATCH_PROGRESS_COLUMNS = [
+  { key: "assigned", label: "배정" },
+  { key: "not_distributed", label: "미배포" },
+  { key: "preliminary", label: "예비검토" },
+  { key: "supplement", label: "보완검토" },
+  { key: "completed", label: "최종완료" },
+  { key: "total", label: "총합" },
+] as const
+
+function DeployBatchProgressTable({ rows }: { rows: DeployBatchProgress[] }) {
+  // 1~5차수는 접수 전이라도 항상 보여주고, 미분류 행은 실제 건이 있을 때만 노출한다.
+  const visibleRows = rows.filter((row) => row.batch !== null || row.total > 0)
+  const totals = visibleRows.reduce(
+    (acc, row) => ({
+      assigned: acc.assigned + row.assigned,
+      not_distributed: acc.not_distributed + row.not_distributed,
+      preliminary: acc.preliminary + row.preliminary,
+      supplement: acc.supplement + row.supplement,
+      completed: acc.completed + row.completed,
+      total: acc.total + row.total,
+    }),
+    {
+      assigned: 0,
+      not_distributed: 0,
+      preliminary: 0,
+      supplement: 0,
+      completed: 0,
+      total: 0,
+    },
+  )
+
+  if (visibleRows.length === 0) {
+    return <p className="py-6 text-center text-sm text-muted-foreground">집계할 건이 없습니다</p>
+  }
+
+  return (
+    <div className="overflow-x-auto">
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead className="w-24">배포차수</TableHead>
+            {DEPLOY_BATCH_PROGRESS_COLUMNS.map((column) => (
+              <TableHead
+                key={column.key}
+                className={`text-center ${column.key === "total" ? "border-l" : ""}`}
+              >
+                {column.label}
+              </TableHead>
+            ))}
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {visibleRows.map((row) => (
+            <TableRow key={row.batch ?? "none"} className={row.total === 0 ? "text-muted-foreground" : ""}>
+              <TableCell className="font-medium">
+                {row.batch === null ? "미분류" : `${row.batch}차수`}
+              </TableCell>
+              {DEPLOY_BATCH_PROGRESS_COLUMNS.map((column) => (
+                <TableCell
+                  key={column.key}
+                  className={`text-center ${
+                    column.key === "total" ? "border-l font-medium" : ""
+                  }`}
+                >
+                  {row[column.key].toLocaleString()}
+                </TableCell>
+              ))}
+            </TableRow>
+          ))}
+          <TableRow className="border-t-2 font-bold">
+            <TableCell>합계</TableCell>
+            {DEPLOY_BATCH_PROGRESS_COLUMNS.map((column) => (
+              <TableCell
+                key={column.key}
+                className={`text-center ${column.key === "total" ? "border-l" : ""}`}
+              >
+                {totals[column.key].toLocaleString()}
+              </TableCell>
+            ))}
+          </TableRow>
+        </TableBody>
+      </Table>
+      <p className="mt-2 text-xs text-muted-foreground">
+        배정 = 검토위원이 배정된 건 / 미배포 = 배정완료 단계(설계도서 미배포).
+        배정은 이후 단계를 포함하므로 각 열의 합은 총합과 다를 수 있습니다.
+      </p>
     </div>
   )
 }
