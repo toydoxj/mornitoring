@@ -1,8 +1,9 @@
 """재제출 요청 모델
 
 검토위원이 배포받은 설계도서로 검토를 진행할 수 없을 때 재제출을 요청한다.
-요청이 접수되면 건물의 current_phase 를 접수 직전 단계로 되돌리고 해당 단계의
-검토서 요청 예정일(report_due_date)을 비운다. 재제출된 도서가 다시 접수되면
+요청이 접수되면 건물의 current_phase 를 접수 직전 단계로 되돌린다. 검토서 요청
+예정일(report_due_date)은 자동으로 지우지 않고, 사유를 확인한 간사가 요청 화면에서
+직접 삭제한다(삭제한 값은 cleared_due_date 에 보관). 재제출된 도서가 다시 접수되면
 예정일은 일반 접수와 똑같이 새로 부여되고, 그 시점이 re_received_at 에 남아
 간사가 요청을 닫을 시점을 판단할 수 있게 한다.
 
@@ -38,7 +39,7 @@ class ResubmissionRequest(Base):
     # 되돌리기 전/후 building.current_phase
     from_phase: Mapped[str | None] = mapped_column(String(30))
     to_phase: Mapped[str | None] = mapped_column(String(30))
-    # 되돌리면서 비운 검토서 요청 예정일 (복원 판단용 기록)
+    # 간사가 삭제한 검토서 요청 예정일 (삭제 전 값. 미삭제면 NULL)
     cleared_due_date: Mapped[str | None] = mapped_column(String(10))
 
     requester_id: Mapped[int | None] = mapped_column(

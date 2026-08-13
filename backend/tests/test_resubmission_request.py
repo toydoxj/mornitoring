@@ -75,7 +75,7 @@ def _setup_received_building(db_session, make_reviewer, make_building, *, group_
 
 # ===== 등록 =====
 
-def test_create_resubmission_rolls_back_phase_and_clears_due_date(
+def test_create_resubmission_rolls_back_phase_and_keeps_due_date(
     client, db_session, make_reviewer, make_building
 ):
     user, reviewer, headers, building, stage = _setup_received_building(
@@ -94,14 +94,15 @@ def test_create_resubmission_rolls_back_phase_and_clears_due_date(
 
     db_session.expire_all()
     assert building.current_phase == "assigned"
-    assert stage.report_due_date is None
+    # 예정일은 간사가 확인 후 지운다 — 요청만으로는 남아 있어야 한다
+    assert stage.report_due_date == date(2026, 8, 15)
 
     req = db_session.query(ResubmissionRequest).one()
     assert req.mgmt_no == building.mgmt_no
     assert req.phase == "preliminary"
     assert req.from_phase == "doc_received"
     assert req.to_phase == "assigned"
-    assert req.cleared_due_date == "2026-08-15"
+    assert req.cleared_due_date is None
     assert req.requester_id == user.id
     assert req.status == ResubmissionStatus.PENDING
 
@@ -138,8 +139,9 @@ def test_create_resubmission_writes_logs(
     assert audit.user_id == user.id
     assert audit.target_type == "building"
     assert audit.target_id == building.id
-    assert audit.before_data["report_due_date"] == "2026-08-15"
+    assert audit.before_data["current_phase"] == "doc_received"
     assert audit.after_data["current_phase"] == "assigned"
+    assert audit.after_data["report_due_date"] == "2026-08-15"
     assert audit.after_data["reason"] == "도면 불일치"
 
 
@@ -323,7 +325,8 @@ def test_list_includes_building_context(
     assert item["building_name"] == building.building_name
     assert item["current_phase"] == "assigned"
     assert item["reviewer_group_no"] == 3
-    assert item["cleared_due_date"] == "2026-08-15"
+    assert item["current_due_date"] == "2026-08-15"
+    assert item["cleared_due_date"] is None
 
 
 # ===== 처리 =====
@@ -456,7 +459,6 @@ def test_due_date_assigned_on_re_receive(
     )
     db_session.expire_all()
     assert building.current_phase == "assigned"
-    assert stage.report_due_date is None
 
     # 총괄간사가 재제출된 도서를 접수 (예정일 명시)
     _, chief_headers = make_user(UserRole.CHIEF_SECRETARY)
@@ -631,3 +633,213 @@ def test_resubmit_and_normal_share_one_notification(
     }
     assert stages[building.id].report_due_date == date(2026, 9, 15)
     assert stages[other.id].report_due_date == date(2026, 9, 15)
+
+
+# ===== 간사의 예정일 삭제 =====
+
+def test_secretary_clears_due_date(
+    client, db_session, make_user, make_reviewer, make_building
+):
+    """간사가 clear_due_date 로 검토서 요청 예정일을 지운다."""
+    _, _, headers, building, stage = _setup_received_building(
+        db_session, make_reviewer, make_building
+    )
+    req_id = client.post(
+        "/api/resubmissions",
+        json={"mgmt_no": building.mgmt_no, "reason": "사유"},
+        headers=headers,
+    ).json()["id"]
+    chief, chief_headers = make_user(UserRole.CHIEF_SECRETARY)
+
+    res = client.patch(
+        f"/api/resubmissions/{req_id}",
+        json={"clear_due_date": True},
+        headers=chief_headers,
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["cleared_due_date"] == "2026-08-15"
+
+    db_session.expire_all()
+    assert stage.report_due_date is None
+    req = db_session.get(ResubmissionRequest, req_id)
+    assert req.cleared_due_date == "2026-08-15"
+    # 예정일 삭제만으로 상태가 바뀌지는 않는다
+    assert req.status == ResubmissionStatus.PENDING
+
+    audit = (
+        db_session.query(AuditLog)
+        .filter(AuditLog.action == "resubmission_update")
+        .one()
+    )
+    assert audit.user_id == chief.id
+    assert audit.after_data["cleared_due_date"] == "2026-08-15"
+
+
+def test_clear_due_date_twice_rejected(
+    client, db_session, make_user, make_reviewer, make_building
+):
+    """이미 지워진 예정일을 다시 지우려 하면 400."""
+    _, _, headers, building, _ = _setup_received_building(
+        db_session, make_reviewer, make_building
+    )
+    req_id = client.post(
+        "/api/resubmissions",
+        json={"mgmt_no": building.mgmt_no, "reason": "사유"},
+        headers=headers,
+    ).json()["id"]
+    _, chief_headers = make_user(UserRole.CHIEF_SECRETARY)
+
+    client.patch(
+        f"/api/resubmissions/{req_id}",
+        json={"clear_due_date": True},
+        headers=chief_headers,
+    )
+    again = client.patch(
+        f"/api/resubmissions/{req_id}",
+        json={"clear_due_date": True},
+        headers=chief_headers,
+    )
+    assert again.status_code == 400
+    assert "이미 삭제된" in again.json()["detail"]
+
+
+def test_manager_cannot_clear_due_date(
+    client, db_session, make_user, make_reviewer, make_building
+):
+    """관리원은 예정일을 지울 수 없다 (조회 전용)."""
+    _, _, headers, building, stage = _setup_received_building(
+        db_session, make_reviewer, make_building
+    )
+    req_id = client.post(
+        "/api/resubmissions",
+        json={"mgmt_no": building.mgmt_no, "reason": "사유"},
+        headers=headers,
+    ).json()["id"]
+    _, manager_headers = make_user(UserRole.MANAGER)
+
+    res = client.patch(
+        f"/api/resubmissions/{req_id}",
+        json={"clear_due_date": True},
+        headers=manager_headers,
+    )
+    assert res.status_code == 403
+
+    db_session.expire_all()
+    assert stage.report_due_date == date(2026, 8, 15)
+
+
+def test_reviewer_cannot_clear_due_date(
+    client, db_session, make_reviewer, make_building
+):
+    """검토위원 본인도 예정일을 지울 수 없다."""
+    _, _, headers, building, stage = _setup_received_building(
+        db_session, make_reviewer, make_building
+    )
+    req_id = client.post(
+        "/api/resubmissions",
+        json={"mgmt_no": building.mgmt_no, "reason": "사유"},
+        headers=headers,
+    ).json()["id"]
+
+    res = client.patch(
+        f"/api/resubmissions/{req_id}",
+        json={"clear_due_date": True},
+        headers=headers,
+    )
+    assert res.status_code == 403
+
+    db_session.expire_all()
+    assert stage.report_due_date == date(2026, 8, 15)
+
+
+def test_list_shows_due_date_state(
+    client, db_session, make_user, make_reviewer, make_building
+):
+    """목록은 삭제 전 current_due_date, 삭제 후 cleared_due_date 를 보여준다."""
+    _, _, headers, building, _ = _setup_received_building(
+        db_session, make_reviewer, make_building
+    )
+    req_id = client.post(
+        "/api/resubmissions",
+        json={"mgmt_no": building.mgmt_no, "reason": "사유"},
+        headers=headers,
+    ).json()["id"]
+    _, chief_headers = make_user(UserRole.CHIEF_SECRETARY)
+
+    before = client.get("/api/resubmissions", headers=chief_headers).json()["items"][0]
+    assert before["current_due_date"] == "2026-08-15"
+    assert before["cleared_due_date"] is None
+
+    client.patch(
+        f"/api/resubmissions/{req_id}",
+        json={"clear_due_date": True},
+        headers=chief_headers,
+    )
+
+    after = client.get("/api/resubmissions", headers=chief_headers).json()["items"][0]
+    assert after["current_due_date"] is None
+    assert after["cleared_due_date"] == "2026-08-15"
+
+
+def test_clear_due_date_with_reply_and_status(
+    client, db_session, make_user, make_reviewer, make_building
+):
+    """예정일 삭제·회신·처리완료를 한 번에 처리할 수 있다."""
+    _, _, headers, building, stage = _setup_received_building(
+        db_session, make_reviewer, make_building
+    )
+    req_id = client.post(
+        "/api/resubmissions",
+        json={"mgmt_no": building.mgmt_no, "reason": "사유"},
+        headers=headers,
+    ).json()["id"]
+    chief, chief_headers = make_user(UserRole.CHIEF_SECRETARY)
+
+    res = client.patch(
+        f"/api/resubmissions/{req_id}",
+        json={
+            "reply": "설계사에 재제출 요청함",
+            "status": "completed",
+            "clear_due_date": True,
+        },
+        headers=chief_headers,
+    )
+    assert res.status_code == 200
+
+    db_session.expire_all()
+    assert stage.report_due_date is None
+    req = db_session.get(ResubmissionRequest, req_id)
+    assert req.status == ResubmissionStatus.COMPLETED
+    assert req.reply == "설계사에 재제출 요청함"
+    assert req.cleared_due_date == "2026-08-15"
+    assert req.handled_by == chief.id
+
+
+def test_re_receive_restores_due_date_after_clear(
+    client, db_session, make_user, make_reviewer, make_building
+):
+    """간사가 지운 뒤 도서가 재접수되면 예정일이 새로 부여된다."""
+    _, _, headers, building, _ = _setup_received_building(
+        db_session, make_reviewer, make_building
+    )
+    req_id = client.post(
+        "/api/resubmissions",
+        json={"mgmt_no": building.mgmt_no, "reason": "사유"},
+        headers=headers,
+    ).json()["id"]
+    _, chief_headers = make_user(UserRole.CHIEF_SECRETARY)
+    client.patch(
+        f"/api/resubmissions/{req_id}",
+        json={"clear_due_date": True},
+        headers=chief_headers,
+    )
+
+    client.post(
+        "/api/distribution/receive",
+        headers=chief_headers,
+        json={"mgmt_nos": [building.mgmt_no], "received_date": "2026-09-01"},
+    )
+
+    db_session.expire_all()
+    stage = db_session.query(ReviewStage).filter_by(building_id=building.id).one()
+    assert stage.report_due_date == date(2026, 9, 15)

@@ -3,11 +3,13 @@
 검토위원이 배포받은 설계도서로 검토를 진행할 수 없을 때 재제출을 요청한다.
 요청이 접수되면 다음이 한 트랜잭션으로 처리된다.
   1) building.current_phase 를 접수 직전 단계로 되돌린다 (RESUBMIT 트리거)
-  2) 해당 접수 단계 stage 의 report_due_date 를 비운다
-  3) 재제출 요청 레코드 + 감사 로그 + 단계 전환 로그를 남긴다
+  2) 재제출 요청 레코드 + 감사 로그 + 단계 전환 로그를 남긴다
+
+검토서 요청 예정일은 요청만으로 지워지지 않는다. 사유를 확인한 간사가 요청
+화면에서 `clear_due_date` 로 직접 삭제한다.
 
 요청 사유는 팀장·총괄간사·조별간사·관리원이 별도 메뉴에서 확인하며,
-간사 이상은 회신과 처리 상태를 남길 수 있다.
+간사 이상은 회신·처리 상태·예정일 삭제를 수행할 수 있다.
 """
 
 from datetime import datetime, timezone
@@ -56,6 +58,8 @@ class ResubmissionCreateRequest(BaseModel):
 class ResubmissionUpdateRequest(BaseModel):
     reply: str | None = Field(default=None, max_length=MAX_REASON_LENGTH)
     status: str | None = None
+    # true 면 해당 검토 단계의 검토서 요청 예정일을 지운다 (간사 판단).
+    clear_due_date: bool = False
 
 
 class ResubmissionItem(BaseModel):
@@ -67,6 +71,9 @@ class ResubmissionItem(BaseModel):
     from_phase: str | None
     to_phase: str | None
     current_phase: str | None = None
+    # 해당 검토 단계에 현재 남아 있는 요청 예정일 (간사가 삭제 여부를 판단)
+    current_due_date: str | None = None
+    # 간사가 지운 예정일 (삭제 전 값)
     cleared_due_date: str | None
     requester_id: int | None
     requester_name: str
@@ -126,11 +133,30 @@ def _visibility_filter(current_user: User):
     return ResubmissionRequest.id.is_(None)
 
 
+def _stage_of(db: Session, building_id: int | None, stage_phase: str):
+    """요청 대상 검토 단계 stage. 없으면 None."""
+    if building_id is None:
+        return None
+    try:
+        phase = PhaseType(stage_phase)
+    except ValueError:
+        return None
+    return (
+        db.query(ReviewStage)
+        .filter(
+            ReviewStage.building_id == building_id,
+            ReviewStage.phase == phase,
+        )
+        .first()
+    )
+
+
 def _to_item(
     req: ResubmissionRequest,
     *,
     building_name: str | None = None,
     current_phase: str | None = None,
+    current_due_date: str | None = None,
     reviewer_group_no: int | None = None,
     handled_by_name: str | None = None,
 ) -> ResubmissionItem:
@@ -143,6 +169,7 @@ def _to_item(
         from_phase=req.from_phase,
         to_phase=req.to_phase,
         current_phase=current_phase,
+        current_due_date=current_due_date,
         cleared_due_date=req.cleared_due_date,
         requester_id=req.requester_id,
         requester_name=req.requester_name,
@@ -171,9 +198,9 @@ def create_resubmission_request(
 
     담당 판정은 `Reviewer.user_id == current_user.id` 그리고
     `building.reviewer_id == reviewer.id` (동명이인 위험 때문에 이름 매칭 금지).
-    도서 접수 상태에서만 요청할 수 있고, 성공 시 단계가 접수 직전으로 되돌아가며
-    해당 단계의 검토서 요청 예정일이 지워진다. 예정일은 도서가 다시 접수될 때
-    일반 접수와 똑같이 새로 부여된다 (distribution.receive 참고).
+    도서 접수 상태에서만 요청할 수 있고, 성공 시 단계가 접수 직전으로 되돌아간다.
+    검토서 요청 예정일은 여기서 건드리지 않으며, 사유를 확인한 간사가 요청 화면에서
+    삭제한다 (PATCH /{id} 의 clear_due_date).
     """
     reason = body.reason.strip()
     if not reason:
@@ -224,19 +251,11 @@ def create_resubmission_request(
     except InvalidPhaseTransition as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    # 접수 단계 stage 의 검토서 요청 예정일 제거
-    stage = (
-        db.query(ReviewStage)
-        .filter(
-            ReviewStage.building_id == building.id,
-            ReviewStage.phase == PhaseType(stage_phase),
-        )
-        .first()
+    # 검토서 요청 예정일은 지우지 않는다. 사유를 확인한 간사가 별도로 삭제한다.
+    stage = _stage_of(db, building.id, stage_phase)
+    current_due_date = (
+        stage.report_due_date.isoformat() if stage and stage.report_due_date else None
     )
-    cleared_due_date = None
-    if stage and stage.report_due_date:
-        cleared_due_date = stage.report_due_date.isoformat()
-        stage.report_due_date = None
 
     req = ResubmissionRequest(
         building_id=building.id,
@@ -244,7 +263,6 @@ def create_resubmission_request(
         phase=stage_phase,
         from_phase=from_phase,
         to_phase=to_phase,
-        cleared_due_date=cleared_due_date,
         requester_id=current_user.id,
         requester_name=current_user.name,
         reason=reason,
@@ -258,15 +276,12 @@ def create_resubmission_request(
         "resubmission_request",
         "building",
         building.id,
-        before_data={
-            "current_phase": from_phase,
-            "report_due_date": cleared_due_date,
-        },
+        before_data={"current_phase": from_phase},
         after_data={
             "mgmt_no": building.mgmt_no,
             "current_phase": to_phase,
             "stage_phase": stage_phase,
-            "report_due_date": None,
+            "report_due_date": current_due_date,
             "resubmission_request_id": req.id,
             "reason": reason,
         },
@@ -335,6 +350,25 @@ def list_resubmission_requests(
             bid: (name, phase, group_no) for bid, name, phase, group_no in rows
         }
 
+    # 요청별 대상 stage 의 현재 예정일 — 간사가 삭제 여부를 판단하는 값
+    due_map: dict[tuple[int, str], str] = {}
+    if building_ids:
+        due_rows = (
+            db.query(
+                ReviewStage.building_id,
+                ReviewStage.phase,
+                ReviewStage.report_due_date,
+            )
+            .filter(
+                ReviewStage.building_id.in_(building_ids),
+                ReviewStage.report_due_date.isnot(None),
+            )
+            .all()
+        )
+        for bid, phase, due in due_rows:
+            phase_value = phase.value if hasattr(phase, "value") else str(phase)
+            due_map[(bid, phase_value)] = due.isoformat()
+
     handler_ids = {r.handled_by for r in items if r.handled_by is not None}
     handler_map: dict[int, str] = {}
     if handler_ids:
@@ -353,6 +387,7 @@ def list_resubmission_requests(
                 req,
                 building_name=name,
                 current_phase=phase,
+                current_due_date=due_map.get((req.building_id, req.phase)),
                 reviewer_group_no=group_no,
                 handled_by_name=(
                     handler_map.get(req.handled_by) if req.handled_by else None
@@ -398,9 +433,10 @@ def update_resubmission_request(
         )
     ),
 ):
-    """재제출 요청 회신/처리 상태 변경 (간사 이상).
+    """재제출 요청 회신/처리 상태 변경 + 검토서 요청 예정일 삭제 (간사 이상).
 
-    단계 되돌리기는 등록 시점에 이미 처리됐으므로 여기서는 상태와 회신만 남긴다.
+    단계 되돌리기는 등록 시점에 처리되지만, 예정일 삭제는 사유를 확인한 간사가
+    `clear_due_date=true` 로 직접 실행한다.
     """
     req = (
         db.query(ResubmissionRequest)
@@ -422,6 +458,21 @@ def update_resubmission_request(
 
     if body.reply is not None:
         req.reply = body.reply.strip() or None
+
+    cleared_due_date = None
+    if body.clear_due_date:
+        stage = _stage_of(db, req.building_id, req.phase)
+        if stage is None:
+            raise HTTPException(
+                status_code=400, detail="대상 검토 단계를 찾을 수 없습니다"
+            )
+        if stage.report_due_date is None:
+            raise HTTPException(
+                status_code=400, detail="이미 삭제된 검토서 요청 예정일입니다"
+            )
+        cleared_due_date = stage.report_due_date.isoformat()
+        stage.report_due_date = None
+        req.cleared_due_date = cleared_due_date
 
     if body.status:
         try:
@@ -447,7 +498,13 @@ def update_resubmission_request(
             "mgmt_no": req.mgmt_no,
             "status": req.status.value,
             "reply": req.reply,
+            "cleared_due_date": cleared_due_date,
         },
     )
     db.commit()
+    if cleared_due_date:
+        return {
+            "message": f"검토서 요청 예정일({cleared_due_date})을 삭제했습니다",
+            "cleared_due_date": cleared_due_date,
+        }
     return {"message": "업데이트 되었습니다"}

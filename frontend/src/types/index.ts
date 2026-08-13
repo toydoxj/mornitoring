@@ -248,6 +248,7 @@ export interface ResubmissionRequest {
   from_phase: string | null
   to_phase: string | null
   current_phase: string | null
+  current_due_date: string | null
   cleared_due_date: string | null
   requester_id: number | null
   requester_name: string
