@@ -126,9 +126,11 @@ def test_기준보다_뒤처지면_기준_단계_접수로_강제(client, db_ses
     ).one()
     assert stage.doc_received_at.isoformat() == "2026-08-12"
 
-    # 뒤처진 건은 일반 접수 알림
+    # 뒤처진 건은 일반 접수 알림 — 예정일 안내가 붙는다
     assert body["notifications"][0]["re_receive"] is False
     assert "재접수" not in body["notifications"][0]["message"]
+    assert body["notifications"][0]["report_due_date"] == "2026-08-26"
+    assert "검토서 요청 예정일: 2026-08-26" in body["notifications"][0]["message"]
 
 
 def test_기준보다_앞서가면_기준_단계_제출로_강제(client, db_session, make_user):
@@ -156,6 +158,9 @@ def test_기준보다_앞서가면_기준_단계_제출로_강제(client, db_ses
     notification = body["notifications"][0]
     assert notification["re_receive"] is True
     assert "재접수" in notification["message"]
+    # 재접수 알림에는 검토서 요청 예정일을 넣지 않는다 (별도 협의)
+    assert notification["report_due_date"] is None
+    assert "검토서 요청 예정일" not in notification["message"]
 
 
 def test_앞서간_건은_검토서_이력을_지우지_않는다(client, db_session, make_user):

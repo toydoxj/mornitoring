@@ -22,8 +22,15 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import apiClient from "@/lib/api/client"
-import type { Building, BuildingListResponse, PhaseType, ResultType } from "@/types"
-import { PHASE_LABELS, RESULT_LABELS } from "@/types"
+import type {
+  Building,
+  BuildingListResponse,
+  PhaseType,
+  ResultType,
+  ResubmissionListResponse,
+} from "@/types"
+import { PHASE_LABELS, RECEIVED_PHASES, RESULT_LABELS } from "@/types"
+import { getResubmitPreviousPhase } from "@/lib/phases"
 
 const RESULT_VARIANT: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
   pass: "default",
@@ -93,8 +100,32 @@ export default function MyReviewsPage() {
   const [reasonText, setReasonText] = useState("")
   const [reasonSubmitting, setReasonSubmitting] = useState(false)
 
+  // 재제출 요청 다이얼로그
+  const [resubmitTarget, setResubmitTarget] = useState<Building | null>(null)
+  const [resubmitReason, setResubmitReason] = useState("")
+  const [resubmitSubmitting, setResubmitSubmitting] = useState(false)
+  // 내가 올린 대기중 재제출 요청의 building_id 집합
+  const [pendingResubmitIds, setPendingResubmitIds] = useState<Set<number>>(new Set())
+
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
   const isInappropriateReviewLocked = Boolean(uploadTarget?.latest_inappropriate)
+
+  const fetchPendingResubmissions = useCallback(async () => {
+    try {
+      const { data: res } = await apiClient.get<ResubmissionListResponse>(
+        "/api/resubmissions/my"
+      )
+      setPendingResubmitIds(
+        new Set(
+          res.items
+            .filter((r) => r.status === "pending" && r.building_id !== null)
+            .map((r) => r.building_id as number)
+        )
+      )
+    } catch (err) {
+      console.error("재제출 요청 조회 실패:", err)
+    }
+  }, [])
 
   const fetchData = useCallback(async () => {
     setIsLoading(true)
@@ -115,6 +146,32 @@ export default function MyReviewsPage() {
   useEffect(() => {
     fetchData()
   }, [fetchData])
+
+  useEffect(() => {
+    fetchPendingResubmissions()
+  }, [fetchPendingResubmissions])
+
+  const handleResubmitSubmit = async () => {
+    if (!resubmitTarget || !resubmitReason.trim()) return
+    setResubmitSubmitting(true)
+    try {
+      await apiClient.post("/api/resubmissions", {
+        mgmt_no: resubmitTarget.mgmt_no,
+        reason: resubmitReason.trim(),
+      })
+      setResubmitTarget(null)
+      setResubmitReason("")
+      await Promise.all([fetchData(), fetchPendingResubmissions()])
+      alert("재제출 요청이 등록되었습니다. 단계가 이전 단계로 되돌아갔습니다.")
+    } catch (err) {
+      const msg =
+        (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
+        ?? "요청 실패"
+      alert(msg)
+    } finally {
+      setResubmitSubmitting(false)
+    }
+  }
 
   const handleReasonSubmit = async () => {
     if (!reasonTarget || !reasonText.trim()) return
@@ -332,19 +389,20 @@ export default function MyReviewsPage() {
               <TableHead className="w-[90px] text-center">최근판정</TableHead>
               <SortableHead field="report_due_date" className="w-[110px] text-center">제출 예정일</SortableHead>
               <TableHead className="w-[100px] text-center">검토서</TableHead>
+              <TableHead className="w-[110px] text-center">재제출요청</TableHead>
               <TableHead className="w-[80px] text-center">문의</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {isLoading ? (
               <TableRow>
-                <TableCell colSpan={11} className="h-32 text-center">
+                <TableCell colSpan={12} className="h-32 text-center">
                   로딩 중...
                 </TableCell>
               </TableRow>
             ) : data.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={11} className="h-32 text-center text-muted-foreground">
+                <TableCell colSpan={12} className="h-32 text-center text-muted-foreground">
                   배정된 검토 대상이 없습니다
                 </TableCell>
               </TableRow>
@@ -429,6 +487,28 @@ export default function MyReviewsPage() {
                     >
                       업로드
                     </Button>
+                  </TableCell>
+                  <TableCell className="text-center">
+                    {pendingResubmitIds.has(b.id) ? (
+                      <Badge variant="secondary">요청중</Badge>
+                    ) : (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={!RECEIVED_PHASES.has(b.current_phase ?? "")}
+                        title={
+                          RECEIVED_PHASES.has(b.current_phase ?? "")
+                            ? undefined
+                            : "도서 접수 상태에서만 요청할 수 있습니다"
+                        }
+                        onClick={() => {
+                          setResubmitTarget(b)
+                          setResubmitReason("")
+                        }}
+                      >
+                        재제출요청
+                      </Button>
+                    )}
                   </TableCell>
                   <TableCell className="text-center">
                     <Button
@@ -700,6 +780,79 @@ export default function MyReviewsPage() {
               >
                 저장
               </Button>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* 재제출 요청 다이얼로그 */}
+      <Dialog
+        open={!!resubmitTarget}
+        onOpenChange={(open) => {
+          if (!open) {
+            setResubmitTarget(null)
+            setResubmitReason("")
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>설계도서 재제출 요청</DialogTitle>
+          </DialogHeader>
+          {resubmitTarget && (
+            <div className="space-y-4">
+              <div className="rounded-md bg-muted p-3 text-sm space-y-1">
+                <p>관리번호: <strong>{resubmitTarget.mgmt_no}</strong></p>
+                <p>건물명: {resubmitTarget.building_name || "-"}</p>
+                <p>현재 단계: {resubmitTarget.current_phase
+                  ? PHASE_LABELS[resubmitTarget.current_phase] || resubmitTarget.current_phase
+                  : "-"}</p>
+              </div>
+              <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+                <p className="font-medium">요청 시 다음과 같이 처리됩니다</p>
+                <ul className="mt-1 list-disc pl-4 space-y-0.5 text-xs">
+                  <li>
+                    현재 단계가 <strong>
+                      {PHASE_LABELS[
+                        getResubmitPreviousPhase(resubmitTarget.current_phase) ?? ""
+                      ] || "이전 단계"}
+                    </strong>(으)로 되돌아갑니다.
+                  </li>
+                  <li>
+                    검토서 제출 예정일이 삭제되며, 도서가 다시 접수돼도 비어 있습니다.
+                    (간사가 사유 확인 후 지정)
+                  </li>
+                  <li>입력한 사유는 간사·관리원이 확인합니다.</li>
+                </ul>
+              </div>
+              <div className="space-y-2">
+                <Label>재제출 사유</Label>
+                <textarea
+                  className="w-full min-h-[110px] rounded-md border px-3 py-2 text-sm"
+                  placeholder="재제출이 필요한 사유를 입력해주세요"
+                  value={resubmitReason}
+                  onChange={(e) => setResubmitReason(e.target.value)}
+                />
+              </div>
+              <div className="flex gap-2">
+                <Button
+                  onClick={handleResubmitSubmit}
+                  disabled={!resubmitReason.trim()}
+                  loading={resubmitSubmitting}
+                  loadingText="요청 중..."
+                  className="flex-1"
+                >
+                  재제출 요청
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => setResubmitTarget(null)}
+                  disabled={resubmitSubmitting}
+                  className="flex-1"
+                >
+                  취소
+                </Button>
+              </div>
             </div>
           )}
         </DialogContent>

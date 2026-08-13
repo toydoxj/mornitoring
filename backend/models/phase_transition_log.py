@@ -26,7 +26,7 @@ class PhaseTransitionLog(Base):
     mgmt_no: Mapped[str] = mapped_column(String(50), index=True)
     from_phase: Mapped[str | None] = mapped_column(String(50))
     to_phase: Mapped[str] = mapped_column(String(50))
-    # 트리거: initial / receive / upload / manual / import
+    # 트리거: initial / receive / upload / manual / import / batch_align / resubmit
     trigger: Mapped[str] = mapped_column(String(20))
     actor_user_id: Mapped[int | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL")

@@ -19,6 +19,11 @@
     BATCH_ALIGN: 도서 접수 시 배포차수 기준 단계에 맞추는 강제 보정 전용.
              되돌리기가 목적에 포함되므로 알려진 단계 사이의 임의 점프를 허용한다.
              최종완료(completed) 건은 대상에서 제외한다.
+    RESUBMIT: 검토위원의 설계도서 재제출 요청 전용.
+             접수 상태(_received)에서 바로 앞 단계로 되돌리는 것만 허용한다.
+             "doc_received" -> "assigned"
+             "supplement_1_received" -> "preliminary"
+             "supplement_N_received" -> "supplement_(N-1)"  (N=2~5)
 
 사용 패턴:
     log = transition_phase(db, building, to_phase=..., trigger="receive",
@@ -36,7 +41,9 @@ from models.building import Building
 from models.phase_transition_log import PhaseTransitionLog
 
 
-TriggerType = Literal["initial", "receive", "upload", "manual", "import", "batch_align"]
+TriggerType = Literal[
+    "initial", "receive", "upload", "manual", "import", "batch_align", "resubmit"
+]
 
 
 # RECEIVE: (출발 phase) -> (도착 phase)
@@ -93,6 +100,13 @@ def _build_manual_allowed_pairs() -> set[tuple[str, str]]:
 # MANUAL이 허용하는 (from, to) 쌍 — 현재 phase 기준 전후 1단계.
 _MANUAL_ALLOWED_PAIRS = _build_manual_allowed_pairs()
 
+# RESUBMIT: (접수 상태) -> (직전 단계). 재제출 요청으로 도서 접수를 무르는 경로.
+_RESUBMIT_MATRIX: dict[str, str] = {
+    received: _PHASE_SEQUENCE[_PHASE_SEQUENCE.index(received) - 1]
+    for received in _PHASE_SEQUENCE
+    if received.endswith("_received")
+}
+
 # IMPORT 전진 검증용 단계 → 순서 인덱스.
 _PHASE_INDEX: dict[str, int] = {p: i for i, p in enumerate(_PHASE_SEQUENCE)}
 
@@ -112,6 +126,8 @@ def next_phase_for(trigger: TriggerType, from_phase: str | None) -> str | None:
         return _RECEIVE_MATRIX.get(from_phase or "")
     if trigger == "upload":
         return _UPLOAD_MATRIX.get(from_phase or "")
+    if trigger == "resubmit":
+        return _RESUBMIT_MATRIX.get(from_phase or "")
     return None
 
 
@@ -150,6 +166,19 @@ def _validate_transition(trigger: TriggerType, from_phase: str | None, to_phase:
         if to_phase != expected:
             raise InvalidPhaseTransition(
                 f"UPLOAD 전환 불허: from='{from_phase}' → '{to_phase}' (예상 '{expected}')"
+            )
+        return
+
+    if trigger == "resubmit":
+        expected = _RESUBMIT_MATRIX.get(from_phase or "")
+        if expected is None:
+            raise InvalidPhaseTransition(
+                f"RESUBMIT 전환 불허: from='{from_phase}' 는 도서 접수 상태가 아님 "
+                "(재제출 요청은 접수 상태에서만 가능)"
+            )
+        if to_phase != expected:
+            raise InvalidPhaseTransition(
+                f"RESUBMIT 전환 불허: from='{from_phase}' → '{to_phase}' (예상 '{expected}')"
             )
         return
 

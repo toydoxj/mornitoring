@@ -25,6 +25,7 @@ from routers import (
     kakao,
     ledger,
     notifications,
+    resubmissions,
     reviews,
     users,
 )
@@ -155,6 +156,9 @@ app.include_router(kakao.router, prefix="/api/kakao", tags=["카카오"])
 app.include_router(announcements.router, prefix="/api/announcements", tags=["공지사항"])
 app.include_router(discussions.router, prefix="/api/discussions", tags=["토론방"])
 app.include_router(checklist.router, prefix="/api/checklist", tags=["상세체크리스트"])
+app.include_router(
+    resubmissions.router, prefix="/api/resubmissions", tags=["재제출요청"]
+)
 
 
 @app.get("/api/health")

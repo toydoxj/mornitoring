@@ -235,3 +235,49 @@ export const RESULT_LABELS: Record<string, string> = {
   fail_no_response: "부적합(미회신)",
   excluded: "대상제외",
 }
+
+// 재제출 요청
+export type ResubmissionStatus = "pending" | "completed"
+
+export interface ResubmissionRequest {
+  id: number
+  building_id: number | null
+  mgmt_no: string
+  building_name: string | null
+  phase: string
+  from_phase: string | null
+  to_phase: string | null
+  current_phase: string | null
+  cleared_due_date: string | null
+  requester_id: number | null
+  requester_name: string
+  reviewer_group_no: number | null
+  reason: string
+  status: ResubmissionStatus
+  reply: string | null
+  re_received_at: string | null
+  handled_by_name: string | null
+  handled_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface ResubmissionListResponse {
+  items: ResubmissionRequest[]
+  total: number
+}
+
+export const RESUBMISSION_STATUS_LABELS: Record<ResubmissionStatus, string> = {
+  pending: "대기",
+  completed: "처리완료",
+}
+
+// 도서 접수 상태 — 재제출 요청이 가능한 단계
+export const RECEIVED_PHASES = new Set([
+  "doc_received",
+  "supplement_1_received",
+  "supplement_2_received",
+  "supplement_3_received",
+  "supplement_4_received",
+  "supplement_5_received",
+])

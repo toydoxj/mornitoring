@@ -6,6 +6,7 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from sqlalchemy import func as sa_func
 from sqlalchemy.orm import Session, joinedload
 
 from database import get_db
@@ -14,6 +15,7 @@ from engines.folder_distribution import distribute_by_folder_name
 from models.building import Building
 from models.deploy_batch_stage import DeployBatchStage
 from models.inappropriate_note import InappropriateNote
+from models.resubmission_request import ResubmissionRequest, ResubmissionStatus
 from models.review_opinion_detail import ReviewOpinionDetail
 from models.review_severity_summary import ReviewSeveritySummary
 from models.review_stage import ReviewStage, PhaseType
@@ -547,6 +549,10 @@ def receive_documents(
     기준보다 뒤처졌으면 기준 단계의 접수 상태로, 앞서갔으면 기준 단계의 제출
     상태로 강제하며, 앞서간 건은 재접수로 보아 알림을 따로 묶는다.
 
+    검토위원의 재제출 요청으로 되돌려진 건(대기중 + 아직 재접수 전)은 도서가
+    다시 들어와도 검토서 요청 예정일을 비운 채 접수한다. 예정일은 사유를 확인한
+    간사가 별도로 정한다.
+
     dry_run=true 면 DB를 바꾸지 않고 보정 대상만 계산해 돌려준다.
     """
     received = body.received_date or business_today()
@@ -554,8 +560,8 @@ def receive_documents(
     due_date = body.report_due_date or (received + timedelta(days=DEFAULT_DUE_DAYS))
     updated = 0
     not_found: list[str] = []
-    # (검토자 이름, 접수 차수, 재접수 여부) → 관리번호 목록
-    notif_key: dict[tuple[str, str, bool], list[str]] = {}
+    # (검토자 이름, 접수 차수, 재접수 여부, 예정일 부여 여부) → 관리번호 목록
+    notif_key: dict[tuple[str, str, bool, bool], list[str]] = {}
 
     # 1. 건축물 일괄 조회
     building_map: dict[str, Building] = {}
@@ -599,6 +605,23 @@ def receive_documents(
             dry_run=True,
         )
 
+    # 2-1. 재제출 요청으로 되돌려진 건 — 재접수해도 예정일을 비워 둔다.
+    #      이미 한 번 재접수된 요청(re_received_at 기록됨)은 대상에서 빠진다.
+    pending_resubmit_ids: set[int] = set()
+    if building_map:
+        rows = (
+            db.query(ResubmissionRequest.building_id)
+            .filter(
+                ResubmissionRequest.building_id.in_(
+                    [b.id for b in building_map.values()]
+                ),
+                ResubmissionRequest.status == ResubmissionStatus.PENDING,
+                ResubmissionRequest.re_received_at.is_(None),
+            )
+            .all()
+        )
+        pending_resubmit_ids = {bid for (bid,) in rows if bid is not None}
+
     # 3. 관련 review_stages 일괄 조회 (대상 phase 조합)
     existing_stages: dict[tuple[int, str], ReviewStage] = {}
     if target_phase_by_building:
@@ -620,6 +643,8 @@ def receive_documents(
     # 재접수로 검토서 이력이 초기화된 건들 (감사 로그용)
     reset_records: list[dict] = []
     applied_adjustments: list[dict] = []
+    # 재제출 요청분으로 접수돼 예정일을 비운 건들 (감사 로그 + 요청 표시용)
+    resubmit_received: list[tuple[int, str]] = []
     for mgmt_no in body.mgmt_nos:
         building = building_map.get(mgmt_no)
         if not building:
@@ -665,6 +690,12 @@ def receive_documents(
         # 기준보다 앞서간 건은 제출 상태를 유지해야 하므로 검토서 이력을 지우지 않고
         # 접수일·요청 예정일만 갱신한다.
         keep_review_history = bool(adjustment) and adjustment["direction"] == "ahead"
+        # 재제출 요청분 접수는 예정일을 비워 두고 간사가 따로 정한다.
+        is_resubmit_receive = building.id in pending_resubmit_ids
+        stage_due_date = None if is_resubmit_receive else due_date
+        if is_resubmit_receive:
+            resubmit_received.append((building.id, mgmt_no))
+
         key = (building.id, target_phase)
         stage = existing_stages.get(key)
         if stage:
@@ -674,25 +705,56 @@ def receive_documents(
                 meta["mgmt_no"] = mgmt_no
                 reset_records.append(meta)
             stage.doc_received_at = received
-            stage.report_due_date = due_date
+            stage.report_due_date = stage_due_date
         else:
             db.add(ReviewStage(
                 building_id=building.id,
                 phase=PhaseType(target_phase),
                 phase_order=_PHASE_ORDER[target_phase],
                 doc_received_at=received,
-                report_due_date=due_date,
+                report_due_date=stage_due_date,
             ))
 
         reviewer_name = building.assigned_reviewer_name
         if reviewer_name:
-            k = (reviewer_name, target_phase, keep_review_history)
+            k = (
+                reviewer_name,
+                target_phase,
+                keep_review_history,
+                stage_due_date is not None,
+            )
             notif_key.setdefault(k, []).append(mgmt_no)
 
         updated += 1
         batch_count += 1
         if batch_count % 500 == 0:
             db.flush()
+
+    # 재제출 요청분 접수 표시 — 요청 상태는 간사가 직접 닫으므로 시각만 기록한다.
+    if resubmit_received:
+        resubmit_building_ids = [bid for bid, _ in resubmit_received]
+        db.query(ResubmissionRequest).filter(
+            ResubmissionRequest.building_id.in_(resubmit_building_ids),
+            ResubmissionRequest.status == ResubmissionStatus.PENDING,
+            ResubmissionRequest.re_received_at.is_(None),
+        ).update({ResubmissionRequest.re_received_at: sa_func.now()},
+                 synchronize_session=False)
+        log_action(
+            db,
+            current_user.id,
+            "resubmission_re_receive",
+            "building",
+            None,
+            after_data={
+                "received_date": received.isoformat(),
+                "report_due_date": None,
+                "count": len(resubmit_received),
+                "mgmt_nos": [m for _, m in resubmit_received[:_RESET_AUDIT_ITEMS_CAP]],
+                "overflow_count": max(
+                    0, len(resubmit_received) - _RESET_AUDIT_ITEMS_CAP
+                ),
+            },
+        )
 
     # 호출 단위 감사 로그 (재접수로 이력이 초기화된 건이 있을 때만)
     if reset_records:
@@ -717,14 +779,25 @@ def receive_documents(
 
     db.commit()
 
-    # 5. 알림 목록 생성 (검토자 × 차수 × 재접수 여부 별로)
+    # 5. 알림 목록 생성 (검토자 × 차수 × 재접수 여부 × 예정일 부여 여부 별로)
     due_date_str = due_date.strftime("%Y-%m-%d")
     notif_list = []
-    for (reviewer, phase, is_re_receive), mgmt_nos_list in notif_key.items():
+    for (reviewer, phase, is_re_receive, has_due), mgmt_nos_list in notif_key.items():
         round_label = _ROUND_KOREAN.get(phase, phase)
         # 기준보다 앞서가 있던 건은 이미 검토서를 낸 단계로 도서가 다시 들어온 것이라
         # 검토위원이 구분할 수 있도록 "재접수"로 표기한다.
         doc_label = f"{round_label}도서 재접수" if is_re_receive else f"{round_label}도서"
+        # 예정일 안내는 신규 접수에만 넣는다.
+        # - 재접수(이미 검토서를 낸 단계로 도서가 다시 들어온 건)
+        # - 재제출 요청분(예정일을 비운 채 접수한 건)
+        # 위 두 경우는 예정일을 따로 정하므로 메시지에서 뺀다.
+        show_due = has_due and not is_re_receive
+        message = (
+            f"{doc_label} {len(mgmt_nos_list)}건이 웹하드에 "
+            f"업로드되었습니다. (관리번호 {', '.join(mgmt_nos_list)})"
+        )
+        if show_due:
+            message += f"\n검토서 요청 예정일: {due_date_str}"
         notif_list.append({
             "reviewer_name": reviewer,
             "count": len(mgmt_nos_list),
@@ -732,12 +805,8 @@ def receive_documents(
             "phase": phase,
             "re_receive": is_re_receive,
             "mgmt_nos": mgmt_nos_list,
-            "report_due_date": due_date_str,
-            "message": (
-                f"{doc_label} {len(mgmt_nos_list)}건이 웹하드에 "
-                f"업로드되었습니다. (관리번호 {', '.join(mgmt_nos_list)})\n"
-                f"검토서 요청 예정일: {due_date_str}"
-            ),
+            "report_due_date": due_date_str if show_due else None,
+            "message": message,
         })
 
     # 5차 이후 접수 불가 건은 not_found에 사유와 함께 포함
