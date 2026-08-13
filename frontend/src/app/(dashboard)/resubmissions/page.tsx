@@ -108,8 +108,7 @@ export default function ResubmissionsPage() {
       </p>
       {item.re_received_at && (
         <p className="text-xs text-blue-700">
-          도서 재접수됨 ({formatDateTime(item.re_received_at)}) · 검토서 요청
-          예정일은 비어 있습니다
+          도서 재접수됨 ({formatDateTime(item.re_received_at)})
         </p>
       )}
     </div>

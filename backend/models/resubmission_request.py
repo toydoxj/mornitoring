@@ -2,9 +2,9 @@
 
 검토위원이 배포받은 설계도서로 검토를 진행할 수 없을 때 재제출을 요청한다.
 요청이 접수되면 건물의 current_phase 를 접수 직전 단계로 되돌리고 해당 단계의
-검토서 요청 예정일(report_due_date)을 비운다. 재제출된 도서가 다시 접수될 때도
-예정일은 비운 채로 두며(간사가 사유 확인 후 지정), 그 시점을 re_received_at 에
-기록해 같은 요청으로 예정일이 반복해서 비워지지 않게 한다.
+검토서 요청 예정일(report_due_date)을 비운다. 재제출된 도서가 다시 접수되면
+예정일은 일반 접수와 똑같이 새로 부여되고, 그 시점이 re_received_at 에 남아
+간사가 요청을 닫을 시점을 판단할 수 있게 한다.
 
 요청 사유는 총괄간사·조별간사·관리원(및 팀장)이 별도 메뉴에서 확인·처리한다.
 building 이 사후 삭제되어도 이력이 남도록 mgmt_no 를 스냅샷으로 보관한다.
@@ -48,8 +48,8 @@ class ResubmissionRequest(Base):
     reason: Mapped[str] = mapped_column(Text)
 
     # 이 요청 이후 도서가 다시 접수된 시각.
-    # 재접수 때 검토서 요청 예정일을 비우는 대상을 "아직 재접수되지 않은 요청"으로
-    # 한정하기 위한 표시이며, 상태 전환은 간사가 직접 한다.
+    # 요청 목록에서 "도서가 다시 들어왔는지"를 보여주기 위한 표시이며,
+    # 상태 전환(처리완료)은 간사가 직접 한다.
     re_received_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     status: Mapped[ResubmissionStatus] = mapped_column(

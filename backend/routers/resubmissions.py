@@ -172,8 +172,8 @@ def create_resubmission_request(
     담당 판정은 `Reviewer.user_id == current_user.id` 그리고
     `building.reviewer_id == reviewer.id` (동명이인 위험 때문에 이름 매칭 금지).
     도서 접수 상태에서만 요청할 수 있고, 성공 시 단계가 접수 직전으로 되돌아가며
-    해당 단계의 검토서 요청 예정일이 지워진다. 이후 도서가 다시 접수돼도 예정일은
-    비워진 채로 유지되고(distribution.receive 참고), 간사가 사유를 확인한 뒤 정한다.
+    해당 단계의 검토서 요청 예정일이 지워진다. 예정일은 도서가 다시 접수될 때
+    일반 접수와 똑같이 새로 부여된다 (distribution.receive 참고).
     """
     reason = body.reason.strip()
     if not reason:

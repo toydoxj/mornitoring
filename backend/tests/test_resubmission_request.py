@@ -442,10 +442,10 @@ def test_my_reviews_hides_due_date_after_resubmission(
     assert after["current_phase"] == "assigned"
 
 
-def test_due_date_stays_empty_on_re_receive(
+def test_due_date_assigned_on_re_receive(
     client, db_session, make_user, make_reviewer, make_building
 ):
-    """재제출 요청분은 도서가 다시 접수돼도 제출 예정일을 비운 채로 둔다."""
+    """재제출 요청분도 도서가 다시 접수되면 예정일이 새로 부여된다."""
     _, _, headers, building, stage = _setup_received_building(
         db_session, make_reviewer, make_building
     )
@@ -458,7 +458,7 @@ def test_due_date_stays_empty_on_re_receive(
     assert building.current_phase == "assigned"
     assert stage.report_due_date is None
 
-    # 총괄간사가 재제출된 도서를 접수 — 예정일을 명시해도 비워둔다
+    # 총괄간사가 재제출된 도서를 접수 (예정일 명시)
     _, chief_headers = make_user(UserRole.CHIEF_SECRETARY)
     res = client.post(
         "/api/distribution/receive",
@@ -466,7 +466,7 @@ def test_due_date_stays_empty_on_re_receive(
         json={
             "mgmt_nos": [building.mgmt_no],
             "received_date": "2026-09-01",
-            "report_due_date": "2026-09-15",
+            "report_due_date": "2026-09-20",
         },
     )
     assert res.status_code == 200, res.text
@@ -474,11 +474,60 @@ def test_due_date_stays_empty_on_re_receive(
 
     db_session.expire_all()
     assert building.current_phase == "doc_received"
-    # 기존 stage 를 재사용하며 접수일만 갱신 (stage 중복 생성 없음)
+    # 기존 stage 를 재사용하며 접수일·예정일이 갱신된다 (stage 중복 생성 없음)
     stages = db_session.query(ReviewStage).filter_by(building_id=building.id).all()
     assert len(stages) == 1
     assert stages[0].doc_received_at == date(2026, 9, 1)
-    assert stages[0].report_due_date is None
+    assert stages[0].report_due_date == date(2026, 9, 20)
+
+
+def test_due_date_defaults_to_14_days_on_re_receive(
+    client, db_session, make_user, make_reviewer, make_building
+):
+    """예정일을 지정하지 않고 재접수하면 접수일 + 14일로 자동 기록된다."""
+    _, _, headers, building, _ = _setup_received_building(
+        db_session, make_reviewer, make_building
+    )
+    client.post(
+        "/api/resubmissions",
+        json={"mgmt_no": building.mgmt_no, "reason": "사유"},
+        headers=headers,
+    )
+    _, chief_headers = make_user(UserRole.CHIEF_SECRETARY)
+
+    client.post(
+        "/api/distribution/receive",
+        headers=chief_headers,
+        json={"mgmt_nos": [building.mgmt_no], "received_date": "2026-09-01"},
+    )
+
+    db_session.expire_all()
+    stage = db_session.query(ReviewStage).filter_by(building_id=building.id).one()
+    assert stage.report_due_date == date(2026, 9, 15)
+
+
+def test_my_reviews_shows_due_date_again_after_re_receive(
+    client, db_session, make_user, make_reviewer, make_building
+):
+    """재접수 후 내 검토 대상에 제출 예정일이 다시 보인다."""
+    _, _, headers, building, _ = _setup_received_building(
+        db_session, make_reviewer, make_building
+    )
+    client.post(
+        "/api/resubmissions",
+        json={"mgmt_no": building.mgmt_no, "reason": "사유"},
+        headers=headers,
+    )
+    _, chief_headers = make_user(UserRole.CHIEF_SECRETARY)
+    client.post(
+        "/api/distribution/receive",
+        headers=chief_headers,
+        json={"mgmt_nos": [building.mgmt_no], "received_date": "2026-09-01"},
+    )
+
+    item = client.get("/api/buildings/my-reviews", headers=headers).json()["items"][0]
+    assert item["current_phase"] == "doc_received"
+    assert item["report_due_date"] == "2026-09-15"
 
 
 def test_re_receive_marks_request_and_logs(
@@ -512,67 +561,14 @@ def test_re_receive_marks_request_and_logs(
         .one()
     )
     assert audit.user_id == chief.id
-    assert audit.after_data["report_due_date"] is None
+    assert audit.after_data["report_due_date"] == "2026-09-15"
     assert audit.after_data["mgmt_nos"] == [building.mgmt_no]
 
 
-def test_second_receive_after_re_receive_sets_due_date(
+def test_re_receive_notification_includes_due_date(
     client, db_session, make_user, make_reviewer, make_building
 ):
-    """이미 재접수된 요청은 예정일 비우기 대상에서 빠진다 (정상 접수로 복귀)."""
-    _, _, headers, building, _ = _setup_received_building(
-        db_session, make_reviewer, make_building
-    )
-    client.post(
-        "/api/resubmissions",
-        json={"mgmt_no": building.mgmt_no, "reason": "사유"},
-        headers=headers,
-    )
-    _, chief_headers = make_user(UserRole.CHIEF_SECRETARY)
-    client.post(
-        "/api/distribution/receive",
-        headers=chief_headers,
-        json={"mgmt_nos": [building.mgmt_no], "received_date": "2026-09-01"},
-    )
-    # 같은 단계로 한 번 더 접수 (요청은 여전히 대기중)
-    client.post(
-        "/api/distribution/receive",
-        headers=chief_headers,
-        json={"mgmt_nos": [building.mgmt_no], "received_date": "2026-09-10"},
-    )
-
-    db_session.expire_all()
-    stage = db_session.query(ReviewStage).filter_by(building_id=building.id).one()
-    assert stage.report_due_date == date(2026, 9, 24)
-
-
-def test_normal_receive_keeps_default_due_date(
-    client, db_session, make_user, make_reviewer, make_building
-):
-    """재제출 요청이 없는 건은 기존대로 접수일 + 14일이 부여된다."""
-    _, reviewer, _, building, stage = _setup_received_building(
-        db_session, make_reviewer, make_building
-    )
-    stage.report_due_date = None
-    building.current_phase = "assigned"
-    db_session.commit()
-    _, chief_headers = make_user(UserRole.CHIEF_SECRETARY)
-
-    client.post(
-        "/api/distribution/receive",
-        headers=chief_headers,
-        json={"mgmt_nos": [building.mgmt_no], "received_date": "2026-09-01"},
-    )
-
-    db_session.expire_all()
-    refreshed = db_session.query(ReviewStage).filter_by(building_id=building.id).one()
-    assert refreshed.report_due_date == date(2026, 9, 15)
-
-
-def test_re_receive_notification_omits_due_date(
-    client, db_session, make_user, make_reviewer, make_building
-):
-    """재제출 요청분 접수 알림에는 검토서 요청 예정일 줄이 없다."""
+    """재제출 요청분 접수 알림에도 검토서 요청 예정일이 안내된다."""
     _, _, headers, building, _ = _setup_received_building(
         db_session, make_reviewer, make_building
     )
@@ -590,15 +586,14 @@ def test_re_receive_notification_omits_due_date(
     )
     notifications = res.json()["notifications"]
     assert len(notifications) == 1
-    assert notifications[0]["report_due_date"] is None
-    assert "검토서 요청 예정일" not in notifications[0]["message"]
-    assert "2026-09-15" not in notifications[0]["message"]
+    assert notifications[0]["report_due_date"] == "2026-09-15"
+    assert "검토서 요청 예정일: 2026-09-15" in notifications[0]["message"]
 
 
-def test_mixed_batch_splits_notifications(
+def test_resubmit_and_normal_share_one_notification(
     client, db_session, make_user, make_reviewer, make_building
 ):
-    """같은 검토위원의 재제출 요청분과 일반 접수분은 알림이 따로 묶인다."""
+    """재제출 요청분과 일반 접수분은 예정일이 같으므로 한 알림으로 묶인다."""
     user, reviewer, headers, building, _ = _setup_received_building(
         db_session, make_reviewer, make_building
     )
@@ -623,10 +618,9 @@ def test_mixed_batch_splits_notifications(
         },
     )
     notifications = res.json()["notifications"]
-    assert len(notifications) == 2
-    by_due = {n["report_due_date"]: n for n in notifications}
-    assert by_due[None]["mgmt_nos"] == [building.mgmt_no]
-    assert by_due["2026-09-15"]["mgmt_nos"] == [other.mgmt_no]
+    assert len(notifications) == 1
+    assert sorted(notifications[0]["mgmt_nos"]) == [building.mgmt_no, other.mgmt_no]
+    assert notifications[0]["report_due_date"] == "2026-09-15"
 
     db_session.expire_all()
     stages = {
@@ -635,5 +629,5 @@ def test_mixed_batch_splits_notifications(
             ReviewStage.building_id.in_([building.id, other.id])
         )
     }
-    assert stages[building.id].report_due_date is None
+    assert stages[building.id].report_due_date == date(2026, 9, 15)
     assert stages[other.id].report_due_date == date(2026, 9, 15)
