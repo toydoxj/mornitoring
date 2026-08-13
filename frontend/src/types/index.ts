@@ -237,7 +237,7 @@ export const RESULT_LABELS: Record<string, string> = {
 }
 
 // 재제출 요청
-export type ResubmissionStatus = "pending" | "completed"
+export type ResubmissionStatus = "pending" | "completed" | "rejected"
 
 export interface ResubmissionRequest {
   id: number
@@ -271,6 +271,7 @@ export interface ResubmissionListResponse {
 export const RESUBMISSION_STATUS_LABELS: Record<ResubmissionStatus, string> = {
   pending: "대기",
   completed: "처리완료",
+  rejected: "반려",
 }
 
 // 도서 접수 상태 — 재제출 요청이 가능한 단계

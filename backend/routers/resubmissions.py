@@ -11,6 +11,7 @@
 """
 
 from datetime import datetime, timezone
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
@@ -30,6 +31,7 @@ from services.phase_transition import (
     next_phase_for,
     transition_phase,
 )
+from services.resubmission_notify import notify_resubmission_rejected
 
 router = APIRouter()
 
@@ -72,11 +74,13 @@ class ResubmissionCreateRequest(BaseModel):
 
 class ResubmissionUpdateRequest(BaseModel):
     reply: str | None = Field(default=None, max_length=MAX_REASON_LENGTH)
+    # 간사 처리 액션.
+    #   complete — 요청 수용: 단계를 접수 직전으로 되돌리고 예정일 삭제
+    #   reject   — 반려: 단계·예정일 유지, 요청자에게 현행 검토 카카오 알림
+    # 미지정이면 회신 메모/상태만 저장한다.
+    action: Literal["complete", "reject"] | None = None
+    # 상태만 직접 바꿀 때 사용 (예: 완료 건을 대기로 되돌리기)
     status: str | None = None
-    # true 면 건물 단계를 접수 직전으로 되돌린다 (간사 판단).
-    rollback_phase: bool = False
-    # true 면 해당 검토 단계의 검토서 요청 예정일을 지운다 (간사 판단).
-    clear_due_date: bool = False
 
 
 class ResubmissionItem(BaseModel):
@@ -326,8 +330,13 @@ def list_resubmission_requests(
 
     if status_filter == "pending":
         query = query.filter(ResubmissionRequest.status == ResubmissionStatus.PENDING)
-    elif status_filter == "completed":
-        query = query.filter(ResubmissionRequest.status == ResubmissionStatus.COMPLETED)
+    elif status_filter in ("closed", "completed"):
+        # 처리완료와 반려는 모두 '처리 끝난 건'으로 함께 보여준다.
+        query = query.filter(
+            ResubmissionRequest.status.in_(
+                [ResubmissionStatus.COMPLETED, ResubmissionStatus.REJECTED]
+            )
+        )
 
     total = query.count()
     items = (
@@ -426,7 +435,7 @@ def list_my_resubmission_requests(
 
 
 @router.patch("/{request_id}")
-def update_resubmission_request(
+async def update_resubmission_request(
     request_id: int,
     body: ResubmissionUpdateRequest,
     request: Request,
@@ -441,9 +450,12 @@ def update_resubmission_request(
 ):
     """재제출 요청 처리 (간사 이상).
 
-    검토위원의 등록은 사유 접수까지만이므로, 단계 되돌리기(`rollback_phase`)와
-    검토서 요청 예정일 삭제(`clear_due_date`)는 사유를 확인한 간사가 실행한다.
-    회신·처리 상태 변경과 한 번에 보낼 수 있다.
+    검토위원의 등록은 사유 접수까지이고, 실제 조치는 여기서 간사가 선택한다.
+      action=complete — 요청 수용. 단계를 접수 직전으로 되돌리고 예정일을 지운다.
+                        이미 처리된 항목은 건너뛰므로 반복 호출해도 안전하다.
+      action=reject   — 반려. 단계·예정일은 그대로 두고 요청자에게
+                        "현 도서로 검토 바랍니다" 카카오 알림을 보낸다.
+    action 없이 reply/status 만 보내면 메모·상태만 저장한다.
     """
     req = (
         db.query(ResubmissionRequest)
@@ -467,7 +479,11 @@ def update_resubmission_request(
         req.reply = body.reply.strip() or None
 
     rolled_back_to = None
-    if body.rollback_phase:
+    cleared_due_date = None
+    target_status: ResubmissionStatus | None = None
+
+    if body.action == "complete":
+        # 요청 수용 — 단계 되돌리기 + 예정일 삭제. 이미 된 항목은 건너뛴다.
         building = (
             db.query(Building).filter(Building.id == req.building_id).first()
             if req.building_id
@@ -475,57 +491,53 @@ def update_resubmission_request(
         )
         if building is None:
             raise HTTPException(status_code=404, detail="건축물을 찾을 수 없습니다")
-        if req.to_phase:
-            raise HTTPException(
-                status_code=400, detail="이미 단계를 되돌린 요청입니다"
-            )
-        target = next_phase_for("resubmit", building.current_phase)
-        if target is None:
-            raise HTTPException(
-                status_code=400,
-                detail="도서 접수 상태가 아니어서 이전 단계로 되돌릴 수 없습니다",
-            )
-        ip = request.client.host if request.client and request.client.host else None
-        try:
-            transition_phase(
-                db, building, to_phase=target, trigger="resubmit",
-                actor_user_id=current_user.id, ip_address=ip,
-                reason=f"resubmission_request:#{req.id}",
-            )
-        except InvalidPhaseTransition as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        # from_phase 는 등록 시점 값을 유지하고, 실제 되돌린 결과만 기록한다.
-        req.to_phase = target
-        rolled_back_to = target
 
-    cleared_due_date = None
-    if body.clear_due_date:
+        if not req.to_phase:
+            target = next_phase_for("resubmit", building.current_phase)
+            if target is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail="도서 접수 상태가 아니어서 이전 단계로 되돌릴 수 없습니다",
+                )
+            ip = request.client.host if request.client and request.client.host else None
+            try:
+                transition_phase(
+                    db, building, to_phase=target, trigger="resubmit",
+                    actor_user_id=current_user.id, ip_address=ip,
+                    reason=f"resubmission_request:#{req.id}",
+                )
+            except InvalidPhaseTransition as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            # from_phase 는 등록 시점 값을 유지하고, 실제 되돌린 결과만 기록한다.
+            req.to_phase = target
+            rolled_back_to = target
+
         stage = _stage_of(db, req.building_id, req.phase)
-        if stage is None:
-            raise HTTPException(
-                status_code=400, detail="대상 검토 단계를 찾을 수 없습니다"
-            )
-        if stage.report_due_date is None:
-            raise HTTPException(
-                status_code=400, detail="이미 삭제된 검토서 요청 예정일입니다"
-            )
-        cleared_due_date = stage.report_due_date.isoformat()
-        stage.report_due_date = None
-        req.cleared_due_date = cleared_due_date
+        if stage is not None and stage.report_due_date is not None:
+            cleared_due_date = stage.report_due_date.isoformat()
+            stage.report_due_date = None
+            req.cleared_due_date = cleared_due_date
 
-    if body.status:
+        target_status = ResubmissionStatus.COMPLETED
+
+    elif body.action == "reject":
+        # 반려 — 단계·예정일은 그대로 두고 요청자에게 현행 검토 알림만 보낸다.
+        target_status = ResubmissionStatus.REJECTED
+
+    elif body.status:
         try:
-            new_status = ResubmissionStatus(body.status)
+            target_status = ResubmissionStatus(body.status)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail="알 수 없는 상태값입니다") from exc
-        if new_status != req.status:
-            req.status = new_status
-            if new_status == ResubmissionStatus.COMPLETED:
-                req.handled_by = current_user.id
-                req.handled_at = datetime.now(timezone.utc)
-            else:
-                req.handled_by = None
-                req.handled_at = None
+
+    if target_status is not None and target_status != req.status:
+        req.status = target_status
+        if target_status == ResubmissionStatus.PENDING:
+            req.handled_by = None
+            req.handled_at = None
+        else:
+            req.handled_by = current_user.id
+            req.handled_at = datetime.now(timezone.utc)
 
     log_action(
         db,
@@ -535,6 +547,7 @@ def update_resubmission_request(
         req.id,
         after_data={
             "mgmt_no": req.mgmt_no,
+            "action": body.action,
             "status": req.status.value,
             "reply": req.reply,
             "rolled_back_to": rolled_back_to,
@@ -542,14 +555,30 @@ def update_resubmission_request(
         },
     )
     db.commit()
+    db.refresh(req)
+
+    notified = None
+    if body.action == "reject":
+        # 알림 실패가 반려 처리 자체를 되돌리지 않도록 커밋 이후에 보낸다.
+        notified = await notify_resubmission_rejected(db, current_user, req)
+        db.commit()
 
     done = []
     if rolled_back_to:
-        done.append(f"단계를 {_PHASE_LABELS.get(rolled_back_to, rolled_back_to)}(으)로 되돌렸습니다")
+        done.append(
+            f"단계를 {_PHASE_LABELS.get(rolled_back_to, rolled_back_to)}(으)로 되돌렸습니다"
+        )
     if cleared_due_date:
         done.append(f"검토서 요청 예정일({cleared_due_date})을 삭제했습니다")
+    if body.action == "reject":
+        done.append(
+            "요청자에게 현행 검토 알림을 보냈습니다"
+            if notified
+            else "반려 처리했습니다 (카카오 알림 실패 — 알림 현황에서 확인해주세요)"
+        )
     return {
         "message": " / ".join(done) if done else "업데이트 되었습니다",
         "rolled_back_to": rolled_back_to,
         "cleared_due_date": cleared_due_date,
+        "notified": notified,
     }

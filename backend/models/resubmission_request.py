@@ -22,7 +22,8 @@ from database import Base
 
 class ResubmissionStatus(str, enum.Enum):
     PENDING = "pending"        # 대기
-    COMPLETED = "completed"    # 처리완료
+    COMPLETED = "completed"    # 처리완료 (단계 되돌림 + 예정일 삭제)
+    REJECTED = "rejected"      # 반려 (현행 도서로 검토 요청)
 
 
 class ResubmissionRequest(Base):

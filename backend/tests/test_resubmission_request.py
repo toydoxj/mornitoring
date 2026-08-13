@@ -441,7 +441,7 @@ def test_my_reviews_reflects_secretary_actions(
     _, chief_headers = make_user(UserRole.CHIEF_SECRETARY)
     client.patch(
         f"/api/resubmissions/{req_id}",
-        json={"rollback_phase": True, "clear_due_date": True},
+        json={"action": "complete"},
         headers=chief_headers,
     )
 
@@ -465,7 +465,7 @@ def test_due_date_assigned_on_re_receive(
     _, chief_headers = make_user(UserRole.CHIEF_SECRETARY)
     client.patch(
         f"/api/resubmissions/{req_id}",
-        json={"rollback_phase": True, "clear_due_date": True},
+        json={"action": "complete"},
         headers=chief_headers,
     )
     db_session.expire_all()
@@ -645,12 +645,12 @@ def test_resubmit_and_normal_share_one_notification(
     assert stages[other.id].report_due_date == date(2026, 9, 15)
 
 
-# ===== 간사의 예정일 삭제 =====
+# ===== 간사 처리: 처리완료 =====
 
-def test_secretary_clears_due_date(
+def test_complete_rolls_back_and_clears_due_date(
     client, db_session, make_user, make_reviewer, make_building
 ):
-    """간사가 clear_due_date 로 검토서 요청 예정일을 지운다."""
+    """처리완료는 단계 되돌리기와 예정일 삭제를 함께 수행한다."""
     _, _, headers, building, stage = _setup_received_building(
         db_session, make_reviewer, make_building
     )
@@ -663,231 +663,25 @@ def test_secretary_clears_due_date(
 
     res = client.patch(
         f"/api/resubmissions/{req_id}",
-        json={"clear_due_date": True},
+        json={"action": "complete"},
         headers=chief_headers,
     )
     assert res.status_code == 200, res.text
-    assert res.json()["cleared_due_date"] == "2026-08-15"
-
-    db_session.expire_all()
-    assert stage.report_due_date is None
-    req = db_session.get(ResubmissionRequest, req_id)
-    assert req.cleared_due_date == "2026-08-15"
-    # 예정일 삭제만으로 상태가 바뀌지는 않는다
-    assert req.status == ResubmissionStatus.PENDING
-
-    audit = (
-        db_session.query(AuditLog)
-        .filter(AuditLog.action == "resubmission_update")
-        .one()
-    )
-    assert audit.user_id == chief.id
-    assert audit.after_data["cleared_due_date"] == "2026-08-15"
-
-
-def test_clear_due_date_twice_rejected(
-    client, db_session, make_user, make_reviewer, make_building
-):
-    """이미 지워진 예정일을 다시 지우려 하면 400."""
-    _, _, headers, building, _ = _setup_received_building(
-        db_session, make_reviewer, make_building
-    )
-    req_id = client.post(
-        "/api/resubmissions",
-        json={"mgmt_no": building.mgmt_no, "reason": "사유"},
-        headers=headers,
-    ).json()["id"]
-    _, chief_headers = make_user(UserRole.CHIEF_SECRETARY)
-
-    client.patch(
-        f"/api/resubmissions/{req_id}",
-        json={"clear_due_date": True},
-        headers=chief_headers,
-    )
-    again = client.patch(
-        f"/api/resubmissions/{req_id}",
-        json={"clear_due_date": True},
-        headers=chief_headers,
-    )
-    assert again.status_code == 400
-    assert "이미 삭제된" in again.json()["detail"]
-
-
-def test_manager_cannot_clear_due_date(
-    client, db_session, make_user, make_reviewer, make_building
-):
-    """관리원은 예정일을 지울 수 없다 (조회 전용)."""
-    _, _, headers, building, stage = _setup_received_building(
-        db_session, make_reviewer, make_building
-    )
-    req_id = client.post(
-        "/api/resubmissions",
-        json={"mgmt_no": building.mgmt_no, "reason": "사유"},
-        headers=headers,
-    ).json()["id"]
-    _, manager_headers = make_user(UserRole.MANAGER)
-
-    res = client.patch(
-        f"/api/resubmissions/{req_id}",
-        json={"clear_due_date": True},
-        headers=manager_headers,
-    )
-    assert res.status_code == 403
-
-    db_session.expire_all()
-    assert stage.report_due_date == date(2026, 8, 15)
-
-
-def test_reviewer_cannot_clear_due_date(
-    client, db_session, make_reviewer, make_building
-):
-    """검토위원 본인도 예정일을 지울 수 없다."""
-    _, _, headers, building, stage = _setup_received_building(
-        db_session, make_reviewer, make_building
-    )
-    req_id = client.post(
-        "/api/resubmissions",
-        json={"mgmt_no": building.mgmt_no, "reason": "사유"},
-        headers=headers,
-    ).json()["id"]
-
-    res = client.patch(
-        f"/api/resubmissions/{req_id}",
-        json={"clear_due_date": True},
-        headers=headers,
-    )
-    assert res.status_code == 403
-
-    db_session.expire_all()
-    assert stage.report_due_date == date(2026, 8, 15)
-
-
-def test_list_shows_due_date_state(
-    client, db_session, make_user, make_reviewer, make_building
-):
-    """목록은 삭제 전 current_due_date, 삭제 후 cleared_due_date 를 보여준다."""
-    _, _, headers, building, _ = _setup_received_building(
-        db_session, make_reviewer, make_building
-    )
-    req_id = client.post(
-        "/api/resubmissions",
-        json={"mgmt_no": building.mgmt_no, "reason": "사유"},
-        headers=headers,
-    ).json()["id"]
-    _, chief_headers = make_user(UserRole.CHIEF_SECRETARY)
-
-    before = client.get("/api/resubmissions", headers=chief_headers).json()["items"][0]
-    assert before["current_due_date"] == "2026-08-15"
-    assert before["cleared_due_date"] is None
-
-    client.patch(
-        f"/api/resubmissions/{req_id}",
-        json={"clear_due_date": True},
-        headers=chief_headers,
-    )
-
-    after = client.get("/api/resubmissions", headers=chief_headers).json()["items"][0]
-    assert after["current_due_date"] is None
-    assert after["cleared_due_date"] == "2026-08-15"
-
-
-def test_clear_due_date_with_reply_and_status(
-    client, db_session, make_user, make_reviewer, make_building
-):
-    """예정일 삭제·회신·처리완료를 한 번에 처리할 수 있다."""
-    _, _, headers, building, stage = _setup_received_building(
-        db_session, make_reviewer, make_building
-    )
-    req_id = client.post(
-        "/api/resubmissions",
-        json={"mgmt_no": building.mgmt_no, "reason": "사유"},
-        headers=headers,
-    ).json()["id"]
-    chief, chief_headers = make_user(UserRole.CHIEF_SECRETARY)
-
-    res = client.patch(
-        f"/api/resubmissions/{req_id}",
-        json={
-            "reply": "설계사에 재제출 요청함",
-            "status": "completed",
-            "clear_due_date": True,
-        },
-        headers=chief_headers,
-    )
-    assert res.status_code == 200
-
-    db_session.expire_all()
-    assert stage.report_due_date is None
-    req = db_session.get(ResubmissionRequest, req_id)
-    assert req.status == ResubmissionStatus.COMPLETED
-    assert req.reply == "설계사에 재제출 요청함"
-    assert req.cleared_due_date == "2026-08-15"
-    assert req.handled_by == chief.id
-
-
-def test_re_receive_restores_due_date_after_clear(
-    client, db_session, make_user, make_reviewer, make_building
-):
-    """간사가 지운 뒤 도서가 재접수되면 예정일이 새로 부여된다."""
-    _, _, headers, building, _ = _setup_received_building(
-        db_session, make_reviewer, make_building
-    )
-    req_id = client.post(
-        "/api/resubmissions",
-        json={"mgmt_no": building.mgmt_no, "reason": "사유"},
-        headers=headers,
-    ).json()["id"]
-    _, chief_headers = make_user(UserRole.CHIEF_SECRETARY)
-    client.patch(
-        f"/api/resubmissions/{req_id}",
-        json={"clear_due_date": True},
-        headers=chief_headers,
-    )
-
-    client.post(
-        "/api/distribution/receive",
-        headers=chief_headers,
-        json={"mgmt_nos": [building.mgmt_no], "received_date": "2026-09-01"},
-    )
-
-    db_session.expire_all()
-    stage = db_session.query(ReviewStage).filter_by(building_id=building.id).one()
-    assert stage.report_due_date == date(2026, 9, 15)
-
-
-# ===== 간사의 단계 되돌리기 =====
-
-def test_secretary_rolls_back_phase(
-    client, db_session, make_user, make_reviewer, make_building
-):
-    """간사가 rollback_phase 로 단계를 접수 직전으로 되돌린다."""
-    _, _, headers, building, stage = _setup_received_building(
-        db_session, make_reviewer, make_building
-    )
-    req_id = client.post(
-        "/api/resubmissions",
-        json={"mgmt_no": building.mgmt_no, "reason": "사유"},
-        headers=headers,
-    ).json()["id"]
-    chief, chief_headers = make_user(UserRole.CHIEF_SECRETARY)
-
-    res = client.patch(
-        f"/api/resubmissions/{req_id}",
-        json={"rollback_phase": True},
-        headers=chief_headers,
-    )
-    assert res.status_code == 200, res.text
-    assert res.json()["rolled_back_to"] == "assigned"
+    body = res.json()
+    assert body["rolled_back_to"] == "assigned"
+    assert body["cleared_due_date"] == "2026-08-15"
 
     db_session.expire_all()
     assert building.current_phase == "assigned"
-    # 예정일은 별도 조작 — 되돌리기만으로는 남아 있다
-    assert stage.report_due_date == date(2026, 8, 15)
+    assert stage.report_due_date is None
 
     req = db_session.get(ResubmissionRequest, req_id)
+    assert req.status == ResubmissionStatus.COMPLETED
     assert req.from_phase == "doc_received"
     assert req.to_phase == "assigned"
-    assert req.status == ResubmissionStatus.PENDING
+    assert req.cleared_due_date == "2026-08-15"
+    assert req.handled_by == chief.id
+    assert req.handled_at is not None
 
     log = (
         db_session.query(PhaseTransitionLog)
@@ -898,10 +692,18 @@ def test_secretary_rolls_back_phase(
     assert log.from_phase == "doc_received"
     assert log.to_phase == "assigned"
     assert log.actor_user_id == chief.id
-    assert str(req_id) in (log.reason or "")
+
+    audit = (
+        db_session.query(AuditLog)
+        .filter(AuditLog.action == "resubmission_update")
+        .one()
+    )
+    assert audit.after_data["action"] == "complete"
+    assert audit.after_data["rolled_back_to"] == "assigned"
+    assert audit.after_data["cleared_due_date"] == "2026-08-15"
 
 
-def test_rollback_from_supplement_round(
+def test_complete_from_supplement_round(
     client, db_session, make_user, make_reviewer, make_building
 ):
     """보완 차수에서도 바로 앞 제출 단계로 되돌아간다."""
@@ -927,7 +729,7 @@ def test_rollback_from_supplement_round(
 
     res = client.patch(
         f"/api/resubmissions/{req_id}",
-        json={"rollback_phase": True},
+        json={"action": "complete"},
         headers=chief_headers,
     )
     assert res.status_code == 200
@@ -937,11 +739,11 @@ def test_rollback_from_supplement_round(
     assert building.current_phase == "preliminary"
 
 
-def test_rollback_twice_rejected(
+def test_complete_is_idempotent(
     client, db_session, make_user, make_reviewer, make_building
 ):
-    """이미 되돌린 요청으로 또 되돌릴 수 없다."""
-    _, _, headers, building, _ = _setup_received_building(
+    """이미 처리된 항목은 건너뛰므로 두 번 눌러도 오류가 나지 않는다."""
+    _, _, headers, building, stage = _setup_received_building(
         db_session, make_reviewer, make_building
     )
     req_id = client.post(
@@ -953,22 +755,34 @@ def test_rollback_twice_rejected(
 
     client.patch(
         f"/api/resubmissions/{req_id}",
-        json={"rollback_phase": True},
+        json={"action": "complete"},
         headers=chief_headers,
     )
     again = client.patch(
         f"/api/resubmissions/{req_id}",
-        json={"rollback_phase": True},
+        json={"action": "complete"},
         headers=chief_headers,
     )
-    assert again.status_code == 400
-    assert "이미 단계를 되돌린" in again.json()["detail"]
+    assert again.status_code == 200
+    assert again.json()["rolled_back_to"] is None
+    assert again.json()["cleared_due_date"] is None
+
+    db_session.expire_all()
+    # 단계가 두 번 되돌아가지 않아야 한다
+    assert building.current_phase == "assigned"
+    assert stage.report_due_date is None
+    assert (
+        db_session.query(PhaseTransitionLog)
+        .filter(PhaseTransitionLog.mgmt_no == building.mgmt_no)
+        .count()
+        == 1
+    )
 
 
-def test_rollback_rejected_when_not_received(
+def test_complete_rejected_when_not_received(
     client, db_session, make_user, make_reviewer, make_building
 ):
-    """접수 상태가 아니면 되돌릴 수 없다 (예: 사이에 검토서가 제출된 경우)."""
+    """접수 상태가 아니면 처리완료가 400 (되돌릴 단계가 없음)."""
     _, _, headers, building, _ = _setup_received_building(
         db_session, make_reviewer, make_building
     )
@@ -984,7 +798,7 @@ def test_rollback_rejected_when_not_received(
 
     res = client.patch(
         f"/api/resubmissions/{req_id}",
-        json={"rollback_phase": True},
+        json={"action": "complete"},
         headers=chief_headers,
     )
     assert res.status_code == 400
@@ -994,10 +808,10 @@ def test_rollback_rejected_when_not_received(
     assert building.current_phase == "preliminary"
 
 
-def test_manager_cannot_rollback_phase(
+def test_complete_with_memo(
     client, db_session, make_user, make_reviewer, make_building
 ):
-    """관리원은 단계를 되돌릴 수 없다."""
+    """처리 메모를 함께 저장할 수 있다."""
     _, _, headers, building, _ = _setup_received_building(
         db_session, make_reviewer, make_building
     )
@@ -1006,47 +820,39 @@ def test_manager_cannot_rollback_phase(
         json={"mgmt_no": building.mgmt_no, "reason": "사유"},
         headers=headers,
     ).json()["id"]
-    _, manager_headers = make_user(UserRole.MANAGER)
+    _, chief_headers = make_user(UserRole.CHIEF_SECRETARY)
 
-    res = client.patch(
+    client.patch(
         f"/api/resubmissions/{req_id}",
-        json={"rollback_phase": True},
-        headers=manager_headers,
+        json={"action": "complete", "reply": "설계사에 재제출 요청함"},
+        headers=chief_headers,
     )
-    assert res.status_code == 403
 
     db_session.expire_all()
-    assert building.current_phase == "doc_received"
+    req = db_session.get(ResubmissionRequest, req_id)
+    assert req.reply == "설계사에 재제출 요청함"
+    assert req.status == ResubmissionStatus.COMPLETED
 
 
-def test_reviewer_cannot_rollback_phase(
-    client, db_session, make_reviewer, make_building
+# ===== 간사 처리: 반려 =====
+
+def test_reject_keeps_phase_and_due_date(
+    client, db_session, make_user, make_reviewer, make_building, monkeypatch
 ):
-    """검토위원 본인도 단계를 되돌릴 수 없다."""
-    _, _, headers, building, _ = _setup_received_building(
-        db_session, make_reviewer, make_building
+    """반려는 단계·예정일을 건드리지 않고 상태만 반려로 바꾼다."""
+    from services import resubmission_notify
+
+    sent = {}
+
+    async def _fake_notify(db, sender, req):
+        sent["mgmt_no"] = req.mgmt_no
+        sent["sender_id"] = sender.id
+        return True
+
+    monkeypatch.setattr(
+        "routers.resubmissions.notify_resubmission_rejected", _fake_notify
     )
-    req_id = client.post(
-        "/api/resubmissions",
-        json={"mgmt_no": building.mgmt_no, "reason": "사유"},
-        headers=headers,
-    ).json()["id"]
 
-    res = client.patch(
-        f"/api/resubmissions/{req_id}",
-        json={"rollback_phase": True},
-        headers=headers,
-    )
-    assert res.status_code == 403
-
-    db_session.expire_all()
-    assert building.current_phase == "doc_received"
-
-
-def test_rollback_and_clear_and_complete_together(
-    client, db_session, make_user, make_reviewer, make_building
-):
-    """되돌리기·예정일 삭제·회신·처리완료를 한 번에 처리한다."""
     _, _, headers, building, stage = _setup_received_building(
         db_session, make_reviewer, make_building
     )
@@ -1059,39 +865,187 @@ def test_rollback_and_clear_and_complete_together(
 
     res = client.patch(
         f"/api/resubmissions/{req_id}",
-        json={
-            "rollback_phase": True,
-            "clear_due_date": True,
-            "reply": "설계사에 재제출 요청함",
-            "status": "completed",
-        },
+        json={"action": "reject"},
+        headers=chief_headers,
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["notified"] is True
+    assert res.json()["rolled_back_to"] is None
+
+    db_session.expire_all()
+    # 단계·예정일 모두 그대로
+    assert building.current_phase == "doc_received"
+    assert stage.report_due_date == date(2026, 8, 15)
+    assert (
+        db_session.query(PhaseTransitionLog)
+        .filter(PhaseTransitionLog.mgmt_no == building.mgmt_no)
+        .count()
+        == 0
+    )
+
+    req = db_session.get(ResubmissionRequest, req_id)
+    assert req.status == ResubmissionStatus.REJECTED
+    assert req.to_phase is None
+    assert req.cleared_due_date is None
+    assert req.handled_by == chief.id
+
+    assert sent == {"mgmt_no": building.mgmt_no, "sender_id": chief.id}
+    assert resubmission_notify.RESUBMISSION_REJECTED_TEMPLATE == "resubmission_rejected"
+
+
+def test_reject_message_body(db_session, make_reviewer, make_building, client):
+    """반려 알림 본문은 '현 도서로 검토 바랍니다' 문구를 담는다."""
+    from services.resubmission_notify import compose_rejected_message
+
+    _, _, headers, building, _ = _setup_received_building(
+        db_session, make_reviewer, make_building
+    )
+    client.post(
+        "/api/resubmissions",
+        json={"mgmt_no": building.mgmt_no, "reason": "사유"},
+        headers=headers,
+    )
+    req = db_session.query(ResubmissionRequest).one()
+
+    title, message = compose_rejected_message(req)
+    assert building.mgmt_no in title
+    assert f"관리번호 {building.mgmt_no}은 현 도서로 검토 바랍니다." in message
+
+    req.reply = "도서 이상 없음"
+    title, message = compose_rejected_message(req)
+    assert "사유: 도서 이상 없음" in message
+
+
+def test_reject_survives_notification_failure(
+    client, db_session, make_user, make_reviewer, make_building, monkeypatch
+):
+    """카카오 발송이 실패해도 반려 처리 자체는 저장된다."""
+    async def _fail_notify(db, sender, req):
+        return False
+
+    monkeypatch.setattr(
+        "routers.resubmissions.notify_resubmission_rejected", _fail_notify
+    )
+
+    _, _, headers, building, _ = _setup_received_building(
+        db_session, make_reviewer, make_building
+    )
+    req_id = client.post(
+        "/api/resubmissions",
+        json={"mgmt_no": building.mgmt_no, "reason": "사유"},
+        headers=headers,
+    ).json()["id"]
+    _, chief_headers = make_user(UserRole.CHIEF_SECRETARY)
+
+    res = client.patch(
+        f"/api/resubmissions/{req_id}",
+        json={"action": "reject"},
         headers=chief_headers,
     )
     assert res.status_code == 200
-    body = res.json()
-    assert body["rolled_back_to"] == "assigned"
-    assert body["cleared_due_date"] == "2026-08-15"
+    assert res.json()["notified"] is False
 
     db_session.expire_all()
-    assert building.current_phase == "assigned"
-    assert stage.report_due_date is None
     req = db_session.get(ResubmissionRequest, req_id)
-    assert req.status == ResubmissionStatus.COMPLETED
-    assert req.handled_by == chief.id
+    assert req.status == ResubmissionStatus.REJECTED
 
-    audit = (
-        db_session.query(AuditLog)
-        .filter(AuditLog.action == "resubmission_update")
-        .one()
+
+def test_rejected_appears_in_closed_list(
+    client, db_session, make_user, make_reviewer, make_building, monkeypatch
+):
+    """반려 건은 처리 완료 목록(closed)에 함께 나온다."""
+    async def _ok(db, sender, req):
+        return True
+
+    monkeypatch.setattr("routers.resubmissions.notify_resubmission_rejected", _ok)
+
+    _, _, headers, building, _ = _setup_received_building(
+        db_session, make_reviewer, make_building
     )
-    assert audit.after_data["rolled_back_to"] == "assigned"
-    assert audit.after_data["cleared_due_date"] == "2026-08-15"
+    req_id = client.post(
+        "/api/resubmissions",
+        json={"mgmt_no": building.mgmt_no, "reason": "사유"},
+        headers=headers,
+    ).json()["id"]
+    _, chief_headers = make_user(UserRole.CHIEF_SECRETARY)
+    client.patch(
+        f"/api/resubmissions/{req_id}",
+        json={"action": "reject"},
+        headers=chief_headers,
+    )
+
+    pending = client.get(
+        "/api/resubmissions", params={"status_filter": "pending"}, headers=chief_headers
+    ).json()
+    assert pending["total"] == 0
+
+    closed = client.get(
+        "/api/resubmissions", params={"status_filter": "closed"}, headers=chief_headers
+    ).json()
+    assert closed["total"] == 1
+    assert closed["items"][0]["status"] == "rejected"
+    # 반려 건은 단계·예정일이 그대로 노출된다
+    assert closed["items"][0]["current_phase"] == "doc_received"
+    assert closed["items"][0]["current_due_date"] == "2026-08-15"
 
 
-def test_secretary_of_other_group_cannot_rollback(
+# ===== 처리 권한 =====
+
+def test_manager_cannot_process(
     client, db_session, make_user, make_reviewer, make_building
 ):
-    """다른 조 간사는 되돌리기도 막힌다."""
+    """관리원은 처리완료·반려 모두 불가 (조회 전용)."""
+    _, _, headers, building, stage = _setup_received_building(
+        db_session, make_reviewer, make_building
+    )
+    req_id = client.post(
+        "/api/resubmissions",
+        json={"mgmt_no": building.mgmt_no, "reason": "사유"},
+        headers=headers,
+    ).json()["id"]
+    _, manager_headers = make_user(UserRole.MANAGER)
+
+    for action in ("complete", "reject"):
+        res = client.patch(
+            f"/api/resubmissions/{req_id}",
+            json={"action": action},
+            headers=manager_headers,
+        )
+        assert res.status_code == 403
+
+    db_session.expire_all()
+    assert building.current_phase == "doc_received"
+    assert stage.report_due_date == date(2026, 8, 15)
+
+
+def test_reviewer_cannot_process(
+    client, db_session, make_reviewer, make_building
+):
+    """검토위원 본인도 처리할 수 없다."""
+    _, _, headers, building, _ = _setup_received_building(
+        db_session, make_reviewer, make_building
+    )
+    req_id = client.post(
+        "/api/resubmissions",
+        json={"mgmt_no": building.mgmt_no, "reason": "사유"},
+        headers=headers,
+    ).json()["id"]
+
+    res = client.patch(
+        f"/api/resubmissions/{req_id}",
+        json={"action": "complete"},
+        headers=headers,
+    )
+    assert res.status_code == 403
+
+    db_session.expire_all()
+    assert building.current_phase == "doc_received"
+
+
+def test_other_group_secretary_cannot_process(
+    client, db_session, make_user, make_reviewer, make_building
+):
+    """다른 조 간사는 처리할 수 없다."""
     _, _, headers, building, _ = _setup_received_building(
         db_session, make_reviewer, make_building, group_no=1
     )
@@ -1104,10 +1058,102 @@ def test_secretary_of_other_group_cannot_rollback(
 
     res = client.patch(
         f"/api/resubmissions/{req_id}",
-        json={"rollback_phase": True},
+        json={"action": "complete"},
         headers=other_headers,
     )
     assert res.status_code == 403
 
     db_session.expire_all()
     assert building.current_phase == "doc_received"
+
+
+def test_back_to_pending_clears_handler(
+    client, db_session, make_user, make_reviewer, make_building
+):
+    """처리된 건을 대기로 되돌리면 처리자 정보가 지워진다."""
+    _, _, headers, building, _ = _setup_received_building(
+        db_session, make_reviewer, make_building
+    )
+    req_id = client.post(
+        "/api/resubmissions",
+        json={"mgmt_no": building.mgmt_no, "reason": "사유"},
+        headers=headers,
+    ).json()["id"]
+    _, chief_headers = make_user(UserRole.CHIEF_SECRETARY)
+
+    client.patch(
+        f"/api/resubmissions/{req_id}",
+        json={"action": "complete"},
+        headers=chief_headers,
+    )
+    client.patch(
+        f"/api/resubmissions/{req_id}",
+        json={"status": "pending"},
+        headers=chief_headers,
+    )
+
+    db_session.expire_all()
+    req = db_session.get(ResubmissionRequest, req_id)
+    assert req.status == ResubmissionStatus.PENDING
+    assert req.handled_by is None
+    assert req.handled_at is None
+
+
+def test_memo_only_keeps_status(
+    client, db_session, make_user, make_reviewer, make_building
+):
+    """action 없이 메모만 저장하면 상태·단계가 그대로다."""
+    _, _, headers, building, stage = _setup_received_building(
+        db_session, make_reviewer, make_building
+    )
+    req_id = client.post(
+        "/api/resubmissions",
+        json={"mgmt_no": building.mgmt_no, "reason": "사유"},
+        headers=headers,
+    ).json()["id"]
+    _, chief_headers = make_user(UserRole.CHIEF_SECRETARY)
+
+    res = client.patch(
+        f"/api/resubmissions/{req_id}",
+        json={"reply": "확인 중"},
+        headers=chief_headers,
+    )
+    assert res.status_code == 200
+
+    db_session.expire_all()
+    req = db_session.get(ResubmissionRequest, req_id)
+    assert req.reply == "확인 중"
+    assert req.status == ResubmissionStatus.PENDING
+    assert building.current_phase == "doc_received"
+    assert stage.report_due_date == date(2026, 8, 15)
+
+
+def test_list_shows_due_date_state(
+    client, db_session, make_user, make_reviewer, make_building
+):
+    """목록은 처리 전 current_due_date, 처리 후 cleared_due_date 를 보여준다."""
+    _, _, headers, building, _ = _setup_received_building(
+        db_session, make_reviewer, make_building
+    )
+    req_id = client.post(
+        "/api/resubmissions",
+        json={"mgmt_no": building.mgmt_no, "reason": "사유"},
+        headers=headers,
+    ).json()["id"]
+    _, chief_headers = make_user(UserRole.CHIEF_SECRETARY)
+
+    before = client.get("/api/resubmissions", headers=chief_headers).json()["items"][0]
+    assert before["current_due_date"] == "2026-08-15"
+    assert before["cleared_due_date"] is None
+
+    client.patch(
+        f"/api/resubmissions/{req_id}",
+        json={"action": "complete"},
+        headers=chief_headers,
+    )
+
+    after = client.get(
+        "/api/resubmissions", params={"status_filter": "closed"}, headers=chief_headers
+    ).json()["items"][0]
+    assert after["current_due_date"] is None
+    assert after["cleared_due_date"] == "2026-08-15"

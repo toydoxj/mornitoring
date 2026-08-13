@@ -22,6 +22,7 @@ import { getResubmitPreviousPhase } from "@/lib/phases"
 const STATUS_VARIANT: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
   pending: "destructive",
   completed: "default",
+  rejected: "secondary",
 }
 
 function formatDateTime(value: string | null) {
@@ -58,7 +59,7 @@ export default function ResubmissionsPage() {
           params: { status_filter: "pending", size: 200 },
         }),
         apiClient.get<ResubmissionListResponse>("/api/resubmissions", {
-          params: { status_filter: "completed", size: 200 },
+          params: { status_filter: "closed", size: 200 },
         }),
       ])
       setPendingItems(pendingRes.data.items)
@@ -84,11 +85,7 @@ export default function ResubmissionsPage() {
 
   const handleUpdate = async (
     item: ResubmissionRequest,
-    options: {
-      status?: string
-      clearDueDate?: boolean
-      rollbackPhase?: boolean
-    } = {}
+    options: { status?: string; action?: "complete" | "reject" } = {}
   ) => {
     setSavingId(item.id)
     try {
@@ -97,12 +94,11 @@ export default function ResubmissionsPage() {
         {
           reply: replyMap[item.id] ?? null,
           status: options.status ?? null,
-          rollback_phase: options.rollbackPhase ?? false,
-          clear_due_date: options.clearDueDate ?? false,
+          action: options.action ?? null,
         }
       )
       await fetchData()
-      if (options.clearDueDate || options.rollbackPhase) alert(data.message)
+      if (options.action) alert(data.message)
     } catch (err) {
       const msg =
         (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
@@ -113,33 +109,37 @@ export default function ResubmissionsPage() {
     }
   }
 
-  const handleClearDueDate = (item: ResubmissionRequest) => {
-    if (
-      !confirm(
-        `${item.mgmt_no}의 검토서 요청 예정일(${item.current_due_date})을 삭제하시겠습니까?\n` +
-        "도서가 다시 접수되면 예정일이 새로 부여됩니다."
-      )
-    ) {
-      return
-    }
-    handleUpdate(item, { clearDueDate: true })
+  // 요청 수용 — 단계를 이전 단계로 되돌리고 검토서 요청 예정일을 지운다
+  const handleComplete = (item: ResubmissionRequest) => {
+    const target = getResubmitPreviousPhase(item.current_phase)
+    const lines = [`${item.mgmt_no} 재제출 요청을 처리완료 하시겠습니까?`, ""]
+    lines.push(
+      target
+        ? `· 단계: ${phaseLabel(item.current_phase)} → ${phaseLabel(target)}`
+        : `· 단계: ${item.to_phase ? "이미 되돌림" : "되돌릴 수 없음 (접수 상태 아님)"}`
+    )
+    lines.push(
+      item.current_due_date
+        ? `· 제출 예정일 ${item.current_due_date} 삭제`
+        : "· 제출 예정일: 없음"
+    )
+    if (!confirm(lines.join("\n"))) return
+    handleUpdate(item, { action: "complete" })
   }
 
-  const handleRollbackPhase = (item: ResubmissionRequest) => {
-    const target = getResubmitPreviousPhase(item.current_phase)
-    if (!target) {
-      alert("도서 접수 상태가 아니어서 되돌릴 수 없습니다.")
-      return
-    }
+  // 반려 — 현재 단계·예정일을 그대로 두고 현행 도서로 검토하도록 알린다
+  const handleReject = (item: ResubmissionRequest) => {
     if (
       !confirm(
-        `${item.mgmt_no}의 단계를 ${phaseLabel(item.current_phase)} → ` +
-        `${phaseLabel(target)}(으)로 되돌리시겠습니까?`
+        `${item.mgmt_no} 재제출 요청을 반려하시겠습니까?\n\n` +
+        "· 현재 단계와 제출 예정일은 그대로 유지됩니다.\n" +
+        `· ${item.requester_name} 위원에게 카카오톡으로 안내가 전송됩니다.\n` +
+        `  "관리번호 ${item.mgmt_no}은 현 도서로 검토 바랍니다."`
       )
     ) {
       return
     }
-    handleUpdate(item, { rollbackPhase: true })
+    handleUpdate(item, { action: "reject" })
   }
 
   const renderRequestCell = (item: ResubmissionRequest) => (
@@ -159,59 +159,23 @@ export default function ResubmissionsPage() {
     </div>
   )
 
-  // 현재 단계 + 되돌리기 버튼 — 되돌리기는 간사가 판단해 실행한다
-  const renderPhaseCell = (item: ResubmissionRequest) => {
-    const target = getResubmitPreviousPhase(item.current_phase)
-    return (
-      <div className="space-y-1">
-        <p className="text-sm">{phaseLabel(item.current_phase)}</p>
-        {item.to_phase ? (
-          <p className="text-xs text-muted-foreground">되돌림 완료</p>
-        ) : (
-          canManage && (
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={!target}
-              title={target ? undefined : "도서 접수 상태에서만 되돌릴 수 있습니다"}
-              loading={savingId === item.id}
-              loadingText="처리 중..."
-              onClick={() => handleRollbackPhase(item)}
-            >
-              이전 단계로
-            </Button>
-          )
-        )}
-      </div>
-    )
-  }
+  const renderPhaseCell = (item: ResubmissionRequest) => (
+    <div className="space-y-0.5">
+      <p className="text-sm">{phaseLabel(item.current_phase)}</p>
+      {item.to_phase && (
+        <p className="text-xs text-muted-foreground">되돌림 완료</p>
+      )}
+    </div>
+  )
 
-  // 예정일 상태 — 간사가 삭제 여부를 판단하는 칸
-  const renderDueCell = (item: ResubmissionRequest) => {
-    if (item.current_due_date) {
-      return (
-        <div className="space-y-1">
-          <p className="text-sm">{item.current_due_date}</p>
-          {canManage && (
-            <Button
-              size="sm"
-              variant="destructive"
-              loading={savingId === item.id}
-              loadingText="삭제 중..."
-              onClick={() => handleClearDueDate(item)}
-            >
-              예정일 삭제
-            </Button>
-          )}
-        </div>
-      )
-    }
-    return (
+  const renderDueCell = (item: ResubmissionRequest) =>
+    item.current_due_date ? (
+      <p className="text-sm">{item.current_due_date}</p>
+    ) : (
       <p className="text-sm text-muted-foreground">
         {item.cleared_due_date ? `삭제됨 (${item.cleared_due_date})` : "없음"}
       </p>
     )
-  }
 
   if (isLoading) {
     return (
@@ -325,12 +289,25 @@ export default function ResubmissionsPage() {
                               size="sm"
                               variant="default"
                               loading={savingId === item.id}
-                              loadingText="저장 중..."
-                              onClick={() => handleUpdate(item, { status: "completed" })}
+                              loadingText="처리 중..."
+                              onClick={() => handleComplete(item)}
                             >
                               처리완료
                             </Button>
+                            <Button
+                              size="sm"
+                              variant="secondary"
+                              loading={savingId === item.id}
+                              loadingText="처리 중..."
+                              onClick={() => handleReject(item)}
+                            >
+                              반려
+                            </Button>
                           </div>
+                          <p className="text-xs text-muted-foreground leading-4">
+                            처리완료: 이전 단계로 되돌리고 예정일 삭제 · 반려: 현행
+                            유지 + 검토위원에게 카톡 안내
+                          </p>
                         </div>
                       </TableCell>
                     )}
@@ -342,10 +319,10 @@ export default function ResubmissionsPage() {
         </div>
       </div>
 
-      {/* 처리완료 요청 */}
+      {/* 처리된 요청 (처리완료 + 반려) */}
       {completedItems.length > 0 && (
         <div>
-          <h2 className="mb-2 text-lg font-semibold">처리완료</h2>
+          <h2 className="mb-2 text-lg font-semibold">처리 완료</h2>
           <div className="rounded-md border bg-white overflow-x-auto">
             <Table>
               <TableHeader>
@@ -354,6 +331,7 @@ export default function ResubmissionsPage() {
                   <TableHead className="w-[80px]">검토위원</TableHead>
                   <TableHead className="w-[110px]">검토 단계</TableHead>
                   <TableHead>재제출 사유</TableHead>
+                  <TableHead className="w-[80px]">처리 결과</TableHead>
                   <TableHead>처리 메모</TableHead>
                   <TableHead className="w-[90px]">처리자</TableHead>
                   <TableHead className="w-[130px]">처리일시</TableHead>
@@ -387,6 +365,11 @@ export default function ResubmissionsPage() {
                       </Badge>
                     </TableCell>
                     <TableCell className="align-top">{renderRequestCell(item)}</TableCell>
+                    <TableCell className="align-top">
+                      <Badge variant={STATUS_VARIANT[item.status]}>
+                        {RESUBMISSION_STATUS_LABELS[item.status]}
+                      </Badge>
+                    </TableCell>
                     <TableCell className="text-sm align-top">
                       <p className="whitespace-pre-wrap break-words">
                         {item.reply || "-"}
