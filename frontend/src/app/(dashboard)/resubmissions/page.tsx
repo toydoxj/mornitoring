@@ -85,7 +85,7 @@ export default function ResubmissionsPage() {
 
   const handleUpdate = async (
     item: ResubmissionRequest,
-    options: { status?: string; action?: "complete" | "reject" } = {}
+    options: { status?: string; action?: "complete" | "reject" | "revert" } = {}
   ) => {
     setSavingId(item.id)
     try {
@@ -125,6 +125,24 @@ export default function ResubmissionsPage() {
     )
     if (!confirm(lines.join("\n"))) return
     handleUpdate(item, { action: "complete" })
+  }
+
+  // 대기로 — 처리완료를 잘못 누른 경우의 복구. 단계·예정일을 원래대로 돌린다.
+  const handleRevert = (item: ResubmissionRequest) => {
+    const lines = [`${item.mgmt_no} 요청을 대기 상태로 되돌리시겠습니까?`, ""]
+    if (item.to_phase) {
+      lines.push(
+        `· 단계: ${phaseLabel(item.to_phase)} → ${phaseLabel(item.from_phase)} 복구`
+      )
+    }
+    if (item.cleared_due_date) {
+      lines.push(`· 제출 예정일 ${item.cleared_due_date} 복구`)
+    }
+    if (item.status === "rejected") {
+      lines.push("· 이미 발송된 카카오 알림은 취소되지 않습니다.")
+    }
+    if (!confirm(lines.join("\n"))) return
+    handleUpdate(item, { action: "revert" })
   }
 
   // 반려 — 현재 단계·예정일을 그대로 두고 현행 도서로 검토하도록 알린다
@@ -388,7 +406,7 @@ export default function ResubmissionsPage() {
                           variant="outline"
                           loading={savingId === item.id}
                           loadingText="처리 중..."
-                          onClick={() => handleUpdate(item, { status: "pending" })}
+                          onClick={() => handleRevert(item)}
                         >
                           대기로
                         </Button>

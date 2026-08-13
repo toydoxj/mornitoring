@@ -1157,3 +1157,248 @@ def test_list_shows_due_date_state(
     ).json()["items"][0]
     assert after["current_due_date"] is None
     assert after["cleared_due_date"] == "2026-08-15"
+
+
+# ===== 간사 처리: 대기로 되돌리기 (실수 복구) =====
+
+def _complete(client, req_id, headers):
+    return client.patch(
+        f"/api/resubmissions/{req_id}",
+        json={"action": "complete"},
+        headers=headers,
+    )
+
+
+def test_revert_restores_phase_and_due_date(
+    client, db_session, make_user, make_reviewer, make_building
+):
+    """대기로 되돌리면 처리완료로 바꾼 단계와 예정일이 원상복구된다."""
+    _, _, headers, building, stage = _setup_received_building(
+        db_session, make_reviewer, make_building
+    )
+    req_id = client.post(
+        "/api/resubmissions",
+        json={"mgmt_no": building.mgmt_no, "reason": "사유"},
+        headers=headers,
+    ).json()["id"]
+    _, chief_headers = make_user(UserRole.CHIEF_SECRETARY)
+    _complete(client, req_id, chief_headers)
+
+    db_session.expire_all()
+    assert building.current_phase == "assigned"
+    assert stage.report_due_date is None
+
+    res = client.patch(
+        f"/api/resubmissions/{req_id}",
+        json={"action": "revert"},
+        headers=chief_headers,
+    )
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["restored_phase"] == "doc_received"
+    assert body["restored_due_date"] == "2026-08-15"
+
+    db_session.expire_all()
+    assert building.current_phase == "doc_received"
+    assert stage.report_due_date == date(2026, 8, 15)
+
+    req = db_session.get(ResubmissionRequest, req_id)
+    assert req.status == ResubmissionStatus.PENDING
+    assert req.to_phase is None
+    assert req.cleared_due_date is None
+    assert req.handled_by is None
+    assert req.handled_at is None
+
+    # 복구도 전환 로그로 남는다 (되돌림 1건 + 복구 1건)
+    logs = (
+        db_session.query(PhaseTransitionLog)
+        .filter(PhaseTransitionLog.mgmt_no == building.mgmt_no)
+        .order_by(PhaseTransitionLog.id)
+        .all()
+    )
+    assert [(log.from_phase, log.to_phase, log.trigger) for log in logs] == [
+        ("doc_received", "assigned", "resubmit"),
+        ("assigned", "doc_received", "manual"),
+    ]
+    assert f"#{req_id}" in (logs[-1].reason or "")
+
+    audit = (
+        db_session.query(AuditLog)
+        .filter(AuditLog.action == "resubmission_update")
+        .order_by(AuditLog.id)
+        .all()[-1]
+    )
+    assert audit.after_data["action"] == "revert"
+    assert audit.after_data["restored_phase"] == "doc_received"
+    assert audit.after_data["restored_due_date"] == "2026-08-15"
+
+
+def test_can_complete_again_after_revert(
+    client, db_session, make_user, make_reviewer, make_building
+):
+    """복구 후 다시 처리완료를 누르면 정상 처리된다."""
+    _, _, headers, building, stage = _setup_received_building(
+        db_session, make_reviewer, make_building
+    )
+    req_id = client.post(
+        "/api/resubmissions",
+        json={"mgmt_no": building.mgmt_no, "reason": "사유"},
+        headers=headers,
+    ).json()["id"]
+    _, chief_headers = make_user(UserRole.CHIEF_SECRETARY)
+
+    _complete(client, req_id, chief_headers)
+    client.patch(
+        f"/api/resubmissions/{req_id}",
+        json={"action": "revert"},
+        headers=chief_headers,
+    )
+    again = _complete(client, req_id, chief_headers)
+    assert again.status_code == 200
+    assert again.json()["rolled_back_to"] == "assigned"
+    assert again.json()["cleared_due_date"] == "2026-08-15"
+
+    db_session.expire_all()
+    assert building.current_phase == "assigned"
+    assert stage.report_due_date is None
+
+
+def test_revert_blocked_when_phase_changed_after(
+    client, db_session, make_user, make_reviewer, make_building
+):
+    """처리완료 이후 단계가 또 바뀌었으면 임의 복구를 막는다."""
+    _, _, headers, building, _ = _setup_received_building(
+        db_session, make_reviewer, make_building
+    )
+    req_id = client.post(
+        "/api/resubmissions",
+        json={"mgmt_no": building.mgmt_no, "reason": "사유"},
+        headers=headers,
+    ).json()["id"]
+    _, chief_headers = make_user(UserRole.CHIEF_SECRETARY)
+    _complete(client, req_id, chief_headers)
+
+    # 도서가 다시 접수돼 단계가 앞으로 갔다
+    client.post(
+        "/api/distribution/receive",
+        headers=chief_headers,
+        json={"mgmt_nos": [building.mgmt_no], "received_date": "2026-09-01"},
+    )
+
+    res = client.patch(
+        f"/api/resubmissions/{req_id}",
+        json={"action": "revert"},
+        headers=chief_headers,
+    )
+    assert res.status_code == 400
+    assert "단계가 변경되어" in res.json()["detail"]
+
+    db_session.expire_all()
+    assert building.current_phase == "doc_received"
+    req = db_session.get(ResubmissionRequest, req_id)
+    assert req.status == ResubmissionStatus.COMPLETED
+
+
+def test_revert_keeps_newer_due_date(
+    client, db_session, make_user, make_reviewer, make_building
+):
+    """복구 시점에 새 예정일이 잡혀 있으면 옛 날짜로 덮어쓰지 않는다."""
+    _, _, headers, building, stage = _setup_received_building(
+        db_session, make_reviewer, make_building
+    )
+    req_id = client.post(
+        "/api/resubmissions",
+        json={"mgmt_no": building.mgmt_no, "reason": "사유"},
+        headers=headers,
+    ).json()["id"]
+    _, chief_headers = make_user(UserRole.CHIEF_SECRETARY)
+    _complete(client, req_id, chief_headers)
+
+    # 단계는 그대로 두고 예정일만 새로 잡힌 상황을 만든다
+    db_session.expire_all()
+    stage.report_due_date = date(2026, 10, 1)
+    db_session.commit()
+
+    res = client.patch(
+        f"/api/resubmissions/{req_id}",
+        json={"action": "revert"},
+        headers=chief_headers,
+    )
+    assert res.status_code == 200
+    assert res.json()["restored_due_date"] is None
+
+    db_session.expire_all()
+    assert stage.report_due_date == date(2026, 10, 1)
+    req = db_session.get(ResubmissionRequest, req_id)
+    assert req.cleared_due_date is None
+
+
+def test_revert_rejected_request_only_changes_status(
+    client, db_session, make_user, make_reviewer, make_building, monkeypatch
+):
+    """반려 건은 되돌릴 단계·예정일이 없으므로 상태만 대기로 돌아간다."""
+    async def _ok(db, sender, req):
+        return True
+
+    monkeypatch.setattr("routers.resubmissions.notify_resubmission_rejected", _ok)
+
+    _, _, headers, building, stage = _setup_received_building(
+        db_session, make_reviewer, make_building
+    )
+    req_id = client.post(
+        "/api/resubmissions",
+        json={"mgmt_no": building.mgmt_no, "reason": "사유"},
+        headers=headers,
+    ).json()["id"]
+    _, chief_headers = make_user(UserRole.CHIEF_SECRETARY)
+    client.patch(
+        f"/api/resubmissions/{req_id}",
+        json={"action": "reject"},
+        headers=chief_headers,
+    )
+
+    res = client.patch(
+        f"/api/resubmissions/{req_id}",
+        json={"action": "revert"},
+        headers=chief_headers,
+    )
+    assert res.status_code == 200
+    assert res.json()["restored_phase"] is None
+
+    db_session.expire_all()
+    assert building.current_phase == "doc_received"
+    assert stage.report_due_date == date(2026, 8, 15)
+    req = db_session.get(ResubmissionRequest, req_id)
+    assert req.status == ResubmissionStatus.PENDING
+    assert req.handled_by is None
+
+
+def test_revert_requires_manage_permission(
+    client, db_session, make_user, make_reviewer, make_building
+):
+    """관리원·다른 조 간사는 복구할 수 없다."""
+    _, _, headers, building, stage = _setup_received_building(
+        db_session, make_reviewer, make_building, group_no=1
+    )
+    req_id = client.post(
+        "/api/resubmissions",
+        json={"mgmt_no": building.mgmt_no, "reason": "사유"},
+        headers=headers,
+    ).json()["id"]
+    _, chief_headers = make_user(UserRole.CHIEF_SECRETARY)
+    _complete(client, req_id, chief_headers)
+
+    _, manager_headers = make_user(UserRole.MANAGER)
+    _, other_headers = make_user(UserRole.SECRETARY, group_no=2)
+
+    for hdr in (manager_headers, other_headers):
+        res = client.patch(
+            f"/api/resubmissions/{req_id}",
+            json={"action": "revert"},
+            headers=hdr,
+        )
+        assert res.status_code == 403
+
+    db_session.expire_all()
+    assert building.current_phase == "assigned"
+    assert stage.report_due_date is None

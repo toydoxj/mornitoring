@@ -10,7 +10,7 @@
 간사 이상은 회신·처리 상태·단계 되돌리기·예정일 삭제를 수행할 수 있다.
 """
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -78,7 +78,8 @@ class ResubmissionUpdateRequest(BaseModel):
     #   complete — 요청 수용: 단계를 접수 직전으로 되돌리고 예정일 삭제
     #   reject   — 반려: 단계·예정일 유지, 요청자에게 현행 검토 카카오 알림
     # 미지정이면 회신 메모/상태만 저장한다.
-    action: Literal["complete", "reject"] | None = None
+    #   revert   — 대기로 복구: 처리완료로 되돌린 단계·삭제한 예정일을 원상복구
+    action: Literal["complete", "reject", "revert"] | None = None
     # 상태만 직접 바꿀 때 사용 (예: 완료 건을 대기로 되돌리기)
     status: str | None = None
 
@@ -480,6 +481,8 @@ async def update_resubmission_request(
 
     rolled_back_to = None
     cleared_due_date = None
+    restored_phase = None
+    restored_due_date = None
     target_status: ResubmissionStatus | None = None
 
     if body.action == "complete":
@@ -524,6 +527,55 @@ async def update_resubmission_request(
         # 반려 — 단계·예정일은 그대로 두고 요청자에게 현행 검토 알림만 보낸다.
         target_status = ResubmissionStatus.REJECTED
 
+    elif body.action == "revert":
+        # 대기로 — 처리완료를 잘못 누른 경우의 복구. 단계와 예정일을 원래대로 돌린다.
+        if req.to_phase:
+            building = (
+                db.query(Building).filter(Building.id == req.building_id).first()
+                if req.building_id
+                else None
+            )
+            if building is None:
+                raise HTTPException(status_code=404, detail="건축물을 찾을 수 없습니다")
+            # 처리완료 이후 단계가 또 바뀌었다면 임의 복원은 위험하므로 막는다.
+            if building.current_phase != req.to_phase:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "처리완료 이후 단계가 변경되어 되돌릴 수 없습니다 "
+                        f"(현재 {_PHASE_LABELS.get(building.current_phase or '', '-')})"
+                    ),
+                )
+            if not req.from_phase:
+                raise HTTPException(
+                    status_code=400, detail="되돌릴 이전 단계 정보가 없습니다"
+                )
+            ip = request.client.host if request.client and request.client.host else None
+            try:
+                transition_phase(
+                    db, building, to_phase=req.from_phase, trigger="manual",
+                    actor_user_id=current_user.id, ip_address=ip,
+                    reason=f"resubmission_revert:#{req.id}",
+                )
+            except InvalidPhaseTransition as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            restored_phase = req.from_phase
+            req.to_phase = None
+
+        if req.cleared_due_date:
+            stage = _stage_of(db, req.building_id, req.phase)
+            if stage is None:
+                raise HTTPException(
+                    status_code=400, detail="대상 검토 단계를 찾을 수 없습니다"
+                )
+            # 재접수 등으로 새 예정일이 잡혔으면 덮어쓰지 않는다.
+            if stage.report_due_date is None:
+                stage.report_due_date = date.fromisoformat(req.cleared_due_date)
+                restored_due_date = req.cleared_due_date
+            req.cleared_due_date = None
+
+        target_status = ResubmissionStatus.PENDING
+
     elif body.status:
         try:
             target_status = ResubmissionStatus(body.status)
@@ -552,6 +604,8 @@ async def update_resubmission_request(
             "reply": req.reply,
             "rolled_back_to": rolled_back_to,
             "cleared_due_date": cleared_due_date,
+            "restored_phase": restored_phase,
+            "restored_due_date": restored_due_date,
         },
     )
     db.commit()
@@ -570,6 +624,14 @@ async def update_resubmission_request(
         )
     if cleared_due_date:
         done.append(f"검토서 요청 예정일({cleared_due_date})을 삭제했습니다")
+    if restored_phase:
+        done.append(
+            f"단계를 {_PHASE_LABELS.get(restored_phase, restored_phase)}(으)로 복구했습니다"
+        )
+    if restored_due_date:
+        done.append(f"검토서 요청 예정일({restored_due_date})을 복구했습니다")
+    if body.action == "revert" and not done:
+        done.append("대기 상태로 되돌렸습니다")
     if body.action == "reject":
         done.append(
             "요청자에게 현행 검토 알림을 보냈습니다"
@@ -580,5 +642,7 @@ async def update_resubmission_request(
         "message": " / ".join(done) if done else "업데이트 되었습니다",
         "rolled_back_to": rolled_back_to,
         "cleared_due_date": cleared_due_date,
+        "restored_phase": restored_phase,
+        "restored_due_date": restored_due_date,
         "notified": notified,
     }
