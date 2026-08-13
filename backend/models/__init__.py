@@ -14,6 +14,7 @@ from models.checklist import ChecklistOpinion
 from models.kakao_link_session import KakaoLinkSession
 from models.password_setup_token import PasswordSetupToken
 from models.phase_transition_log import PhaseTransitionLog
+from models.deploy_batch_stage import DeployBatchStage
 
 __all__ = [
     "User",
@@ -36,4 +37,5 @@ __all__ = [
     "KakaoLinkSession",
     "PasswordSetupToken",
     "PhaseTransitionLog",
+    "DeployBatchStage",
 ]

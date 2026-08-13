@@ -16,6 +16,9 @@
     IMPORT:  엑셀 관리대장 초기 적재 전용.
              알려진 단계로의 전진만 허용 (빈 phase → 임의 단계 포함).
              기존 건물의 phase 를 되돌리는 용도로는 사용 금지.
+    BATCH_ALIGN: 도서 접수 시 배포차수 기준 단계에 맞추는 강제 보정 전용.
+             되돌리기가 목적에 포함되므로 알려진 단계 사이의 임의 점프를 허용한다.
+             최종완료(completed) 건은 대상에서 제외한다.
 
 사용 패턴:
     log = transition_phase(db, building, to_phase=..., trigger="receive",
@@ -33,7 +36,7 @@ from models.building import Building
 from models.phase_transition_log import PhaseTransitionLog
 
 
-TriggerType = Literal["initial", "receive", "upload", "manual", "import"]
+TriggerType = Literal["initial", "receive", "upload", "manual", "import", "batch_align"]
 
 
 # RECEIVE: (출발 phase) -> (도착 phase)
@@ -170,6 +173,20 @@ def _validate_transition(trigger: TriggerType, from_phase: str | None, to_phase:
                 )
         return
 
+    if trigger == "batch_align":
+        # 배포차수 기준 단계 보정: 자동 판별이 기준과 어긋난 건을 기준에 맞춘다.
+        # 앞서간 건을 되돌리는 것이 목적에 포함되므로 역행과 점프를 모두 허용하되,
+        # 출발·도착 모두 알려진 단계여야 한다.
+        if to_phase not in _PHASE_INDEX:
+            raise InvalidPhaseTransition(
+                f"BATCH_ALIGN 전환 불허: to='{to_phase}' 는 알 수 없는 단계"
+            )
+        if from_phase and from_phase not in _PHASE_INDEX:
+            raise InvalidPhaseTransition(
+                f"BATCH_ALIGN 전환 불허: from='{from_phase}' 는 알 수 없는 단계"
+            )
+        return
+
     if trigger == "manual":
         if not from_phase:
             raise InvalidPhaseTransition(
@@ -198,7 +215,7 @@ def transition_phase(
     """`building.current_phase` 를 `to_phase` 로 전환하고 로그를 add 한다.
 
     - to_phase 가 None 이거나 building.current_phase 와 같으면 no-op (로그 미생성).
-    - import 트리거에서 이미 completed 인 건은 엑셀 데이터만 갱신하고 phase 는 유지한다.
+    - import/batch_align 트리거에서 이미 completed 인 건은 phase 를 유지한다.
     - 매트릭스 위반 시 InvalidPhaseTransition raise (호출자가 400/500 매핑).
     - commit 은 호출자 책임 (배치 호출에서 트랜잭션을 묶기 위함).
     """
@@ -207,7 +224,7 @@ def transition_phase(
     from_phase = building.current_phase
     if from_phase == to_phase:
         return None
-    if trigger == "import" and from_phase == "completed":
+    if trigger in ("import", "batch_align") and from_phase == "completed":
         return None
 
     _validate_transition(trigger, from_phase, to_phase)

@@ -9,8 +9,10 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session, joinedload
 
 from database import get_db
+from engines.deploy_batch import DEPLOY_BATCH_NUMBERS, deploy_batch_of
 from engines.folder_distribution import distribute_by_folder_name
 from models.building import Building
+from models.deploy_batch_stage import DeployBatchStage
 from models.inappropriate_note import InappropriateNote
 from models.review_opinion_detail import ReviewOpinionDetail
 from models.review_severity_summary import ReviewSeveritySummary
@@ -159,12 +161,41 @@ class DocReceiveRequest(BaseModel):
     # 검토서 요청 예정일 — 미입력 시 received_date + DEFAULT_DUE_DAYS로 자동 설정.
     # 한 번의 receive 호출 안에서는 모든 건물에 동일 예정일을 일괄 적용한다.
     report_due_date: date | None = None
+    # true면 DB를 바꾸지 않고 보정 대상만 계산해 돌려준다 (접수 전 미리보기).
+    dry_run: bool = False
+
+
+class BatchStageAdjustment(BaseModel):
+    """배포차수 기준 단계와 자동 판별이 어긋나 보정된 건."""
+
+    mgmt_no: str
+    deploy_batch: int
+    expected_phase: str      # 차수 기준 단계 (제출 단계 값)
+    calculated_phase: str    # 자동 판별된 접수 대상 단계 ("-"면 더 진행 불가)
+    corrected_phase: str     # 보정 후 current_phase
+    direction: Literal["ahead", "behind"]   # 기준 대비 앞서감 / 뒤처짐
 
 
 class DocReceiveResponse(BaseModel):
     updated: int
     not_found: list[str]
     notifications: list[dict]
+    # 배포차수 기준에 맞춰 보정된 건 (dry_run이면 보정 예정 목록)
+    adjustments: list[BatchStageAdjustment] = []
+    dry_run: bool = False
+
+
+class BatchStageItem(BaseModel):
+    batch_no: int
+    phase: str | None       # None이면 기준 미설정 (보정 건너뜀)
+
+
+class BatchStageListResponse(BaseModel):
+    items: list[BatchStageItem]
+
+
+class BatchStageUpdateRequest(BaseModel):
+    items: list[BatchStageItem]
 
 
 class FolderDistributionRequest(BaseModel):
@@ -307,6 +338,136 @@ _ROUND_KOREAN: dict[str, str] = {
 }
 
 
+# 기준 단계로 지정 가능한 값 (제출 단계). _PHASE_ORDER 키와 동일.
+_BATCH_STAGE_PHASES = tuple(_PHASE_ORDER)
+
+# 자동 판별이 불가능한 상태(5차 보완 제출 등)를 비교할 때 쓰는 가상 순서.
+# 어떤 기준 단계보다도 크므로 항상 "앞서감"으로 판정된다.
+_BEYOND_LAST_ORDER = max(_PHASE_ORDER.values()) + 1
+
+
+def _load_batch_stage_map(db: Session) -> dict[int, str]:
+    """배포차수 → 기준 단계. 설정이 없는 차수는 키가 없다."""
+    rows = db.query(DeployBatchStage).all()
+    return {row.batch_no: row.phase for row in rows}
+
+
+def _resolve_receive_target(
+    building: Building,
+    batch_stage_map: dict[int, str],
+) -> tuple[str | None, dict | None]:
+    """건물의 접수 대상 단계와 배포차수 보정 정보를 계산한다.
+
+    반환: (접수 대상 제출 단계, 보정 정보 또는 None)
+    보정 정보가 있으면 호출부가 current_phase를 강제로 맞춰야 한다.
+
+    규칙 — 기준 R, 자동 판별 C:
+      C == R  정상 진행 (보정 없음)
+      C <  R  기준보다 뒤처짐 → R의 접수 단계로 강제
+      C >  R  기준보다 앞서감 → R의 제출 단계로 강제
+    """
+    calculated = _NEXT_RECEIVE_ROUND.get(building.current_phase)
+    batch_no = deploy_batch_of(building.mgmt_no)
+    expected = batch_stage_map.get(batch_no) if batch_no is not None else None
+
+    # 기준 미설정이거나 관리번호가 정규 형식이 아니면 기존 동작 그대로.
+    if expected is None:
+        return calculated, None
+    # 최종완료 건은 배포차수 보정 대상에서 제외한다.
+    if building.current_phase == "completed" or building.final_result:
+        return calculated, None
+
+    calculated_order = (
+        _PHASE_ORDER[calculated] if calculated is not None else _BEYOND_LAST_ORDER
+    )
+    expected_order = _PHASE_ORDER[expected]
+    if calculated_order == expected_order:
+        return calculated, None
+
+    direction = "ahead" if calculated_order > expected_order else "behind"
+    corrected_phase = expected if direction == "ahead" else _STAGE_TO_RECEIVED[expected]
+    return expected, {
+        "mgmt_no": building.mgmt_no,
+        "deploy_batch": batch_no,
+        "expected_phase": expected,
+        "calculated_phase": calculated or "-",
+        "corrected_phase": corrected_phase,
+        "direction": direction,
+    }
+
+
+@router.get("/batch-stages", response_model=BatchStageListResponse)
+def get_batch_stages(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(
+        require_roles(
+            UserRole.TEAM_LEADER,
+            UserRole.CHIEF_SECRETARY,
+            UserRole.SECRETARY,
+            UserRole.MANAGER,
+        )
+    ),
+):
+    """배포차수별 기준 검토 단계 조회. 미설정 차수는 phase=None으로 채워 반환."""
+    stage_map = _load_batch_stage_map(db)
+    return BatchStageListResponse(items=[
+        BatchStageItem(batch_no=batch_no, phase=stage_map.get(batch_no))
+        for batch_no in DEPLOY_BATCH_NUMBERS
+    ])
+
+
+@router.put("/batch-stages", response_model=BatchStageListResponse)
+def update_batch_stages(
+    body: BatchStageUpdateRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(UserRole.CHIEF_SECRETARY)),
+):
+    """배포차수별 기준 검토 단계 일괄 수정 (총괄간사 전용).
+
+    phase=None 으로 보내면 해당 차수의 기준을 지운다(보정 건너뜀).
+    """
+    for item in body.items:
+        if item.batch_no not in DEPLOY_BATCH_NUMBERS:
+            raise HTTPException(status_code=400, detail="허용되지 않는 배포차수입니다")
+        if item.phase is not None and item.phase not in _BATCH_STAGE_PHASES:
+            raise HTTPException(status_code=400, detail="허용되지 않는 검토 단계입니다")
+
+    existing = {row.batch_no: row for row in db.query(DeployBatchStage).all()}
+    before = {batch_no: row.phase for batch_no, row in existing.items()}
+    for item in body.items:
+        row = existing.get(item.batch_no)
+        if item.phase is None:
+            if row is not None:
+                db.delete(row)
+            continue
+        if row is None:
+            db.add(DeployBatchStage(
+                batch_no=item.batch_no,
+                phase=item.phase,
+                updated_by_user_id=current_user.id,
+            ))
+        else:
+            row.phase = item.phase
+            row.updated_by_user_id = current_user.id
+
+    log_action(
+        db,
+        current_user.id,
+        "update",
+        "deploy_batch_stage",
+        None,
+        before_data={"stages": before},
+        after_data={"stages": {item.batch_no: item.phase for item in body.items}},
+    )
+    db.commit()
+
+    stage_map = _load_batch_stage_map(db)
+    return BatchStageListResponse(items=[
+        BatchStageItem(batch_no=batch_no, phase=stage_map.get(batch_no))
+        for batch_no in DEPLOY_BATCH_NUMBERS
+    ])
+
+
 @router.get("/folder-assignment-map", response_model=FolderAssignmentMapResponse)
 def get_folder_assignment_map(
     db: Session = Depends(get_db),
@@ -381,14 +542,20 @@ def receive_documents(
     - review_stages에 해당 단계의 도서접수일 기록
     - 건물의 current_phase를 '_received' 상태로 업데이트
     - 검토위원 × 차수 조합별로 알림 데이터 생성
+
+    배포차수에 기준 단계가 설정돼 있으면 자동 판별 결과를 기준에 맞춰 보정한다.
+    기준보다 뒤처졌으면 기준 단계의 접수 상태로, 앞서갔으면 기준 단계의 제출
+    상태로 강제하며, 앞서간 건은 재접수로 보아 알림을 따로 묶는다.
+
+    dry_run=true 면 DB를 바꾸지 않고 보정 대상만 계산해 돌려준다.
     """
     received = body.received_date or business_today()
     # 요청 예정일: 명시값 > 기본(접수일 + DEFAULT_DUE_DAYS)
     due_date = body.report_due_date or (received + timedelta(days=DEFAULT_DUE_DAYS))
     updated = 0
     not_found: list[str] = []
-    # (검토자 이름, 접수 차수) → 관리번호 목록
-    notif_key: dict[tuple[str, str], list[str]] = {}
+    # (검토자 이름, 접수 차수, 재접수 여부) → 관리번호 목록
+    notif_key: dict[tuple[str, str, bool], list[str]] = {}
 
     # 1. 건축물 일괄 조회
     building_map: dict[str, Building] = {}
@@ -399,12 +566,38 @@ def receive_documents(
             building_map[b.mgmt_no] = b
 
     # 2. 차수별로 stage 매핑 준비 — 건물별로 필요한 단계가 다를 수 있음
-    # 먼저 각 건물의 접수 대상 phase를 계산
+    # 먼저 각 건물의 접수 대상 phase를 계산 (배포차수 기준 보정 포함)
+    batch_stage_map = _load_batch_stage_map(db)
     target_phase_by_building: dict[int, str] = {}
+    adjustment_by_building: dict[int, dict] = {}
     for b in building_map.values():
-        phase = _NEXT_RECEIVE_ROUND.get(b.current_phase)
+        phase, adjustment = _resolve_receive_target(b, batch_stage_map)
         if phase:
             target_phase_by_building[b.id] = phase
+        if adjustment:
+            adjustment_by_building[b.id] = adjustment
+
+    # 미리보기: DB를 건드리지 않고 보정 대상만 돌려준다.
+    if body.dry_run:
+        adjustments = [
+            adjustment_by_building[building_map[mgmt_no].id]
+            for mgmt_no in body.mgmt_nos
+            if mgmt_no in building_map
+            and building_map[mgmt_no].id in adjustment_by_building
+        ]
+        missing = [m for m in body.mgmt_nos if m not in building_map]
+        receivable = sum(
+            1 for m in body.mgmt_nos
+            if m in building_map and building_map[m].id in target_phase_by_building
+        )
+        db.rollback()
+        return DocReceiveResponse(
+            updated=receivable,
+            not_found=missing,
+            notifications=[],
+            adjustments=[BatchStageAdjustment(**a) for a in adjustments],
+            dry_run=True,
+        )
 
     # 3. 관련 review_stages 일괄 조회 (대상 phase 조합)
     existing_stages: dict[tuple[int, str], ReviewStage] = {}
@@ -426,6 +619,7 @@ def receive_documents(
     skipped_final: list[str] = []
     # 재접수로 검토서 이력이 초기화된 건들 (감사 로그용)
     reset_records: list[dict] = []
+    applied_adjustments: list[dict] = []
     for mgmt_no in body.mgmt_nos:
         building = building_map.get(mgmt_no)
         if not building:
@@ -438,6 +632,7 @@ def receive_documents(
             skipped_final.append(mgmt_no)
             continue
 
+        adjustment = adjustment_by_building.get(building.id)
         # building.current_phase 업데이트 (매트릭스 RECEIVE).
         # 신규 등록 직후(phase 없음)에 도서접수가 들어오면 INITIAL("assigned")을
         # 먼저 통과시켜 매트릭스 일관성을 유지한다.
@@ -446,18 +641,35 @@ def receive_documents(
                 db, building, to_phase="assigned", trigger="initial",
                 actor_user_id=current_user.id,
             )
-        new_phase = _STAGE_TO_RECEIVED[target_phase]
-        # 같은 _received로의 재접수는 from==to → no-op (로그 미생성).
-        transition_phase(
-            db, building, to_phase=new_phase, trigger="receive",
-            actor_user_id=current_user.id,
-        )
+        if adjustment:
+            # 배포차수 기준으로 강제 보정 — 되돌리기·점프가 필요해 별도 트리거를 쓴다.
+            transition_phase(
+                db, building, to_phase=adjustment["corrected_phase"],
+                trigger="batch_align",
+                actor_user_id=current_user.id,
+                reason=(
+                    f"배포 {adjustment['deploy_batch']}차수 기준 "
+                    f"{_ROUND_KOREAN.get(adjustment['expected_phase'], adjustment['expected_phase'])} "
+                    f"(자동 판별: {_ROUND_KOREAN.get(adjustment['calculated_phase'], adjustment['calculated_phase'])})"
+                ),
+            )
+            applied_adjustments.append(adjustment)
+        else:
+            new_phase = _STAGE_TO_RECEIVED[target_phase]
+            # 같은 _received로의 재접수는 from==to → no-op (로그 미생성).
+            transition_phase(
+                db, building, to_phase=new_phase, trigger="receive",
+                actor_user_id=current_user.id,
+            )
 
+        # 기준보다 앞서간 건은 제출 상태를 유지해야 하므로 검토서 이력을 지우지 않고
+        # 접수일·요청 예정일만 갱신한다.
+        keep_review_history = bool(adjustment) and adjustment["direction"] == "ahead"
         key = (building.id, target_phase)
         stage = existing_stages.get(key)
         if stage:
             # 같은 단계 재접수: 검토서 제출 이력이 있으면 초기화
-            if _has_review_history(db, stage):
+            if not keep_review_history and _has_review_history(db, stage):
                 meta = _reset_review_history(db, stage)
                 meta["mgmt_no"] = mgmt_no
                 reset_records.append(meta)
@@ -474,7 +686,7 @@ def receive_documents(
 
         reviewer_name = building.assigned_reviewer_name
         if reviewer_name:
-            k = (reviewer_name, target_phase)
+            k = (reviewer_name, target_phase, keep_review_history)
             notif_key.setdefault(k, []).append(mgmt_no)
 
         updated += 1
@@ -505,20 +717,24 @@ def receive_documents(
 
     db.commit()
 
-    # 5. 알림 목록 생성 (검토자 × 차수 별로)
+    # 5. 알림 목록 생성 (검토자 × 차수 × 재접수 여부 별로)
     due_date_str = due_date.strftime("%Y-%m-%d")
     notif_list = []
-    for (reviewer, phase), mgmt_nos_list in notif_key.items():
+    for (reviewer, phase, is_re_receive), mgmt_nos_list in notif_key.items():
         round_label = _ROUND_KOREAN.get(phase, phase)
+        # 기준보다 앞서가 있던 건은 이미 검토서를 낸 단계로 도서가 다시 들어온 것이라
+        # 검토위원이 구분할 수 있도록 "재접수"로 표기한다.
+        doc_label = f"{round_label}도서 재접수" if is_re_receive else f"{round_label}도서"
         notif_list.append({
             "reviewer_name": reviewer,
             "count": len(mgmt_nos_list),
             "round": round_label,
             "phase": phase,
+            "re_receive": is_re_receive,
             "mgmt_nos": mgmt_nos_list,
             "report_due_date": due_date_str,
             "message": (
-                f"{round_label}도서 {len(mgmt_nos_list)}건이 웹하드에 "
+                f"{doc_label} {len(mgmt_nos_list)}건이 웹하드에 "
                 f"업로드되었습니다. (관리번호 {', '.join(mgmt_nos_list)})\n"
                 f"검토서 요청 예정일: {due_date_str}"
             ),
@@ -532,6 +748,7 @@ def receive_documents(
         updated=updated,
         not_found=not_found,
         notifications=notif_list,
+        adjustments=[BatchStageAdjustment(**a) for a in applied_adjustments],
     )
 
 

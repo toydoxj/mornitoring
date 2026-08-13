@@ -1,12 +1,19 @@
 "use client"
 
-import { useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import { ClipboardList, Copy, FolderInput, FolderOpen, FolderOutput, MoveRight, Play, Search } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import {
   Table,
   TableBody,
@@ -25,6 +32,8 @@ interface NotificationItem {
   round?: string
   phase?: string
   report_due_date?: string
+  // 기준보다 앞서가 있던 건 — 이미 검토서를 낸 단계로 도서가 다시 들어온 경우
+  re_receive?: boolean
 }
 
 // 접수일 + N일을 YYYY-MM-DD 로 반환
@@ -35,10 +44,104 @@ function addDays(iso: string, days: number): string {
   return d.toISOString().slice(0, 10)
 }
 
+// 배포차수 기준 단계와 자동 판별이 어긋나 보정된(또는 보정 예정인) 건
+interface BatchStageAdjustment {
+  mgmt_no: string
+  deploy_batch: number
+  expected_phase: string
+  calculated_phase: string
+  corrected_phase: string
+  direction: "ahead" | "behind"
+}
+
 interface ReceiveResult {
   updated: number
   not_found: string[]
   notifications: NotificationItem[]
+  adjustments: BatchStageAdjustment[]
+  dry_run: boolean
+}
+
+interface BatchStageItem {
+  batch_no: number
+  phase: string | null
+}
+
+// 기준 단계로 지정 가능한 값 — 백엔드 _PHASE_ORDER 키와 동일
+const BATCH_STAGE_OPTIONS = [
+  { value: "preliminary", label: "예비검토" },
+  { value: "supplement_1", label: "1차 보완검토" },
+  { value: "supplement_2", label: "2차 보완검토" },
+  { value: "supplement_3", label: "3차 보완검토" },
+  { value: "supplement_4", label: "4차 보완검토" },
+  { value: "supplement_5", label: "5차 보완검토" },
+] as const
+
+// current_phase 값 표시용 (접수/제출 구분 포함)
+const RECEIVE_PHASE_LABELS: Record<string, string> = {
+  assigned: "배정완료",
+  doc_received: "예비도서 접수",
+  preliminary: "예비검토서 제출",
+  supplement_1_received: "1차 보완도서 접수",
+  supplement_1: "1차 보완검토서 제출",
+  supplement_2_received: "2차 보완도서 접수",
+  supplement_2: "2차 보완검토서 제출",
+  supplement_3_received: "3차 보완도서 접수",
+  supplement_3: "3차 보완검토서 제출",
+  supplement_4_received: "4차 보완도서 접수",
+  supplement_4: "4차 보완검토서 제출",
+  supplement_5_received: "5차 보완도서 접수",
+  supplement_5: "5차 보완검토서 제출",
+  completed: "완료",
+}
+
+function BatchAdjustmentTable({ rows }: { rows: BatchStageAdjustment[] }) {
+  return (
+    <div className="overflow-x-auto rounded-md border">
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead>관리번호</TableHead>
+            <TableHead className="text-center">배포차수</TableHead>
+            <TableHead>기준 단계</TableHead>
+            <TableHead>자동 판별</TableHead>
+            <TableHead>보정 결과</TableHead>
+            <TableHead className="text-center">구분</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {rows.map((row) => (
+            <TableRow key={row.mgmt_no}>
+              <TableCell className="font-mono">{row.mgmt_no}</TableCell>
+              <TableCell className="text-center">{row.deploy_batch}차수</TableCell>
+              <TableCell>{batchStageLabel(row.expected_phase)}</TableCell>
+              <TableCell className="text-muted-foreground">
+                {receivePhaseLabel(row.calculated_phase)}
+              </TableCell>
+              <TableCell className="font-medium">
+                {receivePhaseLabel(row.corrected_phase)}
+              </TableCell>
+              <TableCell className="text-center">
+                <Badge variant={row.direction === "ahead" ? "secondary" : "outline"}>
+                  {row.direction === "ahead" ? "앞서감(재접수)" : "뒤처짐"}
+                </Badge>
+              </TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+    </div>
+  )
+}
+
+function batchStageLabel(phase: string | null) {
+  if (!phase) return "미설정"
+  return BATCH_STAGE_OPTIONS.find((option) => option.value === phase)?.label ?? phase
+}
+
+function receivePhaseLabel(phase: string) {
+  if (phase === "-") return "진행 불가"
+  return RECEIVE_PHASE_LABELS[phase] ?? phase
 }
 
 type FolderOperation = "move" | "copy"
@@ -418,6 +521,15 @@ export default function DistributionPage() {
   const [isProcessing, setIsProcessing] = useState(false)
   const [result, setResult] = useState<ReceiveResult | null>(null)
   const [notifSent, setNotifSent] = useState(false)
+  // 접수 전 미리보기 — 배포차수 기준과 어긋나 보정될 건을 먼저 확인시킨다
+  const [preview, setPreview] = useState<ReceiveResult | null>(null)
+  const [isPreviewing, setIsPreviewing] = useState(false)
+  // 배포차수별 기준 단계 설정
+  const [batchStages, setBatchStages] = useState<BatchStageItem[]>([])
+  const [batchStageOpen, setBatchStageOpen] = useState(false)
+  const [batchStageDraft, setBatchStageDraft] = useState<BatchStageItem[]>([])
+  const [batchStageSaving, setBatchStageSaving] = useState(false)
+  const [batchStageError, setBatchStageError] = useState<string | null>(null)
 
   const handleReceivedDateChange = (v: string) => {
     setReceivedDate(v)
@@ -518,12 +630,44 @@ export default function DistributionPage() {
     }
   }
 
-  const handleReceive = async () => {
-    const mgmtNos = mgmtNosInput
+  const parseMgmtNos = () =>
+    mgmtNosInput
       .split(/[\n,\s]+/)
       .map((s) => s.trim())
       .filter((s) => /^\d{4}-\d{4}$/.test(s))
 
+  const handlePreview = async () => {
+    const mgmtNos = parseMgmtNos()
+    if (mgmtNos.length === 0) {
+      alert("관리번호를 입력해주세요")
+      return
+    }
+
+    setIsPreviewing(true)
+    setPreview(null)
+    setResult(null)
+    setNotifSent(false)
+
+    try {
+      const { data } = await apiClient.post<ReceiveResult>(
+        "/api/distribution/receive",
+        {
+          mgmt_nos: mgmtNos,
+          received_date: receivedDate,
+          report_due_date: reportDueDate || null,
+          dry_run: true,
+        }
+      )
+      setPreview(data)
+    } catch (err) {
+      console.error("접수 미리보기 실패:", err)
+    } finally {
+      setIsPreviewing(false)
+    }
+  }
+
+  const handleReceive = async () => {
+    const mgmtNos = parseMgmtNos()
     if (mgmtNos.length === 0) {
       alert("관리번호를 입력해주세요")
       return
@@ -543,10 +687,52 @@ export default function DistributionPage() {
         }
       )
       setResult(data)
+      setPreview(null)
     } catch (err) {
       console.error("접수 처리 실패:", err)
     } finally {
       setIsProcessing(false)
+    }
+  }
+
+  const loadBatchStages = useCallback(async () => {
+    try {
+      const { data } = await apiClient.get<{ items: BatchStageItem[] }>(
+        "/api/distribution/batch-stages"
+      )
+      setBatchStages(data.items)
+    } catch (err) {
+      console.error("배포차수 기준 단계 조회 실패:", err)
+    }
+  }, [])
+
+  useEffect(() => {
+    loadBatchStages()
+  }, [loadBatchStages])
+
+  const openBatchStageDialog = () => {
+    setBatchStageDraft(batchStages.map((item) => ({ ...item })))
+    setBatchStageError(null)
+    setBatchStageOpen(true)
+  }
+
+  const saveBatchStages = async () => {
+    setBatchStageSaving(true)
+    setBatchStageError(null)
+    try {
+      const { data } = await apiClient.put<{ items: BatchStageItem[] }>(
+        "/api/distribution/batch-stages",
+        { items: batchStageDraft }
+      )
+      setBatchStages(data.items)
+      setBatchStageOpen(false)
+      // 기준이 바뀌면 이전 미리보기는 더 이상 유효하지 않다
+      setPreview(null)
+    } catch (err: unknown) {
+      const apiErr = err as { response?: { data?: { detail?: string } } }
+      setBatchStageError(apiErr.response?.data?.detail || "기준 단계 저장에 실패했습니다")
+    } finally {
+      setBatchStageSaving(false)
     }
   }
 
@@ -580,12 +766,83 @@ export default function DistributionPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold">도서 접수/배포</h1>
-        <p className="text-sm text-muted-foreground">
-          폴더명 관리번호를 DB 배정 검토위원과 매칭한 뒤 접수 처리와 알림 발송까지 이어서 진행합니다
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-bold">도서 접수/배포</h1>
+          <p className="text-sm text-muted-foreground">
+            폴더명 관리번호를 DB 배정 검토위원과 매칭한 뒤 접수 처리와 알림 발송까지 이어서 진행합니다
+          </p>
+        </div>
+        <div className="flex flex-col items-end gap-1">
+          <Button variant="outline" size="sm" onClick={openBatchStageDialog}>
+            <ClipboardList />
+            차수별 기준 단계
+          </Button>
+          <p className="text-xs text-muted-foreground">
+            {batchStages.some((item) => item.phase)
+              ? batchStages
+                  .filter((item) => item.phase)
+                  .map((item) => `${item.batch_no}차수 ${batchStageLabel(item.phase)}`)
+                  .join(" · ")
+              : "기준 미설정 — 접수 시 보정하지 않습니다"}
+          </p>
+        </div>
       </div>
+
+      {/* 차수별 기준 단계 설정 (총괄간사 전용 — 저장 시 백엔드에서 권한 검증) */}
+      <Dialog open={batchStageOpen} onOpenChange={setBatchStageOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>배포차수별 기준 검토 단계</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <p className="text-sm text-muted-foreground">
+              도서 접수 시 자동 판별된 단계가 기준과 다르면 기준에 맞춰 보정합니다.
+              기준보다 뒤처지면 해당 단계 <strong>접수</strong>로, 앞서가면 해당 단계{" "}
+              <strong>제출</strong>로 맞춥니다.
+            </p>
+            {batchStageDraft.map((item, index) => (
+              <div key={item.batch_no} className="flex items-center gap-3">
+                <Label className="w-20">{item.batch_no}차수</Label>
+                <select
+                  className="flex-1 rounded-md border px-3 py-2 text-sm"
+                  value={item.phase ?? ""}
+                  onChange={(event) => {
+                    const value = event.target.value
+                    setBatchStageDraft((current) =>
+                      current.map((row, rowIndex) =>
+                        rowIndex === index ? { ...row, phase: value || null } : row
+                      )
+                    )
+                  }}
+                >
+                  <option value="">미설정 (보정 안 함)</option>
+                  {BATCH_STAGE_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            ))}
+            {batchStageError && (
+              <p className="text-sm text-red-600">{batchStageError}</p>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setBatchStageOpen(false)}>
+              취소
+            </Button>
+            <Button
+              onClick={saveBatchStages}
+              loading={batchStageSaving}
+              loadingText="저장 중..."
+            >
+              저장
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* 폴더 분배 */}
       <Card>
@@ -870,11 +1127,77 @@ export default function DistributionPage() {
             </p>
           </div>
 
-          <Button onClick={handleReceive} loading={isProcessing} loadingText="처리 중...">
-            접수 처리
-          </Button>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              variant="outline"
+              onClick={handlePreview}
+              loading={isPreviewing}
+              loadingText="확인 중..."
+            >
+              <Search />
+              단계 확인
+            </Button>
+            <Button
+              onClick={handleReceive}
+              loading={isProcessing}
+              loadingText="처리 중..."
+              disabled={!preview}
+            >
+              접수 처리
+            </Button>
+            {!preview && (
+              <span className="text-xs text-muted-foreground">
+                단계 확인을 먼저 실행하세요
+              </span>
+            )}
+          </div>
         </CardContent>
       </Card>
+
+      {/* 접수 전 미리보기 — 배포차수 기준과 어긋나는 건을 먼저 보여준다 */}
+      {preview && (
+        <Card>
+          <CardHeader>
+            <CardTitle>접수 전 단계 확인</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="flex flex-wrap gap-3">
+              <Badge variant="default">접수 대상 {preview.updated}건</Badge>
+              {preview.adjustments.length > 0 && (
+                <Badge variant="destructive">
+                  단계 보정 {preview.adjustments.length}건
+                </Badge>
+              )}
+              {preview.not_found.length > 0 && (
+                <Badge variant="destructive">
+                  관리번호 없음 {preview.not_found.length}건
+                </Badge>
+              )}
+            </div>
+
+            {preview.adjustments.length === 0 ? (
+              <p className="text-sm text-muted-foreground">
+                배포차수 기준과 어긋나는 건이 없습니다. 그대로 접수 처리하면 됩니다.
+              </p>
+            ) : (
+              <>
+                <p className="text-sm text-amber-700">
+                  아래 건은 배포차수 기준과 달라 접수 시 단계가 강제로 보정됩니다.
+                  내용을 확인한 뒤 접수 처리를 눌러주세요.
+                </p>
+                <BatchAdjustmentTable rows={preview.adjustments} />
+              </>
+            )}
+
+            {preview.not_found.length > 0 && (
+              <div className="rounded-md bg-red-50 p-3 text-sm text-red-800">
+                <p className="font-medium">찾을 수 없는 관리번호:</p>
+                <p className="font-mono">{preview.not_found.join(", ")}</p>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       {/* 처리 결과 */}
       {result && (
@@ -883,14 +1206,26 @@ export default function DistributionPage() {
             <CardTitle>3단계: 접수 결과 확인</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="flex gap-3">
+            <div className="flex flex-wrap gap-3">
               <Badge variant="default">접수 완료 {result.updated}건</Badge>
+              {result.adjustments.length > 0 && (
+                <Badge variant="secondary">단계 보정 {result.adjustments.length}건</Badge>
+              )}
               {result.not_found.length > 0 && (
                 <Badge variant="destructive">
                   관리번호 없음 {result.not_found.length}건
                 </Badge>
               )}
             </div>
+
+            {result.adjustments.length > 0 && (
+              <div className="space-y-2">
+                <p className="text-sm text-amber-700">
+                  배포차수 기준에 맞춰 아래 건의 단계를 보정했습니다.
+                </p>
+                <BatchAdjustmentTable rows={result.adjustments} />
+              </div>
+            )}
 
             {result.not_found.length > 0 && (
               <div className="rounded-md bg-red-50 p-3 text-sm text-red-800">
@@ -943,11 +1278,10 @@ export default function DistributionPage() {
                     <TableRow key={i}>
                       <TableCell className="font-medium">{n.reviewer_name}</TableCell>
                       <TableCell>
-                        {n.round ? (
-                          <Badge variant="outline">{n.round}</Badge>
-                        ) : (
-                          "-"
-                        )}
+                        <div className="flex flex-wrap items-center gap-1">
+                          {n.round ? <Badge variant="outline">{n.round}</Badge> : "-"}
+                          {n.re_receive && <Badge variant="secondary">재접수</Badge>}
+                        </div>
                       </TableCell>
                       <TableCell>{n.count}</TableCell>
                       <TableCell className="text-sm text-muted-foreground">
