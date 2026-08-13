@@ -17,6 +17,7 @@ import apiClient from "@/lib/api/client"
 import { useAuthStore } from "@/stores/authStore"
 import type { ResubmissionListResponse, ResubmissionRequest } from "@/types"
 import { PHASE_LABELS, RESUBMISSION_STATUS_LABELS } from "@/types"
+import { getResubmitPreviousPhase } from "@/lib/phases"
 
 const STATUS_VARIANT: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
   pending: "destructive",
@@ -83,7 +84,11 @@ export default function ResubmissionsPage() {
 
   const handleUpdate = async (
     item: ResubmissionRequest,
-    options: { status?: string; clearDueDate?: boolean } = {}
+    options: {
+      status?: string
+      clearDueDate?: boolean
+      rollbackPhase?: boolean
+    } = {}
   ) => {
     setSavingId(item.id)
     try {
@@ -92,11 +97,12 @@ export default function ResubmissionsPage() {
         {
           reply: replyMap[item.id] ?? null,
           status: options.status ?? null,
+          rollback_phase: options.rollbackPhase ?? false,
           clear_due_date: options.clearDueDate ?? false,
         }
       )
       await fetchData()
-      if (options.clearDueDate) alert(data.message)
+      if (options.clearDueDate || options.rollbackPhase) alert(data.message)
     } catch (err) {
       const msg =
         (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
@@ -119,11 +125,30 @@ export default function ResubmissionsPage() {
     handleUpdate(item, { clearDueDate: true })
   }
 
+  const handleRollbackPhase = (item: ResubmissionRequest) => {
+    const target = getResubmitPreviousPhase(item.current_phase)
+    if (!target) {
+      alert("도서 접수 상태가 아니어서 되돌릴 수 없습니다.")
+      return
+    }
+    if (
+      !confirm(
+        `${item.mgmt_no}의 단계를 ${phaseLabel(item.current_phase)} → ` +
+        `${phaseLabel(target)}(으)로 되돌리시겠습니까?`
+      )
+    ) {
+      return
+    }
+    handleUpdate(item, { rollbackPhase: true })
+  }
+
   const renderRequestCell = (item: ResubmissionRequest) => (
     <div className="space-y-1">
       <p className="whitespace-pre-wrap break-words text-sm">{item.reason}</p>
       <p className="text-xs text-muted-foreground">
-        단계 되돌림: {phaseLabel(item.from_phase)} → {phaseLabel(item.to_phase)}
+        {item.to_phase
+          ? `단계 되돌림: ${phaseLabel(item.from_phase)} → ${phaseLabel(item.to_phase)}`
+          : `요청 시점 단계: ${phaseLabel(item.from_phase)}`}
         {item.cleared_due_date && ` / 삭제한 제출 예정일: ${item.cleared_due_date}`}
       </p>
       {item.re_received_at && (
@@ -133,6 +158,33 @@ export default function ResubmissionsPage() {
       )}
     </div>
   )
+
+  // 현재 단계 + 되돌리기 버튼 — 되돌리기는 간사가 판단해 실행한다
+  const renderPhaseCell = (item: ResubmissionRequest) => {
+    const target = getResubmitPreviousPhase(item.current_phase)
+    return (
+      <div className="space-y-1">
+        <p className="text-sm">{phaseLabel(item.current_phase)}</p>
+        {item.to_phase ? (
+          <p className="text-xs text-muted-foreground">되돌림 완료</p>
+        ) : (
+          canManage && (
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={!target}
+              title={target ? undefined : "도서 접수 상태에서만 되돌릴 수 있습니다"}
+              loading={savingId === item.id}
+              loadingText="처리 중..."
+              onClick={() => handleRollbackPhase(item)}
+            >
+              이전 단계로
+            </Button>
+          )
+        )}
+      </div>
+    )
+  }
 
   // 예정일 상태 — 간사가 삭제 여부를 판단하는 칸
   const renderDueCell = (item: ResubmissionRequest) => {
@@ -238,9 +290,7 @@ export default function ResubmissionsPage() {
                       </Badge>
                     </TableCell>
                     <TableCell className="align-top">{renderRequestCell(item)}</TableCell>
-                    <TableCell className="text-sm align-top">
-                      {phaseLabel(item.current_phase)}
-                    </TableCell>
+                    <TableCell className="align-top">{renderPhaseCell(item)}</TableCell>
                     <TableCell className="align-top">{renderDueCell(item)}</TableCell>
                     <TableCell className="align-top">
                       <Badge variant={STATUS_VARIANT[item.status]}>

@@ -30,7 +30,6 @@ import type {
   ResubmissionListResponse,
 } from "@/types"
 import { PHASE_LABELS, RECEIVED_PHASES, RESULT_LABELS } from "@/types"
-import { getResubmitPreviousPhase } from "@/lib/phases"
 
 const RESULT_VARIANT: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
   pass: "default",
@@ -811,17 +810,11 @@ export default function MyReviewsPage() {
               <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
                 <p className="font-medium">요청 시 다음과 같이 처리됩니다</p>
                 <ul className="mt-1 list-disc pl-4 space-y-0.5 text-xs">
+                  <li>입력한 사유가 간사·관리원에게 전달됩니다.</li>
                   <li>
-                    현재 단계가 <strong>
-                      {PHASE_LABELS[
-                        getResubmitPreviousPhase(resubmitTarget.current_phase) ?? ""
-                      ] || "이전 단계"}
-                    </strong>(으)로 되돌아갑니다.
+                    단계 되돌리기와 검토서 제출 예정일 삭제는 사유를 확인한 간사가
+                    처리합니다. 요청만으로 현재 단계는 바뀌지 않습니다.
                   </li>
-                  <li>
-                    검토서 제출 예정일은 사유를 확인한 간사가 삭제합니다.
-                  </li>
-                  <li>입력한 사유는 간사·관리원이 확인합니다.</li>
                 </ul>
               </div>
               <div className="space-y-2">

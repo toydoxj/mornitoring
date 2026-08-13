@@ -1,15 +1,13 @@
 """재제출 요청 라우터
 
 검토위원이 배포받은 설계도서로 검토를 진행할 수 없을 때 재제출을 요청한다.
-요청이 접수되면 다음이 한 트랜잭션으로 처리된다.
-  1) building.current_phase 를 접수 직전 단계로 되돌린다 (RESUBMIT 트리거)
-  2) 재제출 요청 레코드 + 감사 로그 + 단계 전환 로그를 남긴다
-
-검토서 요청 예정일은 요청만으로 지워지지 않는다. 사유를 확인한 간사가 요청
-화면에서 `clear_due_date` 로 직접 삭제한다.
+검토위원의 등록은 사유 접수까지만이며 건물 상태를 바꾸지 않는다. 사유를 확인한
+간사가 요청 화면에서 다음을 실행한다 (PATCH /{id}).
+  - rollback_phase: current_phase 를 접수 직전 단계로 되돌림 (RESUBMIT 트리거)
+  - clear_due_date: 해당 검토 단계의 검토서 요청 예정일 삭제
 
 요청 사유는 팀장·총괄간사·조별간사·관리원이 별도 메뉴에서 확인하며,
-간사 이상은 회신·처리 상태·예정일 삭제를 수행할 수 있다.
+간사 이상은 회신·처리 상태·단계 되돌리기·예정일 삭제를 수행할 수 있다.
 """
 
 from datetime import datetime, timezone
@@ -47,6 +45,23 @@ RECEIVED_TO_STAGE_PHASE: dict[str, str] = {
 
 MAX_REASON_LENGTH = 2000
 
+# 안내 메시지용 단계 한글 라벨
+_PHASE_LABELS: dict[str, str] = {
+    "assigned": "배정완료",
+    "doc_received": "예비도서 접수",
+    "preliminary": "예비검토서 제출",
+    "supplement_1_received": "보완도서(1차) 접수",
+    "supplement_1": "보완검토서(1차) 제출",
+    "supplement_2_received": "보완도서(2차) 접수",
+    "supplement_2": "보완검토서(2차) 제출",
+    "supplement_3_received": "보완도서(3차) 접수",
+    "supplement_3": "보완검토서(3차) 제출",
+    "supplement_4_received": "보완도서(4차) 접수",
+    "supplement_4": "보완검토서(4차) 제출",
+    "supplement_5_received": "보완도서(5차) 접수",
+    "supplement_5": "보완검토서(5차) 제출",
+}
+
 
 # --- Pydantic 스키마 ---
 
@@ -58,6 +73,8 @@ class ResubmissionCreateRequest(BaseModel):
 class ResubmissionUpdateRequest(BaseModel):
     reply: str | None = Field(default=None, max_length=MAX_REASON_LENGTH)
     status: str | None = None
+    # true 면 건물 단계를 접수 직전으로 되돌린다 (간사 판단).
+    rollback_phase: bool = False
     # true 면 해당 검토 단계의 검토서 요청 예정일을 지운다 (간사 판단).
     clear_due_date: bool = False
 
@@ -198,9 +215,9 @@ def create_resubmission_request(
 
     담당 판정은 `Reviewer.user_id == current_user.id` 그리고
     `building.reviewer_id == reviewer.id` (동명이인 위험 때문에 이름 매칭 금지).
-    도서 접수 상태에서만 요청할 수 있고, 성공 시 단계가 접수 직전으로 되돌아간다.
-    검토서 요청 예정일은 여기서 건드리지 않으며, 사유를 확인한 간사가 요청 화면에서
-    삭제한다 (PATCH /{id} 의 clear_due_date).
+    도서 접수 상태에서만 요청할 수 있다. 등록은 사유 접수까지만 하고, 단계 되돌리기와
+    검토서 요청 예정일 삭제는 사유를 확인한 간사가 요청 화면에서 실행한다
+    (PATCH /{id} 의 rollback_phase / clear_due_date).
     """
     reason = body.reason.strip()
     if not reason:
@@ -239,19 +256,9 @@ def create_resubmission_request(
             detail="이미 처리 대기 중인 재제출 요청이 있습니다",
         )
 
-    to_phase = next_phase_for("resubmit", from_phase)
     ip = request.client.host if request.client and request.client.host else None
 
-    try:
-        transition_phase(
-            db, building, to_phase=to_phase, trigger="resubmit",
-            actor_user_id=current_user.id, ip_address=ip,
-            reason=f"resubmission_request:{reason[:200]}",
-        )
-    except InvalidPhaseTransition as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    # 검토서 요청 예정일은 지우지 않는다. 사유를 확인한 간사가 별도로 삭제한다.
+    # 단계와 예정일은 그대로 둔다. 사유를 확인한 간사가 요청 화면에서 처리한다.
     stage = _stage_of(db, building.id, stage_phase)
     current_due_date = (
         stage.report_due_date.isoformat() if stage and stage.report_due_date else None
@@ -262,7 +269,6 @@ def create_resubmission_request(
         mgmt_no=building.mgmt_no,
         phase=stage_phase,
         from_phase=from_phase,
-        to_phase=to_phase,
         requester_id=current_user.id,
         requester_name=current_user.name,
         reason=reason,
@@ -276,10 +282,9 @@ def create_resubmission_request(
         "resubmission_request",
         "building",
         building.id,
-        before_data={"current_phase": from_phase},
         after_data={
             "mgmt_no": building.mgmt_no,
-            "current_phase": to_phase,
+            "current_phase": from_phase,
             "stage_phase": stage_phase,
             "report_due_date": current_due_date,
             "resubmission_request_id": req.id,
@@ -292,8 +297,8 @@ def create_resubmission_request(
     return {
         "message": "재제출 요청이 등록되었습니다",
         "id": req.id,
-        "from_phase": from_phase,
-        "to_phase": to_phase,
+        "phase": stage_phase,
+        "current_phase": from_phase,
     }
 
 
@@ -424,6 +429,7 @@ def list_my_resubmission_requests(
 def update_resubmission_request(
     request_id: int,
     body: ResubmissionUpdateRequest,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(
         require_roles(
@@ -433,10 +439,11 @@ def update_resubmission_request(
         )
     ),
 ):
-    """재제출 요청 회신/처리 상태 변경 + 검토서 요청 예정일 삭제 (간사 이상).
+    """재제출 요청 처리 (간사 이상).
 
-    단계 되돌리기는 등록 시점에 처리되지만, 예정일 삭제는 사유를 확인한 간사가
-    `clear_due_date=true` 로 직접 실행한다.
+    검토위원의 등록은 사유 접수까지만이므로, 단계 되돌리기(`rollback_phase`)와
+    검토서 요청 예정일 삭제(`clear_due_date`)는 사유를 확인한 간사가 실행한다.
+    회신·처리 상태 변경과 한 번에 보낼 수 있다.
     """
     req = (
         db.query(ResubmissionRequest)
@@ -458,6 +465,38 @@ def update_resubmission_request(
 
     if body.reply is not None:
         req.reply = body.reply.strip() or None
+
+    rolled_back_to = None
+    if body.rollback_phase:
+        building = (
+            db.query(Building).filter(Building.id == req.building_id).first()
+            if req.building_id
+            else None
+        )
+        if building is None:
+            raise HTTPException(status_code=404, detail="건축물을 찾을 수 없습니다")
+        if req.to_phase:
+            raise HTTPException(
+                status_code=400, detail="이미 단계를 되돌린 요청입니다"
+            )
+        target = next_phase_for("resubmit", building.current_phase)
+        if target is None:
+            raise HTTPException(
+                status_code=400,
+                detail="도서 접수 상태가 아니어서 이전 단계로 되돌릴 수 없습니다",
+            )
+        ip = request.client.host if request.client and request.client.host else None
+        try:
+            transition_phase(
+                db, building, to_phase=target, trigger="resubmit",
+                actor_user_id=current_user.id, ip_address=ip,
+                reason=f"resubmission_request:#{req.id}",
+            )
+        except InvalidPhaseTransition as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        # from_phase 는 등록 시점 값을 유지하고, 실제 되돌린 결과만 기록한다.
+        req.to_phase = target
+        rolled_back_to = target
 
     cleared_due_date = None
     if body.clear_due_date:
@@ -498,13 +537,19 @@ def update_resubmission_request(
             "mgmt_no": req.mgmt_no,
             "status": req.status.value,
             "reply": req.reply,
+            "rolled_back_to": rolled_back_to,
             "cleared_due_date": cleared_due_date,
         },
     )
     db.commit()
+
+    done = []
+    if rolled_back_to:
+        done.append(f"단계를 {_PHASE_LABELS.get(rolled_back_to, rolled_back_to)}(으)로 되돌렸습니다")
     if cleared_due_date:
-        return {
-            "message": f"검토서 요청 예정일({cleared_due_date})을 삭제했습니다",
-            "cleared_due_date": cleared_due_date,
-        }
-    return {"message": "업데이트 되었습니다"}
+        done.append(f"검토서 요청 예정일({cleared_due_date})을 삭제했습니다")
+    return {
+        "message": " / ".join(done) if done else "업데이트 되었습니다",
+        "rolled_back_to": rolled_back_to,
+        "cleared_due_date": cleared_due_date,
+    }

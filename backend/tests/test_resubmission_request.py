@@ -75,7 +75,7 @@ def _setup_received_building(db_session, make_reviewer, make_building, *, group_
 
 # ===== 등록 =====
 
-def test_create_resubmission_rolls_back_phase_and_keeps_due_date(
+def test_create_resubmission_keeps_phase_and_due_date(
     client, db_session, make_reviewer, make_building
 ):
     user, reviewer, headers, building, stage = _setup_received_building(
@@ -89,19 +89,19 @@ def test_create_resubmission_rolls_back_phase_and_keeps_due_date(
     )
     assert res.status_code == 201, res.text
     body = res.json()
-    assert body["from_phase"] == "doc_received"
-    assert body["to_phase"] == "assigned"
+    assert body["phase"] == "preliminary"
+    assert body["current_phase"] == "doc_received"
 
     db_session.expire_all()
-    assert building.current_phase == "assigned"
-    # 예정일은 간사가 확인 후 지운다 — 요청만으로는 남아 있어야 한다
+    # 단계 되돌리기·예정일 삭제는 간사가 한다 — 요청만으로는 그대로여야 한다
+    assert building.current_phase == "doc_received"
     assert stage.report_due_date == date(2026, 8, 15)
 
     req = db_session.query(ResubmissionRequest).one()
     assert req.mgmt_no == building.mgmt_no
     assert req.phase == "preliminary"
     assert req.from_phase == "doc_received"
-    assert req.to_phase == "assigned"
+    assert req.to_phase is None
     assert req.cleared_due_date is None
     assert req.requester_id == user.id
     assert req.status == ResubmissionStatus.PENDING
@@ -120,16 +120,13 @@ def test_create_resubmission_writes_logs(
         headers=headers,
     )
 
-    phase_log = (
+    # 등록만으로는 단계가 바뀌지 않으므로 전환 로그도 없다
+    assert (
         db_session.query(PhaseTransitionLog)
         .filter(PhaseTransitionLog.mgmt_no == building.mgmt_no)
-        .one()
+        .count()
+        == 0
     )
-    assert phase_log.trigger == "resubmit"
-    assert phase_log.from_phase == "doc_received"
-    assert phase_log.to_phase == "assigned"
-    assert phase_log.actor_user_id == user.id
-    assert "도면 불일치" in (phase_log.reason or "")
 
     audit = (
         db_session.query(AuditLog)
@@ -139,8 +136,7 @@ def test_create_resubmission_writes_logs(
     assert audit.user_id == user.id
     assert audit.target_type == "building"
     assert audit.target_id == building.id
-    assert audit.before_data["current_phase"] == "doc_received"
-    assert audit.after_data["current_phase"] == "assigned"
+    assert audit.after_data["current_phase"] == "doc_received"
     assert audit.after_data["report_due_date"] == "2026-08-15"
     assert audit.after_data["reason"] == "도면 불일치"
 
@@ -199,11 +195,7 @@ def test_create_resubmission_rejects_duplicate_pending(
     )
     assert first.status_code == 201
 
-    # 접수 상태로 되돌려도 대기중 요청이 남아 있으면 중복 등록 금지
-    db_session.expire_all()
-    building.current_phase = "doc_received"
-    db_session.commit()
-
+    # 대기중 요청이 남아 있으면 중복 등록 금지
     second = client.post(
         "/api/resubmissions",
         json={"mgmt_no": building.mgmt_no, "reason": "2차 사유"},
@@ -323,7 +315,7 @@ def test_list_includes_building_context(
 
     item = client.get("/api/resubmissions", headers=chief_headers).json()["items"][0]
     assert item["building_name"] == building.building_name
-    assert item["current_phase"] == "assigned"
+    assert item["current_phase"] == "doc_received"
     assert item["reviewer_group_no"] == 3
     assert item["current_due_date"] == "2026-08-15"
     assert item["cleared_due_date"] is None
@@ -422,10 +414,10 @@ def test_patch_denies_other_group_secretary(
 
 # ===== 후속 흐름 =====
 
-def test_my_reviews_hides_due_date_after_resubmission(
-    client, db_session, make_reviewer, make_building
+def test_my_reviews_reflects_secretary_actions(
+    client, db_session, make_user, make_reviewer, make_building
 ):
-    """재제출 요청 후 내 검토 대상의 제출 예정일이 사라져야 한다."""
+    """간사가 처리하기 전까지는 내 검토 대상이 그대로고, 처리 후 반영된다."""
     _, _, headers, building, _ = _setup_received_building(
         db_session, make_reviewer, make_building
     )
@@ -434,10 +426,23 @@ def test_my_reviews_hides_due_date_after_resubmission(
     assert before["report_due_date"] == "2026-08-15"
     assert before["current_phase"] == "doc_received"
 
-    client.post(
+    req_id = client.post(
         "/api/resubmissions",
         json={"mgmt_no": building.mgmt_no, "reason": "사유"},
         headers=headers,
+    ).json()["id"]
+
+    # 요청만으로는 화면이 그대로
+    mid = client.get("/api/buildings/my-reviews", headers=headers).json()["items"][0]
+    assert mid["report_due_date"] == "2026-08-15"
+    assert mid["current_phase"] == "doc_received"
+
+    # 간사가 단계 되돌리기 + 예정일 삭제
+    _, chief_headers = make_user(UserRole.CHIEF_SECRETARY)
+    client.patch(
+        f"/api/resubmissions/{req_id}",
+        json={"rollback_phase": True, "clear_due_date": True},
+        headers=chief_headers,
     )
 
     after = client.get("/api/buildings/my-reviews", headers=headers).json()["items"][0]
@@ -448,20 +453,25 @@ def test_my_reviews_hides_due_date_after_resubmission(
 def test_due_date_assigned_on_re_receive(
     client, db_session, make_user, make_reviewer, make_building
 ):
-    """재제출 요청분도 도서가 다시 접수되면 예정일이 새로 부여된다."""
+    """간사가 되돌린 뒤 도서가 다시 접수되면 예정일이 새로 부여된다."""
     _, _, headers, building, stage = _setup_received_building(
         db_session, make_reviewer, make_building
     )
-    client.post(
+    req_id = client.post(
         "/api/resubmissions",
         json={"mgmt_no": building.mgmt_no, "reason": "사유"},
         headers=headers,
+    ).json()["id"]
+    _, chief_headers = make_user(UserRole.CHIEF_SECRETARY)
+    client.patch(
+        f"/api/resubmissions/{req_id}",
+        json={"rollback_phase": True, "clear_due_date": True},
+        headers=chief_headers,
     )
     db_session.expire_all()
     assert building.current_phase == "assigned"
 
     # 총괄간사가 재제출된 도서를 접수 (예정일 명시)
-    _, chief_headers = make_user(UserRole.CHIEF_SECRETARY)
     res = client.post(
         "/api/distribution/receive",
         headers=chief_headers,
@@ -843,3 +853,261 @@ def test_re_receive_restores_due_date_after_clear(
     db_session.expire_all()
     stage = db_session.query(ReviewStage).filter_by(building_id=building.id).one()
     assert stage.report_due_date == date(2026, 9, 15)
+
+
+# ===== 간사의 단계 되돌리기 =====
+
+def test_secretary_rolls_back_phase(
+    client, db_session, make_user, make_reviewer, make_building
+):
+    """간사가 rollback_phase 로 단계를 접수 직전으로 되돌린다."""
+    _, _, headers, building, stage = _setup_received_building(
+        db_session, make_reviewer, make_building
+    )
+    req_id = client.post(
+        "/api/resubmissions",
+        json={"mgmt_no": building.mgmt_no, "reason": "사유"},
+        headers=headers,
+    ).json()["id"]
+    chief, chief_headers = make_user(UserRole.CHIEF_SECRETARY)
+
+    res = client.patch(
+        f"/api/resubmissions/{req_id}",
+        json={"rollback_phase": True},
+        headers=chief_headers,
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["rolled_back_to"] == "assigned"
+
+    db_session.expire_all()
+    assert building.current_phase == "assigned"
+    # 예정일은 별도 조작 — 되돌리기만으로는 남아 있다
+    assert stage.report_due_date == date(2026, 8, 15)
+
+    req = db_session.get(ResubmissionRequest, req_id)
+    assert req.from_phase == "doc_received"
+    assert req.to_phase == "assigned"
+    assert req.status == ResubmissionStatus.PENDING
+
+    log = (
+        db_session.query(PhaseTransitionLog)
+        .filter(PhaseTransitionLog.mgmt_no == building.mgmt_no)
+        .one()
+    )
+    assert log.trigger == "resubmit"
+    assert log.from_phase == "doc_received"
+    assert log.to_phase == "assigned"
+    assert log.actor_user_id == chief.id
+    assert str(req_id) in (log.reason or "")
+
+
+def test_rollback_from_supplement_round(
+    client, db_session, make_user, make_reviewer, make_building
+):
+    """보완 차수에서도 바로 앞 제출 단계로 되돌아간다."""
+    user, reviewer, headers = make_reviewer()
+    building = make_building(reviewer_id=reviewer.id, mgmt_no="RS-SUP1")
+    building.current_phase = "supplement_1_received"
+    building.assigned_reviewer_name = user.name
+    db_session.add(ReviewStage(
+        building_id=building.id,
+        phase=PhaseType.SUPPLEMENT_1,
+        phase_order=1,
+        doc_received_at=date(2026, 8, 1),
+        report_due_date=date(2026, 8, 15),
+    ))
+    db_session.commit()
+
+    req_id = client.post(
+        "/api/resubmissions",
+        json={"mgmt_no": building.mgmt_no, "reason": "사유"},
+        headers=headers,
+    ).json()["id"]
+    _, chief_headers = make_user(UserRole.CHIEF_SECRETARY)
+
+    res = client.patch(
+        f"/api/resubmissions/{req_id}",
+        json={"rollback_phase": True},
+        headers=chief_headers,
+    )
+    assert res.status_code == 200
+    assert res.json()["rolled_back_to"] == "preliminary"
+
+    db_session.expire_all()
+    assert building.current_phase == "preliminary"
+
+
+def test_rollback_twice_rejected(
+    client, db_session, make_user, make_reviewer, make_building
+):
+    """이미 되돌린 요청으로 또 되돌릴 수 없다."""
+    _, _, headers, building, _ = _setup_received_building(
+        db_session, make_reviewer, make_building
+    )
+    req_id = client.post(
+        "/api/resubmissions",
+        json={"mgmt_no": building.mgmt_no, "reason": "사유"},
+        headers=headers,
+    ).json()["id"]
+    _, chief_headers = make_user(UserRole.CHIEF_SECRETARY)
+
+    client.patch(
+        f"/api/resubmissions/{req_id}",
+        json={"rollback_phase": True},
+        headers=chief_headers,
+    )
+    again = client.patch(
+        f"/api/resubmissions/{req_id}",
+        json={"rollback_phase": True},
+        headers=chief_headers,
+    )
+    assert again.status_code == 400
+    assert "이미 단계를 되돌린" in again.json()["detail"]
+
+
+def test_rollback_rejected_when_not_received(
+    client, db_session, make_user, make_reviewer, make_building
+):
+    """접수 상태가 아니면 되돌릴 수 없다 (예: 사이에 검토서가 제출된 경우)."""
+    _, _, headers, building, _ = _setup_received_building(
+        db_session, make_reviewer, make_building
+    )
+    req_id = client.post(
+        "/api/resubmissions",
+        json={"mgmt_no": building.mgmt_no, "reason": "사유"},
+        headers=headers,
+    ).json()["id"]
+
+    building.current_phase = "preliminary"
+    db_session.commit()
+    _, chief_headers = make_user(UserRole.CHIEF_SECRETARY)
+
+    res = client.patch(
+        f"/api/resubmissions/{req_id}",
+        json={"rollback_phase": True},
+        headers=chief_headers,
+    )
+    assert res.status_code == 400
+    assert "도서 접수 상태가 아니" in res.json()["detail"]
+
+    db_session.expire_all()
+    assert building.current_phase == "preliminary"
+
+
+def test_manager_cannot_rollback_phase(
+    client, db_session, make_user, make_reviewer, make_building
+):
+    """관리원은 단계를 되돌릴 수 없다."""
+    _, _, headers, building, _ = _setup_received_building(
+        db_session, make_reviewer, make_building
+    )
+    req_id = client.post(
+        "/api/resubmissions",
+        json={"mgmt_no": building.mgmt_no, "reason": "사유"},
+        headers=headers,
+    ).json()["id"]
+    _, manager_headers = make_user(UserRole.MANAGER)
+
+    res = client.patch(
+        f"/api/resubmissions/{req_id}",
+        json={"rollback_phase": True},
+        headers=manager_headers,
+    )
+    assert res.status_code == 403
+
+    db_session.expire_all()
+    assert building.current_phase == "doc_received"
+
+
+def test_reviewer_cannot_rollback_phase(
+    client, db_session, make_reviewer, make_building
+):
+    """검토위원 본인도 단계를 되돌릴 수 없다."""
+    _, _, headers, building, _ = _setup_received_building(
+        db_session, make_reviewer, make_building
+    )
+    req_id = client.post(
+        "/api/resubmissions",
+        json={"mgmt_no": building.mgmt_no, "reason": "사유"},
+        headers=headers,
+    ).json()["id"]
+
+    res = client.patch(
+        f"/api/resubmissions/{req_id}",
+        json={"rollback_phase": True},
+        headers=headers,
+    )
+    assert res.status_code == 403
+
+    db_session.expire_all()
+    assert building.current_phase == "doc_received"
+
+
+def test_rollback_and_clear_and_complete_together(
+    client, db_session, make_user, make_reviewer, make_building
+):
+    """되돌리기·예정일 삭제·회신·처리완료를 한 번에 처리한다."""
+    _, _, headers, building, stage = _setup_received_building(
+        db_session, make_reviewer, make_building
+    )
+    req_id = client.post(
+        "/api/resubmissions",
+        json={"mgmt_no": building.mgmt_no, "reason": "사유"},
+        headers=headers,
+    ).json()["id"]
+    chief, chief_headers = make_user(UserRole.CHIEF_SECRETARY)
+
+    res = client.patch(
+        f"/api/resubmissions/{req_id}",
+        json={
+            "rollback_phase": True,
+            "clear_due_date": True,
+            "reply": "설계사에 재제출 요청함",
+            "status": "completed",
+        },
+        headers=chief_headers,
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert body["rolled_back_to"] == "assigned"
+    assert body["cleared_due_date"] == "2026-08-15"
+
+    db_session.expire_all()
+    assert building.current_phase == "assigned"
+    assert stage.report_due_date is None
+    req = db_session.get(ResubmissionRequest, req_id)
+    assert req.status == ResubmissionStatus.COMPLETED
+    assert req.handled_by == chief.id
+
+    audit = (
+        db_session.query(AuditLog)
+        .filter(AuditLog.action == "resubmission_update")
+        .one()
+    )
+    assert audit.after_data["rolled_back_to"] == "assigned"
+    assert audit.after_data["cleared_due_date"] == "2026-08-15"
+
+
+def test_secretary_of_other_group_cannot_rollback(
+    client, db_session, make_user, make_reviewer, make_building
+):
+    """다른 조 간사는 되돌리기도 막힌다."""
+    _, _, headers, building, _ = _setup_received_building(
+        db_session, make_reviewer, make_building, group_no=1
+    )
+    req_id = client.post(
+        "/api/resubmissions",
+        json={"mgmt_no": building.mgmt_no, "reason": "사유"},
+        headers=headers,
+    ).json()["id"]
+    _, other_headers = make_user(UserRole.SECRETARY, group_no=2)
+
+    res = client.patch(
+        f"/api/resubmissions/{req_id}",
+        json={"rollback_phase": True},
+        headers=other_headers,
+    )
+    assert res.status_code == 403
+
+    db_session.expire_all()
+    assert building.current_phase == "doc_received"
