@@ -161,7 +161,10 @@ export default function MyReviewsPage() {
       setResubmitTarget(null)
       setResubmitReason("")
       await Promise.all([fetchData(), fetchPendingResubmissions()])
-      alert("재제출 요청이 등록되었습니다. 단계가 이전 단계로 되돌아갔습니다.")
+      alert(
+        "재제출 요청이 등록되었습니다.\n" +
+        "단계와 제출 예정일은 간사가 사유를 확인한 뒤 조정합니다."
+      )
     } catch (err) {
       const msg =
         (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
