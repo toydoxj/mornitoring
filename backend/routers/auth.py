@@ -217,6 +217,97 @@ def require_roles(*roles: UserRole):
 
 # --- 엔드포인트 ---
 
+def _password_login(
+    db: Session,
+    request: Request,
+    form_data: OAuth2PasswordRequestForm,
+    *,
+    provider: str,
+    allowed_roles: tuple[UserRole, ...] | None = None,
+    require_active: bool = False,
+) -> TokenResponse:
+    """이메일/비밀번호 인증 공통 처리.
+
+    `allowed_roles` 를 주면 해당 역할만 통과시킨다(관리원 전용 로그인 등).
+    자격 증명 오류는 계정 존재 여부를 흘리지 않도록 동일한 401 문구를 쓰고,
+    자격 증명이 맞은 뒤의 역할·활성 검사는 사용자가 원인을 알 수 있게 403으로 구분한다.
+    """
+    ip = _client_ip(request)
+    user = db.query(User).filter(User.email == form_data.username).first()
+    if not user or not user.password_hash:
+        log_event(
+            "warning", "auth_login_failed",
+            email=form_data.username, reason="user_not_found", provider=provider,
+        )
+        _safe_log_action(
+            db, user_id=None, action="login_failed", target_type="user",
+            after_data={"email": form_data.username, "reason": "user_not_found", "provider": provider},
+            ip_address=ip,
+        )
+        db.commit()
+        raise HTTPException(status_code=401, detail="이메일 또는 비밀번호가 올바르지 않습니다")
+    if not verify_password(form_data.password, user.password_hash):
+        log_event(
+            "warning", "auth_login_failed",
+            email=form_data.username, reason="bad_password", provider=provider,
+        )
+        _safe_log_action(
+            db, user_id=None, action="login_failed", target_type="user", target_id=user.id,
+            after_data={"email": form_data.username, "reason": "bad_password", "provider": provider},
+            ip_address=ip,
+        )
+        db.commit()
+        raise HTTPException(status_code=401, detail="이메일 또는 비밀번호가 올바르지 않습니다")
+
+    if allowed_roles is not None and user.role not in allowed_roles:
+        log_event(
+            "warning", "auth_login_failed",
+            email=form_data.username, reason="role_not_allowed", provider=provider,
+        )
+        _safe_log_action(
+            db, user_id=None, action="login_failed", target_type="user", target_id=user.id,
+            after_data={
+                "email": form_data.username,
+                "reason": "role_not_allowed",
+                "role": user.role.value,
+                "provider": provider,
+            },
+            ip_address=ip,
+        )
+        db.commit()
+        raise HTTPException(
+            status_code=403,
+            detail="관리원 전용 로그인입니다. 다른 계정은 기존 로그인 화면을 이용해주세요",
+        )
+
+    if require_active and not user.is_active:
+        log_event(
+            "warning", "auth_login_failed",
+            email=form_data.username, reason="inactive", provider=provider,
+        )
+        _safe_log_action(
+            db, user_id=None, action="login_failed", target_type="user", target_id=user.id,
+            after_data={"email": form_data.username, "reason": "inactive", "provider": provider},
+            ip_address=ip,
+        )
+        db.commit()
+        raise HTTPException(
+            status_code=403, detail="비활성화된 계정입니다. 관리자에게 문의해주세요"
+        )
+
+    access_token = create_access_token({"sub": str(user.id), "role": user.role.value})
+    _safe_log_action(
+        db, user_id=user.id, action="login", target_type="user", target_id=user.id,
+        after_data={"provider": provider},
+        ip_address=ip,
+    )
+    db.commit()
+    return TokenResponse(
+        access_token=access_token,
+        must_change_password=user.must_change_password,
+    )
+
+
 @router.post("/login", response_model=TokenResponse)
 def login(
     request: Request,
@@ -224,37 +315,25 @@ def login(
     db: Session = Depends(get_db),
 ):
     """이메일/비밀번호 로그인"""
-    ip = _client_ip(request)
-    user = db.query(User).filter(User.email == form_data.username).first()
-    if not user or not user.password_hash:
-        log_event("warning", "auth_login_failed", email=form_data.username, reason="user_not_found")
-        _safe_log_action(
-            db, user_id=None, action="login_failed", target_type="user",
-            after_data={"email": form_data.username, "reason": "user_not_found", "provider": "password"},
-            ip_address=ip,
-        )
-        db.commit()
-        raise HTTPException(status_code=401, detail="이메일 또는 비밀번호가 올바르지 않습니다")
-    if not verify_password(form_data.password, user.password_hash):
-        log_event("warning", "auth_login_failed", email=form_data.username, reason="bad_password")
-        _safe_log_action(
-            db, user_id=None, action="login_failed", target_type="user", target_id=user.id,
-            after_data={"email": form_data.username, "reason": "bad_password", "provider": "password"},
-            ip_address=ip,
-        )
-        db.commit()
-        raise HTTPException(status_code=401, detail="이메일 또는 비밀번호가 올바르지 않습니다")
+    return _password_login(db, request, form_data, provider="password")
 
-    access_token = create_access_token({"sub": str(user.id), "role": user.role.value})
-    _safe_log_action(
-        db, user_id=user.id, action="login", target_type="user", target_id=user.id,
-        after_data={"provider": "password"},
-        ip_address=ip,
-    )
-    db.commit()
-    return TokenResponse(
-        access_token=access_token,
-        must_change_password=user.must_change_password,
+
+@router.post("/manager/login", response_model=TokenResponse)
+def manager_login(
+    request: Request,
+    form_data: OAuth2PasswordRequestForm = Depends(),
+    db: Session = Depends(get_db),
+):
+    """관리원 전용 이메일/비밀번호 로그인.
+
+    관리원은 카카오 연동 없이 업무를 보는 경우가 많아 별도 진입점을 둔다.
+    관리원이 아닌 계정은 자격 증명이 맞아도 403 으로 거부한다.
+    """
+    return _password_login(
+        db, request, form_data,
+        provider="password_manager",
+        allowed_roles=(UserRole.MANAGER,),
+        require_active=True,
     )
 
 

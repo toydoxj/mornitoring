@@ -1,4 +1,5 @@
 import axios from "axios"
+import { getLoginPath } from "@/lib/login-entry"
 
 const apiClient = axios.create({
   baseURL: process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000",
@@ -23,6 +24,7 @@ apiClient.interceptors.request.use((config) => {
 let _handlingAuthError = false
 const AUTH_REDIRECT_EXEMPT_PATHS = [
   "/api/auth/login",
+  "/api/auth/manager/login",
   "/api/auth/kakao/callback",
   "/api/auth/kakao/reconnect-login",
   "/api/auth/link-account",
@@ -39,10 +41,12 @@ apiClient.interceptors.response.use(
       const isExempt = AUTH_REDIRECT_EXEMPT_PATHS.some((p) => url.includes(p))
       if (!isExempt && !_handlingAuthError) {
         _handlingAuthError = true
+        // 관리원은 카카오 화면으로 보내면 다시 들어올 수 없으므로 진입점을 따른다
+        const loginPath = getLoginPath()
         localStorage.removeItem("access_token")
         // setTimeout 0으로 미루어 Promise.reject가 caller에 먼저 도달
         setTimeout(() => {
-          window.location.href = "/login"
+          window.location.href = loginPath
         }, 0)
       }
     }
