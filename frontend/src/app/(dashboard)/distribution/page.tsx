@@ -152,6 +152,8 @@ interface LocalFileHandle {
   getFile: () => Promise<File>
   createWritable: () => Promise<LocalWritableFileStream>
   isSameEntry?: (other: LocalHandle) => Promise<boolean>
+  /** 같은 드라이브 안에서는 rename 으로 끝나는 네이티브 이동 (Chrome 111+) */
+  move?: (destination: LocalDirectoryHandle, name?: string) => Promise<void>
 }
 
 interface LocalDirectoryHandle {
@@ -168,6 +170,8 @@ interface LocalDirectoryHandle {
   ) => Promise<LocalFileHandle>
   removeEntry: (name: string, options?: { recursive?: boolean }) => Promise<void>
   isSameEntry?: (other: LocalHandle) => Promise<boolean>
+  /** 브라우저에 따라 디렉터리 이동은 미지원 — 실패하면 복사로 폴백한다 */
+  move?: (destination: LocalDirectoryHandle, name?: string) => Promise<void>
 }
 
 type LocalHandle = LocalFileHandle | LocalDirectoryHandle
@@ -205,6 +209,8 @@ interface FolderDistributionResult {
   classified_mgmt_nos: string[]
   reviewer_counts: Record<string, number>
   details: FolderDistributionDetail[]
+  /** 네이티브 이동(rename)으로 처리된 건수. 나머지는 복사 후 삭제로 처리됐다. */
+  native_moved: number
 }
 
 interface FolderAssignmentItem {
@@ -328,6 +334,32 @@ async function copyEntry(
   }
 }
 
+/** 항목을 대상 폴더로 이동한다.
+ *
+ * 우선 네이티브 `move()` 를 시도한다. 같은 드라이브면 rename 한 번으로 끝나므로
+ * 용량과 무관하게 즉시 완료된다. 브라우저가 지원하지 않거나(특히 디렉터리)
+ * 볼륨이 다르면 기존 방식(전량 복사 후 원본 삭제)으로 폴백한다.
+ *
+ * 반환값은 네이티브 이동 성공 여부 — 결과 화면에 처리 방식을 알리는 데 쓴다.
+ */
+async function moveEntry(
+  entry: LocalHandle,
+  sourceDirectory: LocalDirectoryHandle,
+  targetDirectory: LocalDirectoryHandle
+): Promise<boolean> {
+  if (typeof entry.move === "function") {
+    try {
+      await entry.move(targetDirectory, entry.name)
+      return true
+    } catch {
+      // 미지원 / 볼륨 상이 / 권한 — 아래 복사 경로로 처리한다
+    }
+  }
+  await copyEntry(entry, targetDirectory)
+  await sourceDirectory.removeEntry(entry.name, { recursive: true })
+  return false
+}
+
 async function distributeLocalFolders({
   sourceHandle,
   targetHandle,
@@ -336,6 +368,7 @@ async function distributeLocalFolders({
   operation,
   overwrite,
   unassignedBuildingCount,
+  onProgress,
 }: {
   sourceHandle: LocalDirectoryHandle
   targetHandle: LocalDirectoryHandle
@@ -344,6 +377,7 @@ async function distributeLocalFolders({
   operation: FolderOperation
   overwrite: boolean
   unassignedBuildingCount: number
+  onProgress?: (done: number, total: number) => void
 }): Promise<FolderDistributionResult> {
   if (await isSameEntry(sourceHandle, targetHandle)) {
     throw new Error("접수 폴더와 배포 폴더는 같을 수 없습니다")
@@ -360,8 +394,17 @@ async function distributeLocalFolders({
 
   let classified = 0
   let skipped = 0
+  let nativeMoved = 0
+  // 검토위원 폴더 핸들 캐시 — 항목마다 다시 여는 왕복을 없앤다
+  const reviewerDirCache = new Map<string, LocalDirectoryHandle | null>()
 
-  for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+  const sorted = entries.sort((a, b) => a.name.localeCompare(b.name))
+  const total = sorted.length
+  let processed = 0
+
+  for (const entry of sorted) {
+    processed += 1
+    onProgress?.(processed, total)
     try {
       if (entry.kind === "directory" && await isSameEntry(entry, targetHandle)) {
         skipped += 1
@@ -409,10 +452,13 @@ async function distributeLocalFolders({
 
       const reviewerName = assignmentItem.reviewer_name
       const reviewerDirName = safeDirName(assignmentItem.folder_name)
-      const existingReviewerDir = await getDirectoryIfExists(targetHandle, reviewerDirName)
-      const reviewerDir = dryRun
-        ? existingReviewerDir
-        : await targetHandle.getDirectoryHandle(reviewerDirName, { create: true })
+      let reviewerDir = reviewerDirCache.get(reviewerDirName)
+      if (reviewerDir === undefined) {
+        reviewerDir = dryRun
+          ? await getDirectoryIfExists(targetHandle, reviewerDirName)
+          : await targetHandle.getDirectoryHandle(reviewerDirName, { create: true })
+        reviewerDirCache.set(reviewerDirName, reviewerDir)
+      }
       const exists = reviewerDir ? await entryExists(reviewerDir, entry.name) : false
 
       if (exists && !overwrite) {
@@ -433,9 +479,13 @@ async function distributeLocalFolders({
         if (exists) {
           await reviewerDir.removeEntry(entry.name, { recursive: true })
         }
-        await copyEntry(entry, reviewerDir)
         if (operation === "move") {
-          await sourceHandle.removeEntry(entry.name, { recursive: true })
+          // 같은 드라이브면 rename 한 번으로 끝난다 (미지원 시 복사 폴백)
+          if (await moveEntry(entry, sourceHandle, reviewerDir)) {
+            nativeMoved += 1
+          }
+        } else {
+          await copyEntry(entry, reviewerDir)
         }
       }
 
@@ -480,6 +530,7 @@ async function distributeLocalFolders({
       Object.entries(reviewerCounts).sort(([a], [b]) => a.localeCompare(b))
     ),
     details,
+    native_moved: nativeMoved,
   }
 }
 
@@ -508,6 +559,11 @@ export default function DistributionPage() {
   const [folderError, setFolderError] = useState<string | null>(null)
   const [isPreviewingFolders, setIsPreviewingFolders] = useState(false)
   const [isDistributingFolders, setIsDistributingFolders] = useState(false)
+  // 분배 진행률 — 건수가 많으면 수 분이 걸리므로 멈춘 것처럼 보이지 않게 한다
+  const [folderProgress, setFolderProgress] = useState<{
+    done: number
+    total: number
+  } | null>(null)
 
   const [mgmtNosInput, setMgmtNosInput] = useState("")
   const initialReceived = new Date().toISOString().slice(0, 10)
@@ -616,6 +672,7 @@ export default function DistributionPage() {
         operation: folderOperation,
         overwrite: folderOverwrite,
         unassignedBuildingCount: data.unassigned_building_count,
+        onProgress: (done, total) => setFolderProgress({ done, total }),
       })
       setFolderResult(distributionResult)
       if (!dryRun && distributionResult.classified_mgmt_nos.length > 0) {
@@ -627,6 +684,7 @@ export default function DistributionPage() {
     } finally {
       setIsPreviewingFolders(false)
       setIsDistributingFolders(false)
+      setFolderProgress(null)
     }
   }
 
@@ -932,6 +990,28 @@ export default function DistributionPage() {
             </div>
           </div>
 
+          {folderProgress && folderProgress.total > 0 && (
+            <div className="space-y-1">
+              <div className="flex justify-between text-sm text-muted-foreground">
+                <span>
+                  {isPreviewingFolders ? "확인 중" : "분배 중"} —{" "}
+                  {folderProgress.done} / {folderProgress.total}건
+                </span>
+                <span>
+                  {Math.floor((folderProgress.done / folderProgress.total) * 100)}%
+                </span>
+              </div>
+              <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
+                <div
+                  className="h-full bg-primary transition-all"
+                  style={{
+                    width: `${(folderProgress.done / folderProgress.total) * 100}%`,
+                  }}
+                />
+              </div>
+            </div>
+          )}
+
           {folderError && (
             <div className="rounded-md bg-red-50 p-3 text-sm text-red-800">
               {folderError}
@@ -954,6 +1034,19 @@ export default function DistributionPage() {
                   </Badge>
                 )}
               </div>
+
+              {/* 같은 드라이브면 rename 으로 즉시 끝나고, 아니면 복사가 일어나 느리다.
+                  어느 쪽으로 처리됐는지 알려 원인 파악을 돕는다. */}
+              {!folderResult.dry_run && folderResult.operation === "move"
+                && folderResult.classified > 0 && (
+                <p className="text-xs text-muted-foreground">
+                  {folderResult.native_moved === folderResult.classified
+                    ? "전량 빠른 이동(같은 드라이브 내 이름 변경)으로 처리됐습니다."
+                    : folderResult.native_moved === 0
+                      ? "복사 후 삭제로 처리됐습니다. 접수 폴더와 배포 폴더가 서로 다른 드라이브이거나 브라우저가 폴더 이동을 지원하지 않는 경우로, 용량에 비례해 시간이 걸립니다."
+                      : `빠른 이동 ${folderResult.native_moved}건 / 복사 후 삭제 ${folderResult.classified - folderResult.native_moved}건으로 처리됐습니다.`}
+                </p>
+              )}
 
               {Object.keys(folderResult.reviewer_counts).length > 0 && (
                 <div className="flex flex-wrap gap-2 text-sm">
