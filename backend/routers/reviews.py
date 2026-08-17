@@ -208,6 +208,15 @@ def _attach_review_file_metadata(db: Session, files: list[dict]) -> list[dict]:
     return enriched
 
 
+def _stage_recency_key(stage) -> tuple:
+    """제출 단계 최신순 비교 키. ORM 객체와 컬럼 Row 모두에 사용한다."""
+    return (
+        stage.report_submitted_at or date.min,
+        stage.phase_order,
+        stage.id or 0,
+    )
+
+
 def _latest_submitted_stage(building: Building) -> ReviewStage | None:
     """건물의 가장 최근 제출 검토 단계를 찾는다."""
     submitted_stages = [
@@ -217,21 +226,21 @@ def _latest_submitted_stage(building: Building) -> ReviewStage | None:
     ]
     if not submitted_stages:
         return None
-    return max(
-        submitted_stages,
-        key=lambda stage: (
-            stage.report_submitted_at or date.min,
-            stage.phase_order,
-            stage.id or 0,
-        ),
-    )
+    return max(submitted_stages, key=_stage_recency_key)
+
+
+def _phase_value(phase) -> str | None:
+    """검토 단계 enum/string 값을 API 표시용 문자열로 변환한다."""
+    if phase is None:
+        return None
+    return phase.value if hasattr(phase, "value") else str(phase)
 
 
 def _review_stage_phase_value(stage: ReviewStage | None) -> str | None:
     """검토 단계 enum/string 값을 API 표시용 문자열로 변환한다."""
     if stage is None:
         return None
-    return stage.phase.value if hasattr(stage.phase, "value") else str(stage.phase)
+    return _phase_value(stage.phase)
 
 
 class SeveritySummaryResponse(BaseModel):
@@ -1044,6 +1053,10 @@ def _review_upload_target(
     return None, f"{mgmt_no}_re"
 
 
+# 검토서 확인 목록은 전체 상세 의견을 훑으므로 스트리밍 청크 단위로 읽는다.
+QUALITY_CHECK_STREAM_CHUNK = 2000
+
+
 def _quality_check_base_query(db: Session, current_user: User):
     """검토서 확인 대상 후보가 되는 미처리 상세 의견 기본 쿼리."""
     query = (
@@ -1090,13 +1103,10 @@ def list_quality_checks(
     """심각도 L3/L4 또는 표현 품질 문제 대상인 검토서 확인 목록."""
     actual_user = aliased(User)
     actual_reviewer = aliased(Reviewer)
+    # 상세 의견은 수십만 행까지 늘어나므로 ORM 엔티티(특히 102열 Building)를 행마다
+    # 만들면 메모리가 폭증한다. 집계에 실제로 쓰는 컬럼만 뽑고 yield_per 로 스트리밍.
     rows = (
         _quality_check_base_query(db, current_user)
-        .add_columns(
-            Reviewer.group_no.label("assigned_group_no"),
-            User.name.label("assigned_reviewer_name"),
-            actual_reviewer.group_no.label("actual_group_no"),
-        )
         .outerjoin(Reviewer, Building.reviewer_id == Reviewer.id)
         .outerjoin(User, Reviewer.user_id == User.id)
         .outerjoin(
@@ -1107,33 +1117,60 @@ def list_quality_checks(
             ),
         )
         .outerjoin(actual_reviewer, actual_reviewer.user_id == actual_user.id)
+        .with_entities(
+            ReviewOpinionDetail.content.label("content"),
+            ReviewOpinionDetail.severity.label("severity"),
+            ReviewStage.reviewer_name.label("stage_reviewer_name"),
+            Building.id.label("building_id"),
+            Building.mgmt_no.label("mgmt_no"),
+            Building.building_name.label("building_name"),
+            Building.sido.label("sido"),
+            Building.sigungu.label("sigungu"),
+            Building.beopjeongdong.label("beopjeongdong"),
+            Building.main_lot_no.label("main_lot_no"),
+            Building.sub_lot_no.label("sub_lot_no"),
+            Building.special_lot_no.label("special_lot_no"),
+            Building.assigned_reviewer_name.label("assigned_reviewer_name"),
+            Reviewer.group_no.label("assigned_group_no"),
+            User.name.label("assigned_user_name"),
+            actual_reviewer.group_no.label("actual_group_no"),
+        )
+        # 건물별 첫 행이 표시용 검토자/조를 결정하므로 정렬 순서를 유지해야 한다.
         .order_by(
             Building.mgmt_no,
             ReviewStage.phase_order.desc(),
             ReviewOpinionDetail.row_number,
             ReviewOpinionDetail.id,
         )
-        .all()
+        .yield_per(QUALITY_CHECK_STREAM_CHUNK)
     )
 
     item_map: dict[int, dict] = {}
-    for detail, stage, building, assigned_group_no, assigned_name, actual_group_no in rows:
-        matches = match_opinion_quality(detail.content or "")
-        is_severity_target = detail.severity in ("L3", "L4")
+    for row in rows:
+        matches = match_opinion_quality(row.content or "")
+        is_severity_target = row.severity in ("L3", "L4")
         if not (is_severity_target or matches):
             continue
-        reviewer_name = (stage.reviewer_name or "").strip()
+        stage_reviewer_name = (row.stage_reviewer_name or "").strip()
+        reviewer_name = stage_reviewer_name
         if not reviewer_name:
-            reviewer_name = assigned_name or building.assigned_reviewer_name or None
-        group_no = actual_group_no if (stage.reviewer_name or "").strip() else assigned_group_no
+            reviewer_name = row.assigned_user_name or row.assigned_reviewer_name or None
+        group_no = row.actual_group_no if stage_reviewer_name else row.assigned_group_no
 
         item = item_map.setdefault(
-            building.id,
+            row.building_id,
             {
-                "building_id": building.id,
-                "mgmt_no": building.mgmt_no,
-                "full_address": _address_of(building),
-                "building_name": building.building_name,
+                "building_id": row.building_id,
+                "mgmt_no": row.mgmt_no,
+                "full_address": _format_address(
+                    row.sido,
+                    row.sigungu,
+                    row.beopjeongdong,
+                    row.main_lot_no,
+                    row.sub_lot_no,
+                    row.special_lot_no,
+                ),
+                "building_name": row.building_name,
                 "group_no": group_no,
                 "reviewer_name": reviewer_name,
                 "quality_categories": set(),
@@ -1143,8 +1180,8 @@ def list_quality_checks(
         )
         item["detail_count"] = int(item["detail_count"]) + 1
         item["quality_categories"].update(match.category for match in matches)
-        if detail.severity:
-            item["severity_levels"].add(detail.severity)
+        if row.severity:
+            item["severity_levels"].add(row.severity)
 
     items = []
     for item in sorted(item_map.values(), key=lambda value: value["mgmt_no"]):
@@ -1605,6 +1642,65 @@ def list_uploaded_files(
     return _attach_review_file_metadata(db, files)
 
 
+# 사무소별 목록에서 building_id 묶음으로 단계를 조회할 때의 IN 절 크기.
+FIRM_STAGE_LOOKUP_CHUNK = 500
+
+
+def _firm_buildings_with_latest_stage(db: Session, *filters):
+    """사무소별 목록용 건물 행과 건물별 최신 제출 단계를 함께 조회한다.
+
+    Building 엔티티(102열) 전체와 `selectinload(Building.stages)`로 모든 단계를
+    올리면 전체 조회 시 메모리가 급증하므로, 응답에 쓰는 컬럼만 뽑아 온다.
+    """
+    buildings = (
+        db.query(
+            Building.id.label("id"),
+            Building.mgmt_no.label("mgmt_no"),
+            Building.building_name.label("building_name"),
+            Building.struct_eng_firm.label("struct_eng_firm"),
+            Building.struct_eng_name.label("struct_eng_name"),
+            Building.drawing_creator_firm.label("drawing_creator_firm"),
+            Building.drawing_creator_name.label("drawing_creator_name"),
+            Building.drawing_creator_qualification.label("drawing_creator_qualification"),
+            Building.current_phase.label("current_phase"),
+            Building.final_result.label("final_result"),
+            Building.assigned_reviewer_name.label("assigned_reviewer_name"),
+            User.name.label("assigned_user_name"),
+        )
+        .outerjoin(Reviewer, Building.reviewer_id == Reviewer.id)
+        .outerjoin(User, Reviewer.user_id == User.id)
+        .filter(*filters)
+        .order_by(Building.struct_eng_firm.asc(), Building.mgmt_no.asc())
+        .all()
+    )
+
+    building_ids = [building.id for building in buildings]
+    latest_stage_by_building: dict[int, object] = {}
+    for start in range(0, len(building_ids), FIRM_STAGE_LOOKUP_CHUNK):
+        chunk = building_ids[start:start + FIRM_STAGE_LOOKUP_CHUNK]
+        stage_rows = (
+            db.query(
+                ReviewStage.building_id.label("building_id"),
+                ReviewStage.reviewer_name.label("reviewer_name"),
+                ReviewStage.report_submitted_at.label("report_submitted_at"),
+                ReviewStage.phase.label("phase"),
+                ReviewStage.phase_order.label("phase_order"),
+                ReviewStage.id.label("id"),
+            )
+            .filter(
+                ReviewStage.building_id.in_(chunk),
+                ReviewStage.report_submitted_at.isnot(None),
+            )
+            .all()
+        )
+        for stage_row in stage_rows:
+            current = latest_stage_by_building.get(stage_row.building_id)
+            if current is None or _stage_recency_key(stage_row) > _stage_recency_key(current):
+                latest_stage_by_building[stage_row.building_id] = stage_row
+
+    return buildings, latest_stage_by_building
+
+
 @router.get(
     "/struct-engineer-firms",
     response_model=list[StructEngineerFirmResponse],
@@ -1621,18 +1717,10 @@ def list_struct_engineer_firms(
 ):
     """책임구조기술자 사무소별 관련 관리번호와 검토자 목록."""
     del current_user
-    buildings = (
-        db.query(Building)
-        .options(
-            selectinload(Building.reviewer).selectinload(Reviewer.user),
-            selectinload(Building.stages),
-        )
-        .filter(
-            Building.struct_eng_firm.isnot(None),
-            func.trim(Building.struct_eng_firm) != "",
-        )
-        .order_by(Building.struct_eng_firm.asc(), Building.mgmt_no.asc())
-        .all()
+    buildings, latest_stage_by_building = _firm_buildings_with_latest_stage(
+        db,
+        Building.struct_eng_firm.isnot(None),
+        func.trim(Building.struct_eng_firm) != "",
     )
 
     grouped_items: dict[str, list[StructEngineerFirmBuildingResponse]] = {}
@@ -1644,8 +1732,8 @@ def list_struct_engineer_firms(
         if not firm:
             continue
 
-        latest_stage = _latest_submitted_stage(building)
-        reviewer_name = _reviewer_display_name_for_building(building)
+        latest_stage = latest_stage_by_building.get(building.id)
+        reviewer_name = building.assigned_user_name or building.assigned_reviewer_name
         latest_reviewer_name = latest_stage.reviewer_name if latest_stage else None
 
         if reviewer_name:
@@ -1663,7 +1751,7 @@ def list_struct_engineer_firms(
                 latest_reviewer_name=latest_reviewer_name,
                 current_phase=building.current_phase,
                 final_result=building.final_result,
-                latest_phase=_review_stage_phase_value(latest_stage),
+                latest_phase=_phase_value(latest_stage.phase if latest_stage else None),
                 latest_report_submitted_at=(
                     latest_stage.report_submitted_at if latest_stage else None
                 ),
@@ -1699,15 +1787,9 @@ def list_structural_engineer_drawing_creators(
     """구조도면 작성자 자격이 건축구조기술사인 건을 소속별로 조회한다."""
     del current_user
     qualification = func.trim(func.coalesce(Building.drawing_creator_qualification, ""))
-    buildings = (
-        db.query(Building)
-        .options(
-            selectinload(Building.reviewer).selectinload(Reviewer.user),
-            selectinload(Building.stages),
-        )
-        .filter(qualification.like("%구조기술사%"))
-        .order_by(Building.struct_eng_firm.asc(), Building.mgmt_no.asc())
-        .all()
+    buildings, latest_stage_by_building = _firm_buildings_with_latest_stage(
+        db,
+        qualification.like("%구조기술사%"),
     )
 
     grouped_items: dict[str, list[StructuralEngineerDrawingCreatorBuildingResponse]] = {}
@@ -1720,8 +1802,8 @@ def list_structural_engineer_drawing_creators(
             or (building.drawing_creator_firm or "").strip()
             or "소속 미기재"
         )
-        latest_stage = _latest_submitted_stage(building)
-        reviewer_name = _reviewer_display_name_for_building(building)
+        latest_stage = latest_stage_by_building.get(building.id)
+        reviewer_name = building.assigned_user_name or building.assigned_reviewer_name
         latest_reviewer_name = latest_stage.reviewer_name if latest_stage else None
 
         if reviewer_name:
@@ -1743,7 +1825,7 @@ def list_structural_engineer_drawing_creators(
                 latest_reviewer_name=latest_reviewer_name,
                 current_phase=building.current_phase,
                 final_result=building.final_result,
-                latest_phase=_review_stage_phase_value(latest_stage),
+                latest_phase=_phase_value(latest_stage.phase if latest_stage else None),
                 latest_report_submitted_at=(
                     latest_stage.report_submitted_at if latest_stage else None
                 ),
@@ -2834,20 +2916,39 @@ class InappropriateReviewListResponse(BaseModel):
     total: int
 
 
-def _address_of(b: Building) -> str | None:
+def _format_address(
+    sido,
+    sigungu,
+    beopjeongdong,
+    main_lot_no,
+    sub_lot_no,
+    special_lot_no,
+) -> str | None:
+    """주소 구성 필드를 표시용 한 줄 주소로 합친다(ORM 객체 없이도 사용 가능)."""
     parts: list[str] = []
-    for v in (b.sido, b.sigungu, b.beopjeongdong):
+    for v in (sido, sigungu, beopjeongdong):
         if v:
             parts.append(str(v))
-    main = b.main_lot_no or ""
-    sub = b.sub_lot_no or ""
+    main = main_lot_no or ""
+    sub = sub_lot_no or ""
     if main and sub:
         parts.append(f"{main}-{sub}")
     elif main:
         parts.append(str(main))
-    if b.special_lot_no:
-        parts.append(str(b.special_lot_no))
+    if special_lot_no:
+        parts.append(str(special_lot_no))
     return " ".join(parts) if parts else None
+
+
+def _address_of(b: Building) -> str | None:
+    return _format_address(
+        b.sido,
+        b.sigungu,
+        b.beopjeongdong,
+        b.main_lot_no,
+        b.sub_lot_no,
+        b.special_lot_no,
+    )
 
 
 @router.get("/inappropriate", response_model=InappropriateReviewListResponse)

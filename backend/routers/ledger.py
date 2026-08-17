@@ -1,14 +1,16 @@
 """통합관리대장 엑셀 Import/Export 라우터"""
 
 import logging
+import tempfile
 from pathlib import Path
 from typing import Literal
 
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException
 from pydantic import BaseModel
-from fastapi.responses import StreamingResponse
 from openpyxl import load_workbook
 from sqlalchemy.orm import Session
+from starlette.background import BackgroundTask
+from starlette.responses import FileResponse
 
 from database import get_db
 from dependencies import stream_upload_to_tempfile
@@ -155,43 +157,39 @@ def _is_technical_ledger_sheet(sheet_name: str, row3_values: list[str], row4_val
 
 def _detect_format(file_path: Path) -> str:
     """엑셀 파일의 시트 구조를 분석하여 import 방식 결정"""
+    # 관리대장은 5~10MB라 파싱 중 예외가 나도 워크북이 확실히 닫히도록 finally로 감싼다.
     wb = load_workbook(str(file_path), data_only=True, read_only=True)
-    sheet_names = wb.sheetnames
+    try:
+        has_2025 = False
+        for sn in wb.sheetnames:
+            ws = wb[sn]
+            normalized_sheet_name = _normalize_excel_text(sn)
+            row1_values = _normalized_row_values(ws, 1)
+            row3_values = _normalized_row_values(ws, 3)
+            row4_values = _normalized_row_values(ws, 4)
 
-    has_2025 = False
-    for sn in sheet_names:
-        ws = wb[sn]
-        normalized_sheet_name = _normalize_excel_text(sn)
-        row1_values = _normalized_row_values(ws, 1)
-        row3_values = _normalized_row_values(ws, 3)
-        row4_values = _normalized_row_values(ws, 4)
+            if "대상선정" in sn or (
+                "관리번호" in row1_values and "건축구분" in row1_values
+            ):
+                return "selection"
 
-        if "대상선정" in sn or (
-            "관리번호" in row1_values and "건축구분" in row1_values
-        ):
-            wb.close()
-            return "selection"
+            if "관리대장" in sn and ("1차수" in sn or "1443" in sn or "2025" in sn):
+                has_2025 = True
+                continue
 
-        if "관리대장" in sn and ("1차수" in sn or "1443" in sn or "2025" in sn):
-            has_2025 = True
-            continue
+            if "통합관리대장" in normalized_sheet_name:
+                # 통합 관리대장 시트의 Row 4 A열 확인하여 신형/구형 구분
+                row4_a = _normalize_excel_text(ws.cell(row=4, column=1).value)
+                if row4_a and "관리번호" in row4_a:
+                    return "unified_new"  # 3차수 통합본 (Row4 헤더, Row5 데이터)
+                return "unified_old"      # 기존 형식 (Row2 헤더, Row3 데이터)
 
-        if "통합관리대장" in normalized_sheet_name:
-            # 통합 관리대장 시트의 Row 4 A열 확인하여 신형/구형 구분
-            row4_a = _normalize_excel_text(ws.cell(row=4, column=1).value)
-            wb.close()
-            if row4_a and "관리번호" in row4_a:
-                return "unified_new"  # 3차수 통합본 (Row4 헤더, Row5 데이터)
-            return "unified_old"      # 기존 형식 (Row2 헤더, Row3 데이터)
+            if _is_technical_ledger_sheet(sn, row3_values, row4_values):
+                return "technical"
 
-        if _is_technical_ledger_sheet(sn, row3_values, row4_values):
-            wb.close()
-            return "technical"
-
-    wb.close()
-    if has_2025:
-        return "2025"
-    return "unified_old"
+        return "2025" if has_2025 else "unified_old"
+    finally:
+        wb.close()
 
 
 @router.post("/import")
@@ -448,9 +446,20 @@ def export_excel(
     ),
 ):
     """DB 데이터를 통합관리대장 형식의 엑셀로 export (팀장/총괄간사/간사/관리원)"""
-    output = export_ledger(db)
-    return StreamingResponse(
-        output,
+    # 완성본을 메모리에 들고 있지 않도록 tempfile로 내보낸 뒤 스트리밍한다.
+    tmp = tempfile.NamedTemporaryFile(prefix="ledger-", suffix=".xlsx", delete=False)
+    tmp_path = Path(tmp.name)
+    tmp.close()
+
+    try:
+        export_ledger(db, tmp_path)
+    except Exception:
+        tmp_path.unlink(missing_ok=True)
+        raise
+
+    return FileResponse(
+        path=tmp_path,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": "attachment; filename=management_ledger.xlsx"},
+        background=BackgroundTask(tmp_path.unlink, missing_ok=True),
     )

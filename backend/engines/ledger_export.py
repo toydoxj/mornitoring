@@ -1,8 +1,10 @@
 """DB → 통합관리대장 엑셀 Export 엔진"""
 
-from io import BytesIO
+from pathlib import Path
+from typing import Iterator
 
 from openpyxl import Workbook
+from openpyxl.cell import WriteOnlyCell
 from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
 from sqlalchemy.orm import Session
 
@@ -140,162 +142,197 @@ def _related_tech_value(building: Building, field_name: str) -> bool:
     return False
 
 
-def export_ledger(db: Session) -> BytesIO:
-    """DB 데이터를 통합관리대장 형식의 엑셀로 export
+# 건물을 한 번에 몇 건씩 읽어 시트에 흘려보낼지. 전체 로드 시 메모리 급증(OOM) 방지.
+EXPORT_CHUNK_SIZE = 300
 
-    Returns:
-        BytesIO: 엑셀 파일 바이너리 스트림
-    """
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "통합 관리대장"
 
-    # Row 1: 대분류 헤더
-    for col_letter, label in ROW1_HEADERS.items():
-        cell = ws.cell(row=1, column=col_letter_to_index(col_letter) + 1, value=label)
-        cell.font = HEADER_FONT
+def _sheet_width() -> int:
+    """양식이 사용하는 마지막 열 번호(1-based)."""
+    indices = [col_letter_to_index(FINAL_RESULT_COLUMN)]
+    for mapping in (ROW1_HEADERS, BUILDING_COLUMN_MAP, RELATED_TECH_COLUMNS, PRELIMINARY_STAGE_MAP):
+        indices.extend(col_letter_to_index(col_letter) for col_letter in mapping)
+    for supp_no in range(1, 5):
+        indices.append(
+            col_letter_to_index(SUPPLEMENT_SUBMIT_START_COLS[supp_no])
+            + max(SUPPLEMENT_SUBMIT_OFFSETS)
+        )
+        indices.append(
+            col_letter_to_index(SUPPLEMENT_REVIEW_START_COLS[supp_no])
+            + max(SUPPLEMENT_REVIEW_OFFSETS)
+        )
+    return max(indices) + 1
+
+
+def _header_cell(ws, label: str, *, filled: bool = False):
+    cell = WriteOnlyCell(ws, value=label)
+    cell.font = HEADER_FONT
+    if filled:
         cell.fill = HEADER_FILL
-        cell.alignment = CENTER_ALIGN
-        cell.border = THIN_BORDER
+    cell.alignment = CENTER_ALIGN
+    cell.border = THIN_BORDER
+    return cell
 
-    # Row 2: 상세 컬럼 헤더
-    # 건축물 기본정보
-    ws.cell(row=2, column=1, value="모니터링\n관리번호")
-    ws.cell(row=2, column=2, value="검토\n위원")
 
-    for col_letter, field_name in BUILDING_COLUMN_MAP.items():
-        col_idx = col_letter_to_index(col_letter) + 1
-        label = FIELD_TO_LABEL.get(field_name, field_name)
-        cell = ws.cell(row=2, column=col_idx, value=label)
-        cell.font = HEADER_FONT
-        cell.alignment = CENTER_ALIGN
-        cell.border = THIN_BORDER
+def _row1_cells(ws, width: int) -> list:
+    """Row 1: 대분류 헤더"""
+    row: list = [None] * width
+    for col_letter, label in ROW1_HEADERS.items():
+        row[col_letter_to_index(col_letter)] = _header_cell(ws, label, filled=True)
+    return row
 
-    for col_letter, field_name in RELATED_TECH_COLUMNS.items():
-        col_idx = col_letter_to_index(col_letter) + 1
-        label = FIELD_TO_LABEL.get(field_name, field_name)
-        cell = ws.cell(row=2, column=col_idx, value=label)
-        cell.font = HEADER_FONT
-        cell.alignment = CENTER_ALIGN
-        cell.border = THIN_BORDER
 
-    # 예비검토 헤더
-    for col_letter, field_name in PRELIMINARY_STAGE_MAP.items():
-        col_idx = col_letter_to_index(col_letter) + 1
-        label = FIELD_TO_LABEL.get(field_name, field_name)
-        cell = ws.cell(row=2, column=col_idx, value=label)
-        cell.font = HEADER_FONT
-        cell.alignment = CENTER_ALIGN
-        cell.border = THIN_BORDER
+def _row2_cells(ws, width: int) -> list:
+    """Row 2: 상세 컬럼 헤더"""
+    row: list = [None] * width
+    # A/B열은 스타일 없는 기본 라벨. A열은 아래 BUILDING_COLUMN_MAP에서 덮어쓴다.
+    row[0] = "모니터링\n관리번호"
+    row[1] = "검토\n위원"
+
+    for mapping in (BUILDING_COLUMN_MAP, RELATED_TECH_COLUMNS, PRELIMINARY_STAGE_MAP):
+        for col_letter, field_name in mapping.items():
+            label = FIELD_TO_LABEL.get(field_name, field_name)
+            row[col_letter_to_index(col_letter)] = _header_cell(ws, label)
 
     # 보완 단계 헤더 (1차~4차)
     for supp_no in range(1, 5):
-        # 제출 헤더
-        submit_start = SUPPLEMENT_SUBMIT_START_COLS[supp_no]
+        submit_start = col_letter_to_index(SUPPLEMENT_SUBMIT_START_COLS[supp_no])
         for offset, field_name in SUPPLEMENT_SUBMIT_OFFSETS.items():
-            col_idx = col_letter_to_index(submit_start) + offset + 1
             label = FIELD_TO_LABEL.get(field_name, field_name)
-            cell = ws.cell(row=2, column=col_idx, value=label)
-            cell.font = HEADER_FONT
-            cell.alignment = CENTER_ALIGN
-            cell.border = THIN_BORDER
+            row[submit_start + offset] = _header_cell(ws, label)
 
-        # 검토 헤더
-        review_start = SUPPLEMENT_REVIEW_START_COLS[supp_no]
+        review_start = col_letter_to_index(SUPPLEMENT_REVIEW_START_COLS[supp_no])
         for offset, field_name in SUPPLEMENT_REVIEW_OFFSETS.items():
-            col_idx = col_letter_to_index(review_start) + offset + 1
             label = FIELD_TO_LABEL.get(field_name, field_name)
-            cell = ws.cell(row=2, column=col_idx, value=label)
-            cell.font = HEADER_FONT
-            cell.alignment = CENTER_ALIGN
-            cell.border = THIN_BORDER
+            row[review_start + offset] = _header_cell(ws, label)
 
-    # 최종 판정 헤더
-    final_col_idx = col_letter_to_index(FINAL_RESULT_COLUMN) + 1
-    ws.cell(row=2, column=final_col_idx, value="최종\n판정결과").font = HEADER_FONT
+    # 최종 판정 헤더는 글꼴만 적용
+    final_cell = WriteOnlyCell(ws, value="최종\n판정결과")
+    final_cell.font = HEADER_FONT
+    row[col_letter_to_index(FINAL_RESULT_COLUMN)] = final_cell
+    return row
 
-    # 데이터 행 쓰기
-    buildings = (
-        db.query(Building)
-        .order_by(Building.mgmt_no)
-        .all()
-    )
 
-    # 전체 stages 일괄 조회
-    all_stages = db.query(ReviewStage).order_by(ReviewStage.phase_order).all()
-    stages_by_building: dict[int, list] = {}
-    for stage in all_stages:
-        if stage.building_id not in stages_by_building:
-            stages_by_building[stage.building_id] = []
-        stages_by_building[stage.building_id].append(stage)
+def _building_row(building: Building, stages: list, width: int) -> list:
+    """건물 1건 + 검토 단계들을 데이터 행 하나로 만든다."""
+    row: list = [None] * width
 
-    for row_offset, building in enumerate(buildings):
-        row_num = 3 + row_offset
+    for col_letter, field_name in BUILDING_COLUMN_MAP.items():
+        val = getattr(building, field_name, None)
+        row[col_letter_to_index(col_letter)] = _format_value(val, field_name)
 
-        # 기본정보 쓰기
-        for col_letter, field_name in BUILDING_COLUMN_MAP.items():
-            col_idx = col_letter_to_index(col_letter) + 1
-            val = getattr(building, field_name, None)
-            ws.cell(row=row_num, column=col_idx, value=_format_value(val, field_name))
+    for col_letter, field_name in RELATED_TECH_COLUMNS.items():
+        val = _related_tech_value(building, field_name)
+        row[col_letter_to_index(col_letter)] = _format_value(val, field_name)
 
-        for col_letter, field_name in RELATED_TECH_COLUMNS.items():
-            col_idx = col_letter_to_index(col_letter) + 1
-            val = _related_tech_value(building, field_name)
-            ws.cell(row=row_num, column=col_idx, value=_format_value(val, field_name))
+    # 검토위원명 (B열)
+    if building.assigned_reviewer_name:
+        row[1] = building.assigned_reviewer_name
+    elif building.reviewer and building.reviewer.user:
+        row[1] = building.reviewer.user.name
 
-        # 검토위원명 (B열)
-        if building.assigned_reviewer_name:
-            ws.cell(row=row_num, column=2, value=building.assigned_reviewer_name)
-        elif building.reviewer and building.reviewer.user:
-            ws.cell(row=row_num, column=2, value=building.reviewer.user.name)
+    # 최종 판정 (코드 → 한글 라벨)
+    if building.final_result:
+        row[col_letter_to_index(FINAL_RESULT_COLUMN)] = FINAL_RESULT_EXPORT_LABELS.get(
+            building.final_result, building.final_result
+        )
 
-        # 최종 판정 (코드 → 한글 라벨)
-        if building.final_result:
-            ws.cell(
-                row=row_num,
-                column=final_col_idx,
-                value=FINAL_RESULT_EXPORT_LABELS.get(
-                    building.final_result, building.final_result
-                ),
-            )
+    for stage in stages:
+        if stage.phase == PhaseType.PRELIMINARY:
+            # 예비검토
+            for col_letter, field_name in PRELIMINARY_STAGE_MAP.items():
+                val = getattr(stage, field_name, None)
+                row[col_letter_to_index(col_letter)] = _format_value(val, field_name)
+            continue
 
-        # 검토 단계 데이터 (일괄 조회에서 가져오기)
-        stages = stages_by_building.get(building.id, [])
+        # 보완 단계
+        supp_no = stage.phase_order
+        if supp_no < 1 or supp_no > 4:
+            continue
+
+        submit_start = col_letter_to_index(SUPPLEMENT_SUBMIT_START_COLS[supp_no])
+        for offset, field_name in SUPPLEMENT_SUBMIT_OFFSETS.items():
+            val = getattr(stage, field_name, None)
+            row[submit_start + offset] = _format_value(val, field_name)
+
+        review_start = col_letter_to_index(SUPPLEMENT_REVIEW_START_COLS[supp_no])
+        for offset, field_name in SUPPLEMENT_REVIEW_OFFSETS.items():
+            val = getattr(stage, field_name, None)
+            row[review_start + offset] = _format_value(val, field_name)
+
+    return row
+
+
+def _iter_buildings_with_stages(
+    db: Session,
+    chunk_size: int,
+) -> Iterator[tuple[Building, list]]:
+    """건물을 청크 단위로 읽어 (건물, 단계 목록)을 차례로 넘긴다.
+
+    전체 건물·단계를 한 번에 세션에 올리면 메모리가 급증하므로, 청크를 다 쓰면
+    세션에서 분리(expunge)해 곧바로 회수되게 한다.
+    """
+    offset = 0
+    while True:
+        buildings = (
+            db.query(Building)
+            .order_by(Building.mgmt_no)
+            .offset(offset)
+            .limit(chunk_size)
+            .all()
+        )
+        if not buildings:
+            return
+
+        stages = (
+            db.query(ReviewStage)
+            .filter(ReviewStage.building_id.in_([b.id for b in buildings]))
+            .order_by(ReviewStage.phase_order)
+            .all()
+        )
+        stages_by_building: dict[int, list] = {}
+        for stage in stages:
+            stages_by_building.setdefault(stage.building_id, []).append(stage)
+
+        for building in buildings:
+            yield building, stages_by_building.get(building.id, [])
 
         for stage in stages:
-            if stage.phase == PhaseType.PRELIMINARY:
-                # 예비검토
-                for col_letter, field_name in PRELIMINARY_STAGE_MAP.items():
-                    col_idx = col_letter_to_index(col_letter) + 1
-                    val = getattr(stage, field_name, None)
-                    ws.cell(row=row_num, column=col_idx, value=_format_value(val, field_name))
-            else:
-                # 보완 단계
-                supp_no = stage.phase_order
-                if supp_no < 1 or supp_no > 4:
-                    continue
+            db.expunge(stage)
+        for building in buildings:
+            db.expunge(building)
 
-                # 제출 정보
-                submit_start = SUPPLEMENT_SUBMIT_START_COLS[supp_no]
-                for offset, field_name in SUPPLEMENT_SUBMIT_OFFSETS.items():
-                    col_idx = col_letter_to_index(submit_start) + offset + 1
-                    val = getattr(stage, field_name, None)
-                    ws.cell(row=row_num, column=col_idx, value=_format_value(val, field_name))
+        if len(buildings) < chunk_size:
+            return
+        offset += chunk_size
 
-                # 검토 정보
-                review_start = SUPPLEMENT_REVIEW_START_COLS[supp_no]
-                for offset, field_name in SUPPLEMENT_REVIEW_OFFSETS.items():
-                    col_idx = col_letter_to_index(review_start) + offset + 1
-                    val = getattr(stage, field_name, None)
-                    ws.cell(row=row_num, column=col_idx, value=_format_value(val, field_name))
 
-    # 열 너비 자동 조정 (주요 열)
+def export_ledger(db: Session, output_path: str | Path) -> Path:
+    """DB 데이터를 통합관리대장 형식의 엑셀로 `output_path`에 기록한다.
+
+    write_only 모드라 append 한 행은 곧바로 파일로 흘러가고, 시트 전체를 메모리에
+    들고 있지 않는다.
+
+    Returns:
+        Path: 기록된 엑셀 파일 경로
+    """
+    width = _sheet_width()
+    wb = Workbook(write_only=True)
+    ws = wb.create_sheet(title="통합 관리대장")
+
+    # 열 너비 조정 (주요 열)
     ws.column_dimensions["A"].width = 15
     ws.column_dimensions["B"].width = 10
     ws.column_dimensions["K"].width = 25
 
-    output = BytesIO()
-    wb.save(output)
-    output.seek(0)
-    wb.close()
+    ws.append(_row1_cells(ws, width))
+    ws.append(_row2_cells(ws, width))
+
+    for building, stages in _iter_buildings_with_stages(db, EXPORT_CHUNK_SIZE):
+        ws.append(_building_row(building, stages, width))
+
+    output = Path(output_path)
+    try:
+        wb.save(str(output))
+    finally:
+        wb.close()
     return output
