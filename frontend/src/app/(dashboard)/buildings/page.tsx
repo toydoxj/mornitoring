@@ -28,6 +28,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import apiClient from "@/lib/api/client"
+import { describeApiError } from "@/lib/api/error"
 import type { Building, BuildingListResponse } from "@/types"
 import {
   DEPLOY_BATCH_NUMBERS,
@@ -481,11 +482,11 @@ export default function BuildingsPage() {
       )
       setReviewUploadResult(result)
       setReviewPreviewDone(result.success)
-    } catch {
+    } catch (err) {
       setReviewUploadResult({
         success: false,
         message: "검증 중 오류가 발생했습니다",
-        errors: ["서버 연결을 확인해주세요"],
+        errors: describeApiError(err, "검토서 검증에 실패했습니다"),
         warnings: [],
         changes: [],
       })
@@ -565,11 +566,11 @@ export default function BuildingsPage() {
           resetReviewUpload()
         }, 1000)
       }
-    } catch {
+    } catch (err) {
       setReviewUploadResult({
         success: false,
         message: "업로드 중 오류가 발생했습니다",
-        errors: ["서버 연결을 확인해주세요"],
+        errors: describeApiError(err, "검토서 업로드에 실패했습니다"),
         warnings: [],
         changes: [],
       })

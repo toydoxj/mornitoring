@@ -22,6 +22,7 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import apiClient from "@/lib/api/client"
+import { describeApiError } from "@/lib/api/error"
 import type {
   Building,
   BuildingListResponse,
@@ -217,11 +218,11 @@ export default function MyReviewsPage() {
       )
       setUploadResult(result)
       setPreviewDone(result.success)
-    } catch {
+    } catch (err) {
       setUploadResult({
         success: false,
         message: "검증 중 오류가 발생했습니다",
-        errors: ["서버 연결을 확인해주세요"],
+        errors: describeApiError(err, "검토서 검증에 실패했습니다"),
         warnings: [],
         changes: [],
       })
@@ -313,11 +314,11 @@ export default function MyReviewsPage() {
           setUploadResult(null)
         }, 1000)
       }
-    } catch {
+    } catch (err) {
       setUploadResult({
         success: false,
         message: "업로드 중 오류가 발생했습니다",
-        errors: ["서버 연결을 확인해주세요"],
+        errors: describeApiError(err, "검토서 업로드에 실패했습니다"),
         warnings: [],
         changes: [],
       })

@@ -1,5 +1,6 @@
 """검토서 업로드/조회 라우터"""
 
+import logging
 import tempfile
 import uuid
 import zipfile
@@ -28,6 +29,9 @@ from engines.review_extractor import extract_review_data
 from engines.opinion_text import clean_opinion_detail_content
 from engines.opinion_quality_analyzer import match_opinion_quality
 from services.business_date import business_today
+from logging_config import log_event
+
+logger = logging.getLogger(__name__)
 
 
 def _ensure_reviewer_can_access_building(
@@ -538,6 +542,24 @@ async def preview_upload(
             message="검증 통과. 변경사항을 확인하고 업로드 버튼을 눌러주세요.",
             warnings=validation.warnings,
             changes=changes,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        # 파싱 실패를 500으로 흘리면 화면에는 "서버 오류"만 남아 원인 추적이 불가능하다.
+        # 미리보기는 읽기 전용이므로 원인을 로그와 응답에 함께 남긴다.
+        logger.exception("검토서 미리보기 실패 mgmt_no=%s phase=%s", mgmt_no, phase)
+        log_event(
+            "error",
+            "review_preview_failed",
+            mgmt_no=mgmt_no,
+            phase=phase,
+            error=f"{type(exc).__name__}: {exc}",
+        )
+        return UploadResponse(
+            success=False,
+            message="검증 중 서버 오류가 발생했습니다",
+            errors=[f"검토서를 분석하지 못했습니다 ({type(exc).__name__}: {exc})"],
         )
     finally:
         tmp_path.unlink(missing_ok=True)
@@ -2270,7 +2292,6 @@ async def create_inquiry(
     `building.reviewer_id == reviewer.id`. 이름 기반 매칭은 동명이인 위험으로 제거.
     역할(role)은 무관 — REVIEWER가 아닌 사용자도 Reviewer 행이 있으면 문의 가능.
     """
-    from logging_config import log_event
     from models.inquiry import Inquiry
     from models.reviewer import Reviewer
     from services.inquiry_notify import notify_new_inquiry_to_group_secretaries
