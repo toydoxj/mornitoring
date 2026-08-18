@@ -7,7 +7,7 @@
   - clear_due_date: 해당 검토 단계의 검토서 요청 예정일 삭제
 
 요청 사유는 팀장·총괄간사·조별간사·관리원이 별도 메뉴에서 확인하며,
-간사 이상은 회신·처리 상태·단계 되돌리기·예정일 삭제를 수행할 수 있다.
+이들 모두 회신·처리 상태·단계 되돌리기·예정일 삭제를 수행할 수 있다.
 """
 
 from datetime import date, datetime, timezone
@@ -26,6 +26,7 @@ from models.reviewer import Reviewer
 from models.user import User, UserRole
 from routers.auth import get_current_user, require_roles
 from services.audit import log_action
+from services.scope import is_building_visible_to
 from services.phase_transition import (
     InvalidPhaseTransition,
     next_phase_for,
@@ -435,6 +436,56 @@ def list_my_resubmission_requests(
     )
 
 
+@router.get("/building/{mgmt_no}", response_model=ResubmissionListResponse)
+def list_building_resubmission_requests(
+    mgmt_no: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """건물별 재제출 요청 이력 — 건물 상세 화면의 반려 안내용.
+
+    가시성은 문의사항과 동일하다. 검토위원은 본인 담당 건물, 조 배정 간사는 같은 조,
+    팀장/총괄간사/관리원은 전체. 위반 시 존재를 숨기려고 404 를 반환한다.
+    """
+    building = db.query(Building).filter(Building.mgmt_no == mgmt_no).first()
+    if not building:
+        raise HTTPException(status_code=404, detail="건축물을 찾을 수 없습니다")
+    if not is_building_visible_to(current_user, building, db):
+        raise HTTPException(status_code=404, detail="건축물을 찾을 수 없습니다")
+
+    items = (
+        db.query(ResubmissionRequest)
+        .filter(ResubmissionRequest.building_id == building.id)
+        .order_by(ResubmissionRequest.created_at.desc())
+        .all()
+    )
+
+    handler_ids = {r.handled_by for r in items if r.handled_by is not None}
+    handler_map: dict[int, str] = {}
+    if handler_ids:
+        handler_map = {
+            uid: name
+            for uid, name in db.query(User.id, User.name)
+            .filter(User.id.in_(handler_ids))
+            .all()
+        }
+
+    return ResubmissionListResponse(
+        items=[
+            _to_item(
+                req,
+                building_name=building.building_name,
+                current_phase=building.current_phase,
+                handled_by_name=(
+                    handler_map.get(req.handled_by) if req.handled_by else None
+                ),
+            )
+            for req in items
+        ],
+        total=len(items),
+    )
+
+
 @router.patch("/{request_id}")
 async def update_resubmission_request(
     request_id: int,
@@ -446,12 +497,13 @@ async def update_resubmission_request(
             UserRole.TEAM_LEADER,
             UserRole.CHIEF_SECRETARY,
             UserRole.SECRETARY,
+            UserRole.MANAGER,
         )
     ),
 ):
-    """재제출 요청 처리 (간사 이상).
+    """재제출 요청 처리 (팀장·총괄간사·간사·관리원).
 
-    검토위원의 등록은 사유 접수까지이고, 실제 조치는 여기서 간사가 선택한다.
+    검토위원의 등록은 사유 접수까지이고, 실제 조치는 여기서 처리자가 선택한다.
       action=complete — 요청 수용. 단계를 접수 직전으로 되돌리고 예정일을 지운다.
                         이미 처리된 항목은 건너뛰므로 반복 호출해도 안전하다.
       action=reject   — 반려. 단계·예정일은 그대로 두고 요청자에게

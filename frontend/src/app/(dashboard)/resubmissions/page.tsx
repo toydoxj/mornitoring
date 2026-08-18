@@ -39,9 +39,10 @@ function phaseLabel(phase: string | null) {
 
 export default function ResubmissionsPage() {
   const user = useAuthStore((s) => s.user)
-  // 관리원은 확인 전용 — 처리 상태와 회신은 간사 이상만 남긴다.
+  // 재제출 요청은 간사·관리원까지 직접 처리한다 (검토위원만 확인 불가).
   const canManage =
-    !!user && ["team_leader", "chief_secretary", "secretary"].includes(user.role)
+    !!user &&
+    ["team_leader", "chief_secretary", "secretary", "manager"].includes(user.role)
 
   const [pendingItems, setPendingItems] = useState<ResubmissionRequest[]>([])
   const [pendingTotal, setPendingTotal] = useState(0)

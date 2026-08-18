@@ -17,8 +17,21 @@ import {
 import { Label } from "@/components/ui/label"
 import apiClient from "@/lib/api/client"
 import { useAuthStore } from "@/stores/authStore"
-import type { Building, ReviewStage, PhaseType, ResultType, InappropriateDecisionType } from "@/types"
-import { PHASE_LABELS, RESULT_LABELS, deployBatchLabel } from "@/types"
+import type {
+  Building,
+  ReviewStage,
+  PhaseType,
+  ResultType,
+  InappropriateDecisionType,
+  ResubmissionRequest,
+  ResubmissionListResponse,
+} from "@/types"
+import {
+  PHASE_LABELS,
+  RESULT_LABELS,
+  RESUBMISSION_STATUS_LABELS,
+  deployBatchLabel,
+} from "@/types"
 import { AttachmentItem, type AttachmentDisplay } from "@/components/AttachmentItem"
 import { Paperclip, Trash2, UserRound, X } from "lucide-react"
 import { getAdjacentManualPhases } from "@/lib/phases"
@@ -35,6 +48,15 @@ interface ReviewerOption {
   group_no: number | null
   email: string | null
   phone: string | null
+}
+
+const RESUBMISSION_STATUS_VARIANT: Record<
+  string,
+  "default" | "secondary" | "destructive" | "outline"
+> = {
+  pending: "secondary",
+  completed: "default",
+  rejected: "destructive",
 }
 
 const RESULT_VARIANT: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
@@ -97,6 +119,7 @@ export function BuildingDetailView({
     reply: string | null; status: string; created_at: string; updated_at?: string;
     attachments?: InquiryAttachmentData[]
   }[]>([])
+  const [resubmissions, setResubmissions] = useState<ResubmissionRequest[]>([])
   const [newInquiry, setNewInquiry] = useState("")
   const [newInquiryFiles, setNewInquiryFiles] = useState<File[]>([])
   const [editInquiryTarget, setEditInquiryTarget] = useState<{
@@ -152,6 +175,14 @@ export function BuildingDetailView({
           const { data: inqData } = await apiClient.get(`/api/reviews/building-inquiries/${buildingRes.data.mgmt_no}`)
           setInquiries(inqData)
         } catch { /* 문의 없음 */ }
+
+        // 재제출 요청 이력 조회 — 반려 안내를 이 화면에 남긴다
+        try {
+          const { data: resubData } = await apiClient.get<ResubmissionListResponse>(
+            `/api/resubmissions/building/${buildingRes.data.mgmt_no}`
+          )
+          setResubmissions(resubData.items)
+        } catch { /* 요청 없음 */ }
       } catch {
         // 팝업으로 열렸을 때는 화면을 이동시키지 않고 호출부에 알린다.
         if (embedded) {
@@ -894,6 +925,74 @@ export function BuildingDetailView({
           )}
         </CardContent>
       </Card>
+
+      {/* 재제출 요청 — 반려/처리 결과를 담당 검토위원이 이 화면에서 확인한다 */}
+      {resubmissions.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle>재제출 요청</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {resubmissions.map((req) => (
+              <div
+                key={req.id}
+                className={`rounded-md border p-3 space-y-1.5 ${
+                  req.status === "rejected" ? "border-destructive/40 bg-destructive/5" : ""
+                }`}
+              >
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge variant={RESUBMISSION_STATUS_VARIANT[req.status]}>
+                    {RESUBMISSION_STATUS_LABELS[req.status]}
+                  </Badge>
+                  <Badge variant="outline" className="text-xs">
+                    {PHASE_LABELS[req.phase] || req.phase}
+                  </Badge>
+                  <span className="text-xs text-muted-foreground">
+                    {req.requester_name} 요청 ·{" "}
+                    {new Date(req.created_at).toLocaleString("ko-KR")}
+                  </span>
+                </div>
+
+                <p className="whitespace-pre-wrap break-words text-sm">
+                  <span className="text-muted-foreground">사유: </span>
+                  {req.reason}
+                </p>
+
+                {req.status === "rejected" && (
+                  <p className="text-sm font-medium text-destructive">
+                    관리번호 {req.mgmt_no}은 현 도서로 검토 바랍니다.
+                  </p>
+                )}
+
+                {req.status === "completed" && (
+                  <p className="text-sm text-muted-foreground">
+                    {req.to_phase
+                      ? `단계를 ${PHASE_LABELS[req.to_phase] || req.to_phase}(으)로 되돌렸습니다.`
+                      : "요청이 처리되었습니다."}
+                    {req.cleared_due_date &&
+                      ` 검토서 요청 예정일(${req.cleared_due_date})은 삭제되었습니다.`}
+                  </p>
+                )}
+
+                {req.reply && (
+                  <p className="whitespace-pre-wrap break-words text-sm">
+                    <span className="text-muted-foreground">회신: </span>
+                    {req.reply}
+                  </p>
+                )}
+
+                {req.status !== "pending" && (
+                  <p className="text-xs text-muted-foreground">
+                    {req.handled_by_name ? `${req.handled_by_name} 처리` : "처리"}
+                    {req.handled_at &&
+                      ` · ${new Date(req.handled_at).toLocaleString("ko-KR")}`}
+                  </p>
+                )}
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
 
       {/* 문의사항 */}
       <Card>

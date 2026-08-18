@@ -3,7 +3,7 @@
 - RESUBMIT 트리거 매트릭스 (접수 상태 → 직전 단계만 허용)
 - POST /api/resubmissions: 단계 되돌림 + 제출 예정일 삭제 + 로그 2종
 - 접수 상태가 아니거나 담당이 아니면 거부, 중복 요청 거부
-- 목록 가시성: 조 배정 간사는 자기 조만, 관리원은 전체 조회 가능 / 수정 불가
+- 목록 가시성: 조 배정 간사는 자기 조만, 관리원은 전체 조회·처리 가능
 - PATCH: 처리완료 시 처리자·처리일시 기록
 """
 
@@ -252,9 +252,10 @@ def test_reviewer_cannot_list_all_requests(
     assert client.get("/api/resubmissions", headers=headers).status_code == 403
 
 
-def test_manager_can_read_but_not_update(
+def test_manager_can_read_and_update(
     client, db_session, make_user, make_reviewer, make_building
 ):
+    """관리원은 전체 조회 + 처리까지 가능하다."""
     _, _, headers, building, _ = _setup_received_building(
         db_session, make_reviewer, make_building
     )
@@ -270,12 +271,16 @@ def test_manager_can_read_but_not_update(
     assert listed.json()["total"] == 1
 
     req_id = listed.json()["items"][0]["id"]
-    denied = client.patch(
+    updated = client.patch(
         f"/api/resubmissions/{req_id}",
         json={"status": "completed"},
         headers=manager_headers,
     )
-    assert denied.status_code == 403
+    assert updated.status_code == 200
+
+    db_session.expire_all()
+    req = db_session.get(ResubmissionRequest, req_id)
+    assert req.status == ResubmissionStatus.COMPLETED
 
 
 def test_secretary_sees_only_own_group(
@@ -991,10 +996,40 @@ def test_rejected_appears_in_closed_list(
 
 # ===== 처리 권한 =====
 
-def test_manager_cannot_process(
+def test_manager_can_complete(
     client, db_session, make_user, make_reviewer, make_building
 ):
-    """관리원은 처리완료·반려 모두 불가 (조회 전용)."""
+    """관리원도 처리완료 — 단계 되돌리기·예정일 삭제가 그대로 적용된다."""
+    _, _, headers, building, stage = _setup_received_building(
+        db_session, make_reviewer, make_building
+    )
+    req_id = client.post(
+        "/api/resubmissions",
+        json={"mgmt_no": building.mgmt_no, "reason": "사유"},
+        headers=headers,
+    ).json()["id"]
+    manager, manager_headers = make_user(UserRole.MANAGER)
+
+    res = _complete(client, req_id, manager_headers)
+    assert res.status_code == 200, res.text
+
+    db_session.expire_all()
+    assert building.current_phase == "assigned"
+    assert stage.report_due_date is None
+    req = db_session.get(ResubmissionRequest, req_id)
+    assert req.status == ResubmissionStatus.COMPLETED
+    assert req.handled_by == manager.id
+
+
+def test_manager_can_reject(
+    client, db_session, make_user, make_reviewer, make_building, monkeypatch
+):
+    """관리원도 반려 — 단계·예정일은 유지되고 요청자 알림만 나간다."""
+    async def _ok(db, sender, req):
+        return True
+
+    monkeypatch.setattr("routers.resubmissions.notify_resubmission_rejected", _ok)
+
     _, _, headers, building, stage = _setup_received_building(
         db_session, make_reviewer, make_building
     )
@@ -1005,17 +1040,18 @@ def test_manager_cannot_process(
     ).json()["id"]
     _, manager_headers = make_user(UserRole.MANAGER)
 
-    for action in ("complete", "reject"):
-        res = client.patch(
-            f"/api/resubmissions/{req_id}",
-            json={"action": action},
-            headers=manager_headers,
-        )
-        assert res.status_code == 403
+    res = client.patch(
+        f"/api/resubmissions/{req_id}",
+        json={"action": "reject"},
+        headers=manager_headers,
+    )
+    assert res.status_code == 200, res.text
 
     db_session.expire_all()
     assert building.current_phase == "doc_received"
     assert stage.report_due_date == date(2026, 8, 15)
+    req = db_session.get(ResubmissionRequest, req_id)
+    assert req.status == ResubmissionStatus.REJECTED
 
 
 def test_reviewer_cannot_process(
@@ -1376,22 +1412,21 @@ def test_revert_rejected_request_only_changes_status(
 def test_revert_requires_manage_permission(
     client, db_session, make_user, make_reviewer, make_building
 ):
-    """관리원·다른 조 간사는 복구할 수 없다."""
-    _, _, headers, building, stage = _setup_received_building(
+    """검토위원·다른 조 간사는 복구할 수 없다 (관리원은 가능)."""
+    _, _, reviewer_headers, building, stage = _setup_received_building(
         db_session, make_reviewer, make_building, group_no=1
     )
     req_id = client.post(
         "/api/resubmissions",
         json={"mgmt_no": building.mgmt_no, "reason": "사유"},
-        headers=headers,
+        headers=reviewer_headers,
     ).json()["id"]
     _, chief_headers = make_user(UserRole.CHIEF_SECRETARY)
     _complete(client, req_id, chief_headers)
 
-    _, manager_headers = make_user(UserRole.MANAGER)
     _, other_headers = make_user(UserRole.SECRETARY, group_no=2)
 
-    for hdr in (manager_headers, other_headers):
+    for hdr in (reviewer_headers, other_headers):
         res = client.patch(
             f"/api/resubmissions/{req_id}",
             json={"action": "revert"},
@@ -1402,3 +1437,104 @@ def test_revert_requires_manage_permission(
     db_session.expire_all()
     assert building.current_phase == "assigned"
     assert stage.report_due_date is None
+
+    # 관리원은 조 제한 없이 복구할 수 있다
+    _, manager_headers = make_user(UserRole.MANAGER)
+    res = client.patch(
+        f"/api/resubmissions/{req_id}",
+        json={"action": "revert"},
+        headers=manager_headers,
+    )
+    assert res.status_code == 200, res.text
+
+    db_session.expire_all()
+    assert building.current_phase == "doc_received"
+    assert stage.report_due_date == date(2026, 8, 15)
+
+
+# ===== 건물별 이력 (건물 상세 화면의 반려 안내) =====
+
+def test_building_history_shows_rejection_to_assigned_reviewer(
+    client, db_session, make_user, make_reviewer, make_building, monkeypatch
+):
+    """담당 검토위원은 건물 상세에서 반려 결과와 회신을 볼 수 있다."""
+    async def _ok(db, sender, req):
+        return True
+
+    monkeypatch.setattr("routers.resubmissions.notify_resubmission_rejected", _ok)
+
+    _, _, headers, building, _ = _setup_received_building(
+        db_session, make_reviewer, make_building
+    )
+    req_id = client.post(
+        "/api/resubmissions",
+        json={"mgmt_no": building.mgmt_no, "reason": "사유"},
+        headers=headers,
+    ).json()["id"]
+    chief, chief_headers = make_user(UserRole.CHIEF_SECRETARY)
+    client.patch(
+        f"/api/resubmissions/{req_id}",
+        json={"action": "reject", "reply": "도서 이상 없음"},
+        headers=chief_headers,
+    )
+
+    res = client.get(
+        f"/api/resubmissions/building/{building.mgmt_no}", headers=headers
+    )
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["total"] == 1
+    item = body["items"][0]
+    assert item["status"] == "rejected"
+    assert item["reply"] == "도서 이상 없음"
+    assert item["handled_by_name"] == chief.name
+    assert item["handled_at"] is not None
+
+
+def test_building_history_hidden_from_other_reviewer(
+    client, db_session, make_reviewer, make_building
+):
+    """담당이 아닌 검토위원에게는 건물 존재 자체를 숨긴다 (404)."""
+    _, _, headers, building, _ = _setup_received_building(
+        db_session, make_reviewer, make_building
+    )
+    client.post(
+        "/api/resubmissions",
+        json={"mgmt_no": building.mgmt_no, "reason": "사유"},
+        headers=headers,
+    )
+    _, _, other_headers = make_reviewer()
+
+    res = client.get(
+        f"/api/resubmissions/building/{building.mgmt_no}", headers=other_headers
+    )
+    assert res.status_code == 404
+
+
+def test_building_history_group_scope_for_secretary(
+    client, db_session, make_user, make_reviewer, make_building
+):
+    """조 배정 간사는 자기 조 건물만, 관리원은 전체를 본다."""
+    _, _, headers, building, _ = _setup_received_building(
+        db_session, make_reviewer, make_building, group_no=1
+    )
+    client.post(
+        "/api/resubmissions",
+        json={"mgmt_no": building.mgmt_no, "reason": "사유"},
+        headers=headers,
+    )
+
+    _, other_headers = make_user(UserRole.SECRETARY, group_no=2)
+    assert client.get(
+        f"/api/resubmissions/building/{building.mgmt_no}", headers=other_headers
+    ).status_code == 404
+
+    _, own_headers = make_user(UserRole.SECRETARY, group_no=1)
+    assert client.get(
+        f"/api/resubmissions/building/{building.mgmt_no}", headers=own_headers
+    ).json()["total"] == 1
+
+    _, manager_headers = make_user(UserRole.MANAGER)
+    assert client.get(
+        f"/api/resubmissions/building/{building.mgmt_no}", headers=manager_headers
+    ).json()["total"] == 1

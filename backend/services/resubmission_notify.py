@@ -51,7 +51,12 @@ async def notify_resubmission_rejected(
         return False
 
     title, message = compose_rejected_message(req)
-    link_url = f"{settings.frontend_base_url}/my-reviews"
+    # 반려 내역은 건물 상세 화면에 남으므로 알림도 그 화면으로 보낸다.
+    link_url = (
+        f"{settings.frontend_base_url}/buildings/{req.building_id}?from=my-reviews"
+        if req.building_id
+        else f"{settings.frontend_base_url}/my-reviews"
+    )
 
     def _write_log(*, is_sent: bool, error: str | None) -> None:
         db.add(NotificationLog(
