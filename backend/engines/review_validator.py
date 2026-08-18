@@ -219,16 +219,29 @@ def validate_review_file(
         result.add_error(f"엑셀 파일을 열 수 없습니다: {str(e)}")
         return result
 
-    # 7. 시트 수 검증
+    # 7. 시트 수 검증 — 차트 시트가 섞여 있으면 셀 접근 자체가 불가능(TypeError)하므로 여기서 중단한다
     if len(wb.sheetnames) > 1:
-        result.add_error(f"시트가 {len(wb.sheetnames)}개입니다. 검토서는 1개의 시트만 있어야 합니다.")
+        result.add_error(
+            f"시트가 {len(wb.sheetnames)}개입니다({', '.join(wb.sheetnames)}). "
+            "검토서는 1개의 시트만 있어야 합니다. 나머지 시트를 삭제하고 다시 업로드해주세요."
+        )
+        wb.close()
+        return result
 
-    # 6. 시트명 검증
-    sheet_name = wb.sheetnames[0]
+    # 6. 시트명 검증 — 차트 시트에는 셀이 없어 wb.sheetnames[0] 대신 워크시트만 고른다
+    worksheets = wb.worksheets
+    if not worksheets:
+        result.add_error(
+            "검토서 시트를 찾을 수 없습니다. 차트 시트만 있는 파일은 검증할 수 없습니다."
+        )
+        wb.close()
+        return result
+
+    ws = worksheets[0]
+    sheet_name = ws.title
     if "검토서" not in sheet_name:
         result.add_warning(f"시트명이 '{sheet_name}'입니다. '검토서(1차)' 형식이어야 합니다.")
 
-    ws = wb[sheet_name]
     is_legacy_form = _is_legacy_review_form(ws)
     if is_legacy_form:
         result.add_warning(LEGACY_REVIEW_FORM_WARNING)

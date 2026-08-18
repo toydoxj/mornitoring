@@ -80,7 +80,8 @@ def extract_review_data(file_path: str | Path) -> dict:
 
     try:
         wb = load_workbook(str(file_path), data_only=True, read_only=True)
-        ws = wb[wb.sheetnames[0]]
+        # 차트 시트는 셀 접근이 불가능하므로 워크시트만 대상으로 한다
+        ws = wb.worksheets[0]
 
         # 검토결과 (H4)
         result_val = _cell_str(ws, "H4")
