@@ -34,7 +34,10 @@ def test_health_check_returns_request_id_header(client):
 def test_root_health_check_accepts_render_probe(client):
     res = client.get("/")
     assert res.status_code == 200
-    assert res.json() == {"status": "ok"}
+    body = res.json()
+    assert body["status"] == "ok"
+    # 배포 확인용 커밋 SHA가 함께 실린다
+    assert body["commit"]
     assert "X-Request-ID" in res.headers
 
     head_res = client.head("/")

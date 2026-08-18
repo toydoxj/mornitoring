@@ -69,6 +69,11 @@ class Settings(BaseSettings):
     db_max_overflow: int = 10
     db_pool_timeout_seconds: int = 10
 
+    # 배포된 커밋 SHA. Render가 배포 시 RENDER_GIT_COMMIT으로 자동 주입한다.
+    # 헬스체크로 노출해 "지금 운영에 어떤 코드가 떠 있는지"를 밖에서 확인할 수 있게 한다.
+    # 로컬 실행 시에는 비어 있다.
+    render_git_commit: str = ""
+
     @property
     def sqlalchemy_database_url(self) -> str:
         return get_sqlalchemy_database_url(self.database_url)

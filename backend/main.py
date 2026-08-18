@@ -33,6 +33,9 @@ from routers import (
 setup_logging()
 logger = logging.getLogger(__name__)
 
+# 배포된 커밋 짧은 SHA. 로컬 실행이면 "local".
+DEPLOYED_COMMIT = settings.render_git_commit[:7] or "local"
+
 
 class RequestLoggingMiddleware(BaseHTTPMiddleware):
     """요청 단위 요약 로깅 + X-Request-ID 부여.
@@ -106,6 +109,8 @@ async def _purge_expired_link_sessions_loop() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Render 로그 첫 줄에서 어떤 버전이 떠 있는지 바로 확인할 수 있게 한다
+    log_event("info", "app_started", commit=DEPLOYED_COMMIT)
     purge_task = asyncio.create_task(_purge_expired_link_sessions_loop())
     try:
         yield
@@ -161,11 +166,16 @@ app.include_router(
 )
 
 
+def _health_payload() -> dict:
+    """헬스체크 응답. commit으로 배포 반영 여부를 밖에서 확인한다."""
+    return {"status": "ok", "commit": DEPLOYED_COMMIT}
+
+
 @app.get("/api/health")
 async def health_check():
-    return {"status": "ok"}
+    return _health_payload()
 
 
 @app.api_route("/", methods=["GET", "HEAD"])
 async def root_health_check():
-    return {"status": "ok"}
+    return _health_payload()
