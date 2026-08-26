@@ -45,6 +45,7 @@ REVIEW_RESULT_ALIASES = {
     "재계산": "재계산",
     "보완": "재계산",
     "부적합": "재계산",
+    "이의신청": "이의신청",
 }
 
 
@@ -182,6 +183,7 @@ def validate_review_file(
     2. 관리번호 일치 (파일명 vs 내부 C4)
     3. 검토위원 일치 (기대 검토위원 vs F4)
     4. 적정성 검토 결과가 "적합"이면 부적합유형1은 "적합", 나머지 빈칸
+       (검토결과(H4)가 "이의신청"이면 상세의견/심각도 기준 불일치 검증은 건너뜀)
     5. 적정성 검토 결과에 내용이 있는데 부적합유형이 "적합" 또는 비어있는 경우
     6. 차수 라벨 검증 (시트명 + 절차 C5)
        - expected_phase=preliminary → "1차 적정성 검토" / "검토서(1차)"
@@ -317,7 +319,7 @@ def validate_review_file(
     review_result_value = _cell_str(ws, "H4")  # 검토결과
     expected_review_result, expected_reason = _expected_review_result(opinion_parse)
     normalized_review_result = _normalized_review_result(review_result_value)
-    if normalized_review_result != expected_review_result:
+    if normalized_review_result != expected_review_result and normalized_review_result != "이의신청":
         current_label = review_result_value or "빈값"
         message = (
             f"검토결과(H4)는 상세의견/심각도 기준 '{expected_review_result}'이어야 합니다. "
