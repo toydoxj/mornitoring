@@ -9,6 +9,7 @@
 별도 세션(SessionLocal)을 직접 열고 닫는다.
 """
 
+import asyncio
 import json
 import logging
 import time
@@ -162,6 +163,41 @@ def delete_conversation(
     db.commit()
 
 
+def _save_assistant_message(
+    *,
+    conversation_id: int,
+    content: str,
+    sql_log: list[dict],
+    input_tokens: int,
+    output_tokens: int,
+    latency_ms: int,
+) -> int:
+    """어시스턴트 답변을 이력에 저장하고 메시지 id를 돌려준다(동기, 스레드 실행용)."""
+    save_db = SessionLocal()
+    try:
+        message = StatsChatMessage(
+            conversation_id=conversation_id,
+            role=StatsChatRole.ASSISTANT,
+            content=content,
+            sql_log=json.dumps(sql_log, ensure_ascii=False) if sql_log else None,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            latency_ms=latency_ms,
+        )
+        save_db.add(message)
+        # 대화 목록을 최신순으로 정렬하려면 스레드의 updated_at 도 함께 올린다.
+        save_db.query(StatsChatConversation).filter(
+            StatsChatConversation.id == conversation_id
+        ).update({StatsChatConversation.updated_at: func.now()})
+        save_db.commit()
+        return message.id
+    except Exception:
+        save_db.rollback()
+        raise
+    finally:
+        save_db.close()
+
+
 @router.post("/ask")
 def ask(
     payload: AskRequest,
@@ -245,7 +281,13 @@ def ask(
                     input_tokens = data.get("input_tokens", 0)
                     output_tokens = data.get("output_tokens", 0)
                     continue
-                if event_name == "error":
+                # `final` 은 오류로 끝나면 오지 않는다. 화면에 이미 보낸 부분 답변과
+                # 조회 기록을 이력에도 남기려면 이벤트마다 여기서 함께 쌓아둔다.
+                if event_name == "delta":
+                    content += str(data.get("text", ""))
+                elif event_name == "sql":
+                    sql_log.append(dict(data))
+                elif event_name == "error":
                     # 오류로 끝난 답변을 정상 완료로 저장하면 이력이 왜곡된다.
                     error_message = str(data.get("message", "")) or "원인 미상"
                 yield sse_frame(event_name, data)
@@ -265,30 +307,27 @@ def ask(
                 else f"오류: {error_message}"
             )
 
-        message_id = None
-        save_db = SessionLocal()
+        # 동기 SQLAlchemy 호출이라 그대로 실행하면 저장하는 동안 이벤트 루프가
+        # 멈춘다(풀 대기 시 최대 pool_timeout). 스레드로 넘긴다.
         try:
-            message = StatsChatMessage(
+            message_id = await asyncio.to_thread(
+                _save_assistant_message,
                 conversation_id=conversation_id,
-                role=StatsChatRole.ASSISTANT,
                 content=content,
-                sql_log=json.dumps(sql_log, ensure_ascii=False) if sql_log else None,
+                sql_log=sql_log,
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
                 latency_ms=int((time.perf_counter() - started) * 1000),
             )
-            save_db.add(message)
-            # 대화 목록을 최신순으로 정렬하려면 스레드의 updated_at 도 함께 올린다.
-            save_db.query(StatsChatConversation).filter(
-                StatsChatConversation.id == conversation_id
-            ).update({StatsChatConversation.updated_at: func.now()})
-            save_db.commit()
-            message_id = message.id
         except Exception:
             logger.exception("stats_chat_save_failed")
-            save_db.rollback()
-        finally:
-            save_db.close()
+            # 이력에 답변이 없는데 정상 완료로 알리면 다음 질문에서 문맥이 깨진다.
+            yield sse_frame(
+                "error",
+                {"message": "답변은 생성했으나 대화 이력 저장에 실패했습니다."},
+            )
+            message_id = None
+            error_message = error_message or "대화 이력 저장 실패"
 
         yield sse_frame(
             "done",

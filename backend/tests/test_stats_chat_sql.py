@@ -69,7 +69,21 @@ BLOCKED_QUERIES = [
         "SELECT before_data FROM audit_logs",
         "테이블",
     ),
-    ("WITH users AS (SELECT 1 AS x) SELECT x FROM users", "CTE 이름"),
+    # 안쪽 CTE 이름으로 바깥의 금지 테이블을 가리려는 시도
+    (
+        "SELECT id FROM audit_logs "
+        "WHERE EXISTS (WITH audit_logs AS (SELECT 1 AS x) SELECT x FROM audit_logs)",
+        "테이블",
+    ),
+    # JOIN USING 의 조인 키는 Column 이 아니라 Identifier 로 파싱된다
+    (
+        "WITH probe AS (SELECT 'a@b.c' AS email) "
+        "SELECT u.name FROM users u JOIN probe USING (email)",
+        "컬럼",
+    ),
+    # 스키마를 붙여 허용목록 이름으로 위장하려는 시도
+    ("SELECT evil.sum(1) FROM buildings", "스키마"),
+    ("SELECT public.count(1) FROM buildings", "스키마"),
 ]
 
 # 실무에서 자주 쓰는 형태 — 허용목록 때문에 막히면 안 된다.
@@ -97,6 +111,11 @@ FUNCTION_HEAVY_QUERIES = [
         "SELECT b.mgmt_no FROM buildings b "
         "WHERE EXISTS (SELECT 1 FROM review_stages s WHERE s.building_id = b.id)"
     ),
+    # BOOL_OR/BOOL_AND 는 sqlglot 에서 LOGICAL_OR/LOGICAL_AND 로 정규화된다
+    "SELECT sido, BOOL_OR(is_high_rise) FROM buildings GROUP BY sido",
+    "SELECT sido, BOOL_AND(is_multi_use) FROM buildings GROUP BY sido",
+    # CTE 이름이 실제 테이블 이름과 같아도 스코프상 CTE를 가리키므로 허용된다
+    "WITH users AS (SELECT 1 AS x) SELECT x FROM users",
 ]
 
 

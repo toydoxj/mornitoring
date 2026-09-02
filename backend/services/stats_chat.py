@@ -123,16 +123,20 @@ def build_input_items(
     return items
 
 
-# 응답 항목에는 들어 있지만 다음 요청의 input 으로는 보낼 수 없는 필드.
-# 그대로 되돌려 보내면 400 Unknown parameter 가 난다.
-OUTPUT_ONLY_FIELDS = ("status",)
+# `status` 를 그대로 되돌려 보내면 400 Unknown parameter 가 나는 항목 유형.
+# 반대로 assistant message 는 status 가 필수라서 지우면 안 된다.
+STATUS_UNSUPPORTED_ITEM_TYPES = frozenset({"function_call", "reasoning"})
 
 
 def _to_input_item(item: Any) -> dict[str, Any]:
-    """응답 output 항목을 다음 요청의 input 항목으로 변환한다."""
+    """응답 output 항목을 다음 요청의 input 항목으로 변환한다.
+
+    항목 유형별로 다르게 다뤄야 한다. function_call·reasoning 은 status 를 받지
+    않아 지워야 하고, assistant message 는 status 가 필수라 그대로 둔다.
+    """
     data = item.model_dump(exclude_none=True)
-    for field in OUTPUT_ONLY_FIELDS:
-        data.pop(field, None)
+    if data.get("type") in STATUS_UNSUPPORTED_ITEM_TYPES:
+        data.pop("status", None)
     return data
 
 

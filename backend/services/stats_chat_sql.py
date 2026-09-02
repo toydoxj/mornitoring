@@ -4,14 +4,16 @@ LLM이 생성한 SQL을 그대로 실행하지 않는다. 실행 전에 sqlglot 
 AST 수준에서 다음을 모두 만족하는지 검사하고, 하나라도 어긋나면 거부한다.
 
   1. 문장이 정확히 1개이고 SELECT(또는 WITH ... SELECT / UNION)일 것
-  2. 참조 테이블이 화이트리스트 안에 있을 것
-     (CTE 별칭은 예외지만, 실제 테이블 이름과 같은 CTE 이름은 금지 — 그렇지
-      않으면 `WITH audit_logs AS (...)` 로 화이트리스트를 통째로 우회할 수 있다)
+  2. 참조 테이블이 화이트리스트 안에 있을 것.
+     CTE 별칭은 예외이되 가시 범위를 스코프 단위로 따진다 — 전역으로 다루면
+     안쪽 CTE 이름으로 바깥의 금지 테이블을 가릴 수 있다.
   3. 개인정보·자격증명 컬럼을 건드리지 않을 것
+     (`JOIN ... USING (email)` 의 조인 키도 같이 본다)
   4. `*` 와 행 전체 참조(`SELECT u FROM users u`)를 쓰지 않을 것
      (COUNT(*) 만 허용) — 컬럼 블랙리스트 우회 방지
-  5. 함수는 허용목록(ALLOWED_FUNCTIONS)에 있는 것만 호출할 것.
-     블랙리스트는 주석 삽입(`pg_sleep/**/(1)`)으로 뚫려서 허용목록으로 뒤집었다.
+  5. 함수는 허용목록(ALLOWED_FUNCTIONS)에 있는 것만, 스키마 한정자 없이 호출할 것.
+     블랙리스트는 주석 삽입(`pg_sleep/**/(1)`)으로 뚫려서 허용목록으로 뒤집었고,
+     `evil.sum(1)` 처럼 한정자를 붙이면 허용 이름으로 위장할 수 있어 함께 막는다.
 
 검증을 통과한 SQL도 그대로 실행하지 않고 `SELECT * FROM (...) LIMIT n` 으로
 한 번 감싸 행수를 강제 제한하며, READ ONLY 트랜잭션과 statement_timeout 안에서
@@ -23,12 +25,11 @@ from __future__ import annotations
 import datetime as dt
 import decimal
 import time
-from functools import lru_cache
 from typing import Any
 
 import sqlglot
 from sqlglot import exp
-from sqlalchemy import inspect as sa_inspect, text
+from sqlalchemy import text
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -89,6 +90,8 @@ ALLOWED_FUNCTIONS: frozenset[str] = frozenset({
     # 집계
     "count", "sum", "avg", "min", "max", "stddev", "variance",
     "groupconcat", "percentilecont", "percentiledisc",
+    # BOOL_OR / BOOL_AND (건축물 boolean 통계에 쓴다)
+    "logicalor", "logicaland",
     # 수치
     "abs", "round", "ceil", "ceiling", "floor", "trunc", "mod", "power", "sqrt",
     "greatest", "least",
@@ -163,20 +166,68 @@ def _func_name(node: exp.Expression) -> str:
     return node.sql_name() or ""
 
 
-@lru_cache(maxsize=1)
-def _real_table_names() -> frozenset[str]:
-    """DB에 실제로 존재하는 테이블 이름 집합 (프로세스 1회 조회 후 캐시).
+def _check_table(table: exp.Table, visible_ctes: frozenset[str]) -> None:
+    """테이블 참조 1건이 정책에 맞는지 본다."""
+    name = (table.name or "").lower()
+    if not name:
+        return
+    schema = (table.db or "").lower()
+    if schema and schema != "public":
+        raise SqlNotAllowed(f"허용되지 않는 스키마입니다: {schema}")
+    # 스키마를 명시한 참조는 언제나 실제 테이블이므로 CTE로 취급하지 않는다.
+    if not schema and name in visible_ctes:
+        return
+    if name not in ALLOWED_TABLES:
+        allowed = ", ".join(sorted(ALLOWED_TABLES))
+        raise SqlNotAllowed(
+            f"조회할 수 없는 테이블입니다: {name}. 허용 테이블: {allowed}"
+        )
 
-    CTE 이름이 실제 테이블 이름과 같으면 화이트리스트 검사를 통째로 우회할 수
-    있어(`WITH audit_logs AS (...) SELECT ... FROM audit_logs`), 그런 CTE 이름을
-    아예 금지하기 위해 필요하다.
+
+def _with_node(node: exp.Expression) -> exp.With | None:
+    """노드에 달린 WITH 절. sqlglot 버전에 따라 키가 `with_`/`with` 로 갈린다."""
+    for key in ("with_", "with"):
+        candidate = node.args.get(key)
+        if isinstance(candidate, exp.With):
+            return candidate
+    return None
+
+
+def _check_relations(node: exp.Expression, visible_ctes: frozenset[str]) -> None:
+    """쿼리 스코프 단위로 테이블 참조를 검사한다.
+
+    CTE 이름을 쿼리 전체에서 유효한 것처럼 다루면
+    `SELECT x FROM secret WHERE EXISTS (WITH secret AS (...) SELECT ...)` 처럼
+    안쪽 CTE 이름으로 바깥의 금지 테이블을 가릴 수 있다. PostgreSQL 의 실제
+    가시성 규칙대로, CTE는 자신이 선언된 WITH 절의 뒤쪽 형제와 본문에서만
+    보이게 한다(자기 자신은 보이지 않으므로 자기 참조는 실제 테이블로 판정).
     """
-    try:
-        names = {name.lower() for name in sa_inspect(default_engine).get_table_names()}
-    except SQLAlchemyError:
-        # 메타데이터를 못 읽어도 최소한 화이트리스트 테이블 이름은 막는다.
-        names = set()
-    return frozenset(names | set(ALLOWED_TABLES))
+    with_node = _with_node(node)
+    scope_visible = set(visible_ctes)
+    if with_node is not None:
+        for cte in with_node.expressions:
+            _check_relations(cte.this, frozenset(scope_visible))
+            cte_name = (cte.alias_or_name or "").lower()
+            if cte_name:
+                scope_visible.add(cte_name)
+    frozen = frozenset(scope_visible)
+
+    def _prune(child: exp.Expression) -> bool:
+        if child is node:
+            return False
+        if child is with_node:
+            return True  # 위에서 이미 스코프 규칙대로 처리했다
+        if _with_node(child) is not None:
+            # 자체 WITH 를 가진 하위 쿼리는 별도 스코프라 재귀로 넘긴다
+            _check_relations(child, frozen)
+            return True
+        return False
+
+    for child in node.walk(prune=_prune):
+        if child is with_node:
+            continue
+        if isinstance(child, exp.Table):
+            _check_table(child, frozen)
 
 
 def validate_sql(sql: str) -> str:
@@ -211,33 +262,9 @@ def validate_sql(sql: str) -> str:
                 "(COUNT(*) 는 허용)"
             )
 
+    _check_relations(tree, frozenset())
+
     cte_names = _cte_aliases(tree)
-    # CTE 이름이 실제 테이블 이름과 같으면 그 이름의 테이블 참조가 CTE인지 실제
-    # 테이블인지 구분할 수 없어 검사가 무력화된다. 그런 이름은 아예 금지한다.
-    real_tables = _real_table_names()
-    for cte_name in sorted(cte_names):
-        if cte_name in real_tables:
-            raise SqlNotAllowed(
-                f"CTE 이름이 실제 테이블 이름과 같습니다: {cte_name}. "
-                "다른 이름을 쓰세요."
-            )
-
-    for table in tree.find_all(exp.Table):
-        name = (table.name or "").lower()
-        if not name:
-            continue
-        schema = (table.db or "").lower()
-        if schema and schema != "public":
-            raise SqlNotAllowed(f"허용되지 않는 스키마입니다: {schema}")
-        # 스키마를 명시한 참조는 언제나 실제 테이블이므로 CTE로 취급하지 않는다.
-        if not schema and name in cte_names:
-            continue
-        if name not in ALLOWED_TABLES:
-            allowed = ", ".join(sorted(ALLOWED_TABLES))
-            raise SqlNotAllowed(
-                f"조회할 수 없는 테이블입니다: {name}. 허용 테이블: {allowed}"
-            )
-
     # 테이블 자체를 가리키는 이름(별칭 포함) — 아래 whole-row 참조 검사에 쓴다.
     row_refs: set[str] = set(cte_names)
     for table in tree.find_all(exp.Table):
@@ -245,6 +272,14 @@ def validate_sql(sql: str) -> str:
             row_refs.add(table.name.lower())
         if table.alias:
             row_refs.add(table.alias.lower())
+
+    # `JOIN t USING (email)` 의 email 은 Column 이 아니라 Identifier 로 파싱되어
+    # 아래 Column 검사에 걸리지 않는다. 조인 키도 같은 기준으로 막는다.
+    for join in tree.find_all(exp.Join):
+        for identifier in join.args.get("using") or []:
+            key = (identifier.name or "").lower()
+            if key in BLOCKED_COLUMNS:
+                raise SqlNotAllowed(f"조회할 수 없는 컬럼입니다: {key}")
 
     for column in tree.find_all(exp.Column):
         col_name = (column.name or "").lower()
@@ -259,6 +294,12 @@ def validate_sql(sql: str) -> str:
             )
 
     for func_node in tree.find_all(exp.Func):
+        # `evil.sum(1)` 처럼 스키마를 붙이면 허용목록에 있는 이름으로 위장한
+        # 사용자 정의 함수를 부를 수 있다. 한정자가 붙은 호출은 전부 거부한다.
+        if isinstance(func_node.parent, exp.Dot):
+            raise SqlNotAllowed(
+                "스키마를 붙인 함수 호출은 허용하지 않습니다. 함수 이름만 쓰세요."
+            )
         raw_name = _func_name(func_node)
         if _normalize_func_name(raw_name) not in ALLOWED_FUNCTIONS:
             raise SqlNotAllowed(
@@ -325,7 +366,21 @@ def run_select(
                     conn.execute(text(f"SET LOCAL statement_timeout = {int(timeout)}"))
                 result = conn.execute(text(wrapped))
                 columns = list(result.keys())
-                raw_rows = result.fetchall()
+                # 전부 fetchall 하면 큰 셀 하나로도 메모리가 터진다.
+                # 조금씩 받아 크기 상한에 닿는 즉시 끊는다.
+                raw_rows: list[Any] = []
+                total_chars = 0
+                size_truncated = False
+                while True:
+                    chunk = result.fetchmany(50)
+                    if not chunk:
+                        break
+                    for row in chunk:
+                        raw_rows.append(row)
+                        total_chars += sum(len(str(v)) for v in row)
+                    if total_chars > MAX_RESULT_CHARS:
+                        size_truncated = True
+                        break
             finally:
                 # 조회만 했으므로 어떤 경우에도 커밋하지 않는다.
                 trans.rollback()
@@ -337,18 +392,7 @@ def run_select(
         ) from exc
     duration_ms = int((time.perf_counter() - started) * 1000)
 
-    # 행수 상한과 별개로 전체 크기도 제한한다. 셀 하나가 수 MB인 경우
-    # (예: repeat(...)) 메모리와 다음 LLM 요청 크기를 동시에 망가뜨린다.
-    rows: list[list[Any]] = []
-    total_chars = 0
-    size_truncated = False
-    for raw_row in raw_rows:
-        row = [_to_jsonable(v) for v in raw_row]
-        total_chars += sum(len(str(v)) for v in row)
-        if total_chars > MAX_RESULT_CHARS:
-            size_truncated = True
-            break
-        rows.append(row)
+    rows = [[_to_jsonable(v) for v in raw_row] for raw_row in raw_rows]
 
     return {
         "sql": validated,
