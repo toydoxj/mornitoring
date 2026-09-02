@@ -33,3 +33,6 @@ shrimp_data/
 
 # 로컬 DB 덤프 — 운영 데이터(PII) 포함, 저장소 업로드 금지 (.doc/backup-recovery.md §8)
 backend/db_backups/
+
+# Codex CLI 상의 결과 (임시)
+.codex-last.md

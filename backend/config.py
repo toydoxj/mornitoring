@@ -69,6 +69,23 @@ class Settings(BaseSettings):
     db_max_overflow: int = 10
     db_pool_timeout_seconds: int = 10
 
+    # --- 통계 분석 챗봇 (OpenAI) ---
+    # 키가 비어 있으면 챗봇 API가 503을 돌려주고 프론트는 버튼을 숨긴다.
+    openai_api_key: str = ""
+    openai_model: str = "gpt-5.6-luna"
+    # 추론 강도. low로 시작하고 답변 품질을 보며 조정한다.
+    openai_reasoning_effort: str = "low"
+    # 답변 길이 상한(토큰). 도구 호출 루프와 별개로 최종 답변에만 적용.
+    stats_chat_max_output_tokens: int = 1200
+    # LLM이 생성한 SELECT의 한 번 조회 최대 행수 (강제로 LIMIT 주입)
+    stats_chat_row_limit: int = 200
+    # SELECT 1건당 DB statement_timeout (밀리초)
+    stats_chat_sql_timeout_ms: int = 5000
+    # 질문 1건당 허용하는 SQL 실행 횟수 상한 (무한 루프 방지)
+    stats_chat_max_sql_calls: int = 6
+    # 사용자별 분당 질문 수 상한
+    stats_chat_rate_limit_per_minute: int = 10
+
     # 배포된 커밋 SHA. Render가 배포 시 RENDER_GIT_COMMIT으로 자동 주입한다.
     # 헬스체크로 노출해 "지금 운영에 어떤 코드가 떠 있는지"를 밖에서 확인할 수 있게 한다.
     # 로컬 실행 시에는 비어 있다.

@@ -27,6 +27,7 @@ from routers import (
     notifications,
     resubmissions,
     reviews,
+    stats_chat,
     users,
 )
 
@@ -161,6 +162,7 @@ app.include_router(kakao.router, prefix="/api/kakao", tags=["카카오"])
 app.include_router(announcements.router, prefix="/api/announcements", tags=["공지사항"])
 app.include_router(discussions.router, prefix="/api/discussions", tags=["토론방"])
 app.include_router(checklist.router, prefix="/api/checklist", tags=["상세체크리스트"])
+app.include_router(stats_chat.router, prefix="/api/stats-chat", tags=["통계분석챗봇"])
 app.include_router(
     resubmissions.router, prefix="/api/resubmissions", tags=["재제출요청"]
 )

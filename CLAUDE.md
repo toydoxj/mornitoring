@@ -50,6 +50,9 @@ frontend/ (Next.js)  ──HTTP/JSON──→  backend/ (FastAPI)
 - `routers/` — API 엔드포인트 (auth, users, buildings). 역할 기반 접근 제어는 `routers/auth.py`의 `require_roles()` 의존성으로 처리
 - `models/` — SQLAlchemy ORM 모델. `Building`은 통합관리대장 A~AD열, `ReviewStage`는 예비검토~N차 보완 단계를 1:N으로 관리
 - `engines/` — 비즈니스 로직 엔진. `column_mapping.py`에 엑셀 열↔DB 필드 매핑 정의, `ledger_import.py`/`ledger_export.py`로 엑셀 import/export
+- `services/` — 도메인 서비스. 통계 분석 챗봇은 `stats_chat.py`(OpenAI 호출 루프),
+  `stats_chat_sql.py`(LLM이 만든 SELECT의 AST 검증·읽기전용 실행),
+  `stats_chat_schema.py`(LLM에 주는 스키마 사전) 3개로 나뉜다
 - `config.py` — Pydantic BaseSettings 기반 설정 (`.env` 파일 로드)
 
 ### 핵심 도메인 모델

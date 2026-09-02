@@ -16,6 +16,7 @@ from models.password_setup_token import PasswordSetupToken
 from models.phase_transition_log import PhaseTransitionLog
 from models.deploy_batch_stage import DeployBatchStage
 from models.resubmission_request import ResubmissionRequest
+from models.stats_chat import StatsChatConversation, StatsChatMessage
 
 __all__ = [
     "User",
@@ -40,4 +41,6 @@ __all__ = [
     "PhaseTransitionLog",
     "DeployBatchStage",
     "ResubmissionRequest",
+    "StatsChatConversation",
+    "StatsChatMessage",
 ]

@@ -16,6 +16,9 @@ os.environ["S3_BUCKET_NAME"] = "test-bucket"
 os.environ["KAKAO_REDIRECT_URI"] = "http://localhost/callback"
 os.environ["CORS_ORIGINS"] = '["http://localhost:3000"]'
 os.environ["FRONTEND_BASE_URL"] = "http://localhost:3000"
+# 테스트가 실수로 OpenAI를 실제 호출하지 않도록 통계 챗봇은 항상 비활성 상태로 둔다.
+# (개발자 .env에 키가 있어도 환경변수가 우선한다)
+os.environ["OPENAI_API_KEY"] = ""
 
 import pytest
 from fastapi.testclient import TestClient

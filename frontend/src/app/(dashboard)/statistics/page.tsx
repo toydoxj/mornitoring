@@ -18,6 +18,7 @@ import apiClient from "@/lib/api/client"
 import { useAuthStore } from "@/stores/authStore"
 import { BuildingDetailDialog } from "@/components/BuildingDetailDialog"
 import { DeployBatchFilter } from "@/components/DeployBatchFilter"
+import { StatsChatPanel } from "@/components/StatsChatPanel"
 import {
   SortableTableHead,
   TABLE_SORT_COLLATOR,
@@ -582,6 +583,15 @@ export default function StatisticsPage() {
       <BuildingDetailDialog
         buildingId={detailBuildingId}
         onClose={() => setDetailBuildingId(null)}
+      />
+
+      {/* DB를 직접 조회해 답하는 분석 챗봇. 화면 필터를 프롬프트에 함께 넘긴다. */}
+      <StatsChatPanel
+        screenContext={
+          batchFilter === "all"
+            ? "배포차수: 전체"
+            : `배포차수: ${batchFilter}차수`
+        }
       />
     </div>
   )
