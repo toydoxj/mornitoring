@@ -3,7 +3,15 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
-import { BotIcon, DatabaseIcon, SendIcon, Trash2Icon } from "lucide-react"
+import {
+  ArrowLeftIcon,
+  BotIcon,
+  DatabaseIcon,
+  HistoryIcon,
+  PlusIcon,
+  SendIcon,
+  Trash2Icon,
+} from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -15,6 +23,7 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet"
 import apiClient from "@/lib/api/client"
+import { useAuthStore } from "@/stores/authStore"
 
 /** 백엔드가 SSE `sql` 이벤트로 내려주는 조회 기록 1건. */
 interface SqlLogEntry {
@@ -37,6 +46,33 @@ interface StatusResponse {
   model: string
 }
 
+/** 이력 목록 1건 (총괄간사 전용). */
+interface ConversationSummary {
+  id: number
+  title: string
+  updated_at: string
+  user_id: number
+  user_name: string
+}
+
+interface ConversationMessage {
+  id: number
+  role: "user" | "assistant"
+  content: string
+  sql_log: SqlLogEntry[]
+  created_at: string
+}
+
+interface ConversationDetail {
+  id: number
+  title: string
+  user_id: number
+  user_name: string
+  messages: ConversationMessage[]
+}
+
+type PanelView = "chat" | "history"
+
 /** 처음 열었을 때 보여줄 예시 질문. 실제 DB 컬럼으로 답할 수 있는 것만 넣는다. */
 const SAMPLE_QUESTIONS = [
   "시도별 대상 건축물 수를 많은 순으로 알려줘",
@@ -55,8 +91,19 @@ export function StatsChatPanel({ screenContext }: { screenContext?: string }) {
   const [isStreaming, setIsStreaming] = useState(false)
   const [statusText, setStatusText] = useState("")
   const [conversationId, setConversationId] = useState<number | null>(null)
+  const [view, setView] = useState<PanelView>("chat")
+  const [historyRows, setHistoryRows] = useState<ConversationSummary[]>([])
+  const [isHistoryLoading, setIsHistoryLoading] = useState(false)
+  const [historyError, setHistoryError] = useState("")
+  // 남의 대화를 열어본 경우의 작성자 이름. 본인 대화면 빈 문자열이며,
+  // 값이 있으면 이어서 질문할 수 없는 열람 전용 상태다.
+  const [viewingAuthor, setViewingAuthor] = useState("")
   const scrollRef = useRef<HTMLDivElement>(null)
   const abortRef = useRef<AbortController | null>(null)
+
+  const currentUser = useAuthStore((state) => state.user)
+  const canViewHistory = currentUser?.role === "chief_secretary"
+  const isReadOnly = viewingAuthor !== ""
 
   useEffect(() => {
     let cancelled = false
@@ -93,7 +140,7 @@ export function StatsChatPanel({ screenContext }: { screenContext?: string }) {
         return next
       })
     },
-    []
+    [],
   )
 
   const send = useCallback(
@@ -195,12 +242,18 @@ export function StatsChatPanel({ screenContext }: { screenContext?: string }) {
         if (eventName === "delta") {
           const text = typeof data.text === "string" ? data.text : ""
           setStatusText("")
-          appendToLastAssistant((last) => ({ ...last, content: last.content + text }))
+          appendToLastAssistant((last) => ({
+            ...last,
+            content: last.content + text,
+          }))
         } else if (eventName === "status") {
           setStatusText(typeof data.message === "string" ? data.message : "")
         } else if (eventName === "sql") {
           const entry = data as unknown as SqlLogEntry
-          appendToLastAssistant((last) => ({ ...last, sqlLog: [...last.sqlLog, entry] }))
+          appendToLastAssistant((last) => ({
+            ...last,
+            sqlLog: [...last.sqlLog, entry],
+          }))
         } else if (eventName === "done") {
           terminated = true
           if (typeof data.conversation_id === "number") {
@@ -217,7 +270,7 @@ export function StatsChatPanel({ screenContext }: { screenContext?: string }) {
         }
       }
     },
-    [appendToLastAssistant, conversationId, isStreaming, screenContext]
+    [appendToLastAssistant, conversationId, isStreaming, screenContext],
   )
 
   const resetConversation = useCallback(() => {
@@ -225,7 +278,63 @@ export function StatsChatPanel({ screenContext }: { screenContext?: string }) {
     setMessages([])
     setConversationId(null)
     setStatusText("")
+    setViewingAuthor("")
+    setView("chat")
   }, [])
+
+  const openHistory = useCallback(async () => {
+    setView("history")
+    setIsHistoryLoading(true)
+    setHistoryError("")
+    try {
+      const { data } = await apiClient.get<ConversationSummary[]>(
+        "/api/stats-chat/conversations",
+      )
+      setHistoryRows(data)
+    } catch {
+      setHistoryError("대화 목록을 불러오지 못했다.")
+    } finally {
+      setIsHistoryLoading(false)
+    }
+  }, [])
+
+  const openConversation = useCallback(
+    async (row: ConversationSummary) => {
+      abortRef.current?.abort()
+      try {
+        const { data } = await apiClient.get<ConversationDetail>(
+          `/api/stats-chat/conversations/${row.id}`,
+        )
+        setMessages(
+          data.messages.map((message) => ({
+            role: message.role,
+            content: message.content,
+            sqlLog: message.sql_log ?? [],
+          })),
+        )
+        setConversationId(data.id)
+        // 남의 대화에 내 질문을 덧붙이면 이력 주인이 뒤섞인다. 열람 전용으로 둔다.
+        setViewingAuthor(data.user_id === currentUser?.id ? "" : data.user_name)
+        setView("chat")
+      } catch {
+        setHistoryError("대화를 불러오지 못했다.")
+      }
+    },
+    [currentUser?.id],
+  )
+
+  const deleteConversation = useCallback(
+    async (id: number) => {
+      try {
+        await apiClient.delete(`/api/stats-chat/conversations/${id}`)
+        setHistoryRows((prev) => prev.filter((row) => row.id !== id))
+        if (conversationId === id) resetConversation()
+      } catch {
+        setHistoryError("대화를 삭제하지 못했다.")
+      }
+    },
+    [conversationId, resetConversation],
+  )
 
   if (isEnabled === false) return null
 
@@ -252,82 +361,212 @@ export function StatsChatPanel({ screenContext }: { screenContext?: string }) {
           <SheetHeader className="border-b p-4 pr-12">
             <div className="flex items-start justify-between gap-2">
               <div>
-                <SheetTitle>통계 AI 분석</SheetTitle>
+                <SheetTitle>
+                  {view === "history" ? "대화 이력" : "통계 AI 분석"}
+                </SheetTitle>
                 <SheetDescription>
-                  현재 DB를 직접 조회해서 답한다. 답변에 사용한 SQL을 함께 확인할 수 있다.
+                  {view === "history"
+                    ? "전체 사용자가 주고받은 대화다. 항목을 누르면 내용을 볼 수 있다."
+                    : "현재 DB를 직접 조회해서 답한다. 답변에 사용한 SQL을 함께 확인할 수 있다."}
                 </SheetDescription>
               </div>
-              {messages.length > 0 && (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  onClick={resetConversation}
-                  disabled={isStreaming}
-                >
-                  <Trash2Icon className="size-4" />
-                  새 대화
-                </Button>
-              )}
+              <div className="flex shrink-0 items-center gap-1">
+                {view === "history" ? (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setView("chat")}
+                  >
+                    <ArrowLeftIcon className="size-4" />
+                    돌아가기
+                  </Button>
+                ) : (
+                  <>
+                    {canViewHistory && (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={openHistory}
+                        disabled={isStreaming}
+                      >
+                        <HistoryIcon className="size-4" />
+                        이력
+                      </Button>
+                    )}
+                    {messages.length > 0 && (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={resetConversation}
+                        disabled={isStreaming}
+                      >
+                        <PlusIcon className="size-4" />새 대화
+                      </Button>
+                    )}
+                  </>
+                )}
+              </div>
             </div>
           </SheetHeader>
 
-          <div ref={scrollRef} className="flex-1 space-y-4 overflow-y-auto p-4">
-            {messages.length === 0 && (
-              <div className="space-y-3">
-                <p className="text-sm text-muted-foreground">
-                  통계자료에 대해 자연어로 질문하면 데이터베이스를 조회해 답한다.
-                </p>
-                <div className="flex flex-col gap-2">
-                  {SAMPLE_QUESTIONS.map((question) => (
-                    <button
-                      key={question}
-                      type="button"
-                      onClick={() => send(question)}
-                      className="rounded-md border px-3 py-2 text-left text-sm hover:bg-muted"
-                    >
-                      {question}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {messages.map((message, index) => (
-              <MessageBubble key={index} message={message} />
-            ))}
-
-            {statusText && (
-              <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                <DatabaseIcon className="size-4 animate-pulse" />
-                {statusText}
-              </div>
-            )}
-          </div>
-
-          <form
-            className="flex gap-2 border-t p-4"
-            onSubmit={(event) => {
-              event.preventDefault()
-              send(input)
-            }}
-          >
-            <Input
-              value={input}
-              onChange={(event) => setInput(event.target.value)}
-              placeholder="예: 조별 검토서 제출률을 비교해줘"
-              disabled={isStreaming}
-              maxLength={2000}
+          {view === "history" ? (
+            <HistoryList
+              rows={historyRows}
+              isLoading={isHistoryLoading}
+              error={historyError}
+              onOpen={openConversation}
+              onDelete={deleteConversation}
             />
-            <Button type="submit" size="icon" disabled={isStreaming || !input.trim()}>
-              <SendIcon className="size-4" />
-              <span className="sr-only">전송</span>
-            </Button>
-          </form>
+          ) : (
+            <>
+              <div ref={scrollRef} className="flex-1 space-y-4 overflow-y-auto p-4">
+                {isReadOnly && (
+                  <div className="rounded-md border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+                    {viewingAuthor} 님의 대화를 열람 중이다. 이어서 질문하려면 새 대화를
+                    시작한다.
+                  </div>
+                )}
+                {messages.length === 0 && (
+                  <div className="space-y-3">
+                    <p className="text-sm text-muted-foreground">
+                      통계자료에 대해 자연어로 질문하면 데이터베이스를 조회해 답한다.
+                    </p>
+                    <div className="flex flex-col gap-2">
+                      {SAMPLE_QUESTIONS.map((question) => (
+                        <button
+                          key={question}
+                          type="button"
+                          onClick={() => send(question)}
+                          className="rounded-md border px-3 py-2 text-left text-sm hover:bg-muted"
+                        >
+                          {question}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {messages.map((message, index) => (
+                  <MessageBubble key={index} message={message} />
+                ))}
+
+                {statusText && (
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <DatabaseIcon className="size-4 animate-pulse" />
+                    {statusText}
+                  </div>
+                )}
+              </div>
+
+              <form
+                className="flex gap-2 border-t p-4"
+                onSubmit={(event) => {
+                  event.preventDefault()
+                  send(input)
+                }}
+              >
+                <Input
+                  value={input}
+                  onChange={(event) => setInput(event.target.value)}
+                  placeholder={
+                    isReadOnly
+                      ? "열람 전용 — 질문하려면 새 대화를 시작한다"
+                      : "예: 조별 검토서 제출률을 비교해줘"
+                  }
+                  disabled={isStreaming || isReadOnly}
+                  maxLength={2000}
+                />
+                <Button
+                  type="submit"
+                  size="icon"
+                  disabled={isStreaming || isReadOnly || !input.trim()}
+                >
+                  <SendIcon className="size-4" />
+                  <span className="sr-only">전송</span>
+                </Button>
+              </form>
+            </>
+          )}
         </SheetContent>
       </Sheet>
     </>
   )
+}
+
+/** 총괄간사 감독용 대화 이력 목록. */
+function HistoryList({
+  rows,
+  isLoading,
+  error,
+  onOpen,
+  onDelete,
+}: {
+  rows: ConversationSummary[]
+  isLoading: boolean
+  error: string
+  onOpen: (row: ConversationSummary) => void
+  onDelete: (id: number) => void
+}) {
+  if (isLoading) {
+    return (
+      <div className="flex-1 p-4 text-sm text-muted-foreground">불러오는 중...</div>
+    )
+  }
+  if (error) {
+    return <div className="flex-1 p-4 text-sm text-destructive">{error}</div>
+  }
+  if (rows.length === 0) {
+    return (
+      <div className="flex-1 p-4 text-sm text-muted-foreground">
+        아직 저장된 대화가 없다.
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex-1 space-y-2 overflow-y-auto p-4">
+      {rows.map((row) => (
+        <div
+          key={row.id}
+          className="flex items-start gap-2 rounded-md border p-3 hover:bg-muted/50"
+        >
+          <button
+            type="button"
+            onClick={() => onOpen(row)}
+            className="min-w-0 flex-1 text-left"
+          >
+            <div className="truncate text-sm font-medium">{row.title}</div>
+            <div className="mt-1 text-xs text-muted-foreground">
+              {row.user_name || "(삭제된 사용자)"} · {formatTimestamp(row.updated_at)}
+            </div>
+          </button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            aria-label="대화 삭제"
+            onClick={() => onDelete(row.id)}
+          >
+            <Trash2Icon className="size-4" />
+          </Button>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+/** ISO 문자열을 'MM-DD HH:mm' 로 줄여 표시한다. */
+function formatTimestamp(value: string): string {
+  if (!value) return ""
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  const pad = (n: number) => String(n).padStart(2, "0")
+  return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(
+    date.getHours(),
+  )}:${pad(date.getMinutes())}`
 }
 
 function MessageBubble({ message }: { message: ChatMessage }) {

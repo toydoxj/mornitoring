@@ -1,8 +1,11 @@
 """통계 분석 챗봇 라우터.
 
 통계자료 화면에서 자연어로 질문하면 LLM이 읽기 전용 SELECT 를 만들어 실제 DB를
-조회하고, 근거와 함께 답한다. 접근 권한은 통계자료 화면(`/api/buildings/stats`)과
+조회하고, 근거와 함께 답한다. 질문 권한은 통계자료 화면(`/api/buildings/stats`)과
 동일하게 팀장·총괄간사·간사·관리원으로 한정한다(검토위원 제외).
+
+대화 이력 조회·삭제(`/conversations`)는 감독 목적이라 총괄간사 전용이며, 총괄간사는
+다른 사용자의 대화도 볼 수 있다. 남의 대화를 열람하면 감사 로그를 남긴다.
 
 주의: 답변은 StreamingResponse 로 흘려보내므로, 스트리밍 도중에는
 `Depends(get_db)` 세션을 쓸 수 없다(FastAPI가 응답 전에 정리함). 생성기 안에서는
@@ -15,7 +18,7 @@ import logging
 import time
 from collections.abc import AsyncIterator
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import func
@@ -25,8 +28,9 @@ from config import settings
 from database import SessionLocal, get_db
 from models.stats_chat import StatsChatConversation, StatsChatMessage, StatsChatRole
 from models.user import User, UserRole
-from routers.auth import require_roles
+from routers.auth import _client_ip, require_roles
 from services import stats_chat
+from services.audit import log_action
 from services.stats_chat import RateLimited, StatsChatUnavailable, sse_frame
 
 logger = logging.getLogger(__name__)
@@ -40,6 +44,10 @@ STATS_CHAT_ROLES = (
     UserRole.SECRETARY,
     UserRole.MANAGER,
 )
+
+# 대화 이력 조회는 감독 목적이라 총괄간사 전용이다. 총괄간사는 본인 대화뿐 아니라
+# 팀장·간사·관리원이 무엇을 물었는지도 볼 수 있다.
+HISTORY_ROLES = (UserRole.CHIEF_SECRETARY,)
 
 TITLE_MAX_LENGTH = 120
 
@@ -63,11 +71,15 @@ class ConversationResponse(BaseModel):
     id: int
     title: str
     updated_at: str
+    user_id: int
+    user_name: str
 
 
 class ConversationDetailResponse(BaseModel):
     id: int
     title: str
+    user_id: int
+    user_name: str
     messages: list[MessageResponse]
 
 
@@ -91,20 +103,18 @@ def _to_message_response(message: StatsChatMessage) -> MessageResponse:
     )
 
 
-def _owned_conversation(
-    db: Session, conversation_id: int, user: User
-) -> StatsChatConversation:
-    conversation = (
-        db.query(StatsChatConversation)
-        .filter(
-            StatsChatConversation.id == conversation_id,
-            StatsChatConversation.user_id == user.id,
-        )
-        .one_or_none()
-    )
+def _find_conversation(db: Session, conversation_id: int) -> StatsChatConversation:
+    """대화 1건 조회. 호출자는 이미 총괄간사로 제한돼 있어 소유자를 가리지 않는다."""
+    conversation = db.get(StatsChatConversation, conversation_id)
     if conversation is None:
         raise HTTPException(status_code=404, detail="대화를 찾을 수 없습니다")
     return conversation
+
+
+def _author_name(db: Session, user_id: int) -> str:
+    """대화 작성자 이름. 사용자가 삭제됐으면 빈 문자열."""
+    name = db.query(User.name).filter(User.id == user_id).scalar()
+    return name or ""
 
 
 @router.get("/status")
@@ -117,15 +127,16 @@ def chat_status(
 
 @router.get("/conversations", response_model=list[ConversationResponse])
 def list_conversations(
+    limit: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_roles(*STATS_CHAT_ROLES)),
+    current_user: User = Depends(require_roles(*HISTORY_ROLES)),
 ):
-    """내 대화 목록 (최신순 20건)."""
+    """전체 사용자의 대화 목록 (최신순). 총괄간사 감독용."""
     rows = (
-        db.query(StatsChatConversation)
-        .filter(StatsChatConversation.user_id == current_user.id)
+        db.query(StatsChatConversation, User.name)
+        .outerjoin(User, User.id == StatsChatConversation.user_id)
         .order_by(StatsChatConversation.updated_at.desc())
-        .limit(20)
+        .limit(limit)
         .all()
     )
     return [
@@ -133,21 +144,38 @@ def list_conversations(
             id=row.id,
             title=row.title,
             updated_at=row.updated_at.isoformat() if row.updated_at else "",
+            user_id=row.user_id,
+            user_name=user_name or "",
         )
-        for row in rows
+        for row, user_name in rows
     ]
 
 
 @router.get("/conversations/{conversation_id}", response_model=ConversationDetailResponse)
 def get_conversation(
     conversation_id: int,
+    request: Request,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_roles(*STATS_CHAT_ROLES)),
+    current_user: User = Depends(require_roles(*HISTORY_ROLES)),
 ):
-    conversation = _owned_conversation(db, conversation_id, current_user)
+    conversation = _find_conversation(db, conversation_id)
+    # 남의 질문을 들여다보는 동작이므로 누가 무엇을 열람했는지 기록을 남긴다.
+    if conversation.user_id != current_user.id:
+        log_action(
+            db,
+            user_id=current_user.id,
+            action="view",
+            target_type="stats_chat_conversation",
+            target_id=conversation.id,
+            after_data={"owner_user_id": conversation.user_id},
+            ip_address=_client_ip(request),
+        )
+        db.commit()
     return ConversationDetailResponse(
         id=conversation.id,
         title=conversation.title,
+        user_id=conversation.user_id,
+        user_name=_author_name(db, conversation.user_id),
         messages=[_to_message_response(m) for m in conversation.messages],
     )
 
@@ -156,9 +184,9 @@ def get_conversation(
 def delete_conversation(
     conversation_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_roles(*STATS_CHAT_ROLES)),
+    current_user: User = Depends(require_roles(*HISTORY_ROLES)),
 ):
-    conversation = _owned_conversation(db, conversation_id, current_user)
+    conversation = _find_conversation(db, conversation_id)
     db.delete(conversation)
     db.commit()
 
