@@ -95,15 +95,19 @@ export function StatsChatPanel({ screenContext }: { screenContext?: string }) {
   const [historyRows, setHistoryRows] = useState<ConversationSummary[]>([])
   const [isHistoryLoading, setIsHistoryLoading] = useState(false)
   const [historyError, setHistoryError] = useState("")
-  // 남의 대화를 열어본 경우의 작성자 이름. 본인 대화면 빈 문자열이며,
-  // 값이 있으면 이어서 질문할 수 없는 열람 전용 상태다.
-  const [viewingAuthor, setViewingAuthor] = useState("")
+  // 열어본 대화의 작성자. 이름이 비어 있을 수 있어(탈퇴 등) 열람 전용 판정은
+  // 이름이 아니라 id 로 한다. null 이면 이력에서 연 대화가 아니다.
+  const [viewingOwner, setViewingOwner] = useState<{
+    id: number
+    name: string
+  } | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const abortRef = useRef<AbortController | null>(null)
 
   const currentUser = useAuthStore((state) => state.user)
   const canViewHistory = currentUser?.role === "chief_secretary"
-  const isReadOnly = viewingAuthor !== ""
+  // 남의 대화에 이어서 질문하면 그 대화가 원 작성자 이력에 쌓인다. 열람만 허용한다.
+  const isReadOnly = viewingOwner !== null && viewingOwner.id !== currentUser?.id
 
   useEffect(() => {
     let cancelled = false
@@ -278,7 +282,7 @@ export function StatsChatPanel({ screenContext }: { screenContext?: string }) {
     setMessages([])
     setConversationId(null)
     setStatusText("")
-    setViewingAuthor("")
+    setViewingOwner(null)
     setView("chat")
   }, [])
 
@@ -313,14 +317,13 @@ export function StatsChatPanel({ screenContext }: { screenContext?: string }) {
           })),
         )
         setConversationId(data.id)
-        // 남의 대화에 내 질문을 덧붙이면 이력 주인이 뒤섞인다. 열람 전용으로 둔다.
-        setViewingAuthor(data.user_id === currentUser?.id ? "" : data.user_name)
+        setViewingOwner({ id: data.user_id, name: data.user_name })
         setView("chat")
       } catch {
         setHistoryError("대화를 불러오지 못했다.")
       }
     },
-    [currentUser?.id],
+    [],
   )
 
   const deleteConversation = useCallback(
@@ -425,8 +428,8 @@ export function StatsChatPanel({ screenContext }: { screenContext?: string }) {
               <div ref={scrollRef} className="flex-1 space-y-4 overflow-y-auto p-4">
                 {isReadOnly && (
                   <div className="rounded-md border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-                    {viewingAuthor} 님의 대화를 열람 중이다. 이어서 질문하려면 새 대화를
-                    시작한다.
+                    {viewingOwner?.name || "다른 사용자"} 님의 대화를 열람 중이다. 이어서
+                    질문하려면 새 대화를 시작한다.
                   </div>
                 )}
                 {messages.length === 0 && (
