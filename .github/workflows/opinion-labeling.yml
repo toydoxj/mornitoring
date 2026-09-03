@@ -1,0 +1,74 @@
+name: Opinion Labeling
+
+# 검토의견 조합 라벨(대상 x 세부항목 x 문제유형) 중 규칙 사전으로 분류되지 않은
+# 건을 LLM으로 보완한다.
+#
+# 검토서 업로드 시 규칙 라벨은 즉시 계산되고, 남은 건은 pending 으로만 등록된다
+# (외부 API 호출로 업로드 응답이 지연되지 않도록). 그 대기분을 이 워크플로가 처리한다.
+# 대기 건이 없으면 즉시 끝나므로 매일 돌아도 비용이 들지 않는다.
+
+on:
+  schedule:
+    # KST 04:00 = UTC 19:00 (전일 기준). DB 백업(KST 03:10) 이후로 둔다.
+    - cron: '0 19 * * *'
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: '이번 실행에서 처리할 최대 의견 수'
+        required: false
+        default: '1000'
+      retry_failed:
+        description: 'failed 상태를 pending 으로 되돌린 뒤 처리'
+        type: boolean
+        required: false
+        default: false
+
+concurrency:
+  # 같은 건을 두 번 호출하지 않도록 동시 실행을 막는다.
+  # (워커 자체도 FOR UPDATE SKIP LOCKED 로 선점하지만 비용 측면에서 한 번 더 막는다)
+  group: opinion-labeling
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  label:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r backend/requirements.txt
+
+      - name: Run labeling worker
+        working-directory: backend
+        env:
+          DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          # config.Settings 가 요구하는 필수값들. 이 워커는 DB와 OpenAI 만 쓰므로
+          # 나머지는 임포트를 통과시키기 위한 더미다(외부로 나가지 않는다).
+          JWT_SECRET_KEY: dummy-secret-for-batch-worker-not-used-32
+          AWS_REGION: ap-northeast-2
+          S3_BUCKET_NAME: unused
+          KAKAO_REDIRECT_URI: https://example.invalid/callback
+          CORS_ORIGINS: '[]'
+        run: |
+          if [ -z "$OPENAI_API_KEY" ]; then
+            echo "::warning::OPENAI_API_KEY 미설정 — LLM 보완 라벨링을 건너뜁니다."
+            echo "리포지토리 Secrets 에 OPENAI_API_KEY 를 추가하면 자동 실행됩니다."
+            exit 0
+          fi
+          ARGS="--limit ${{ github.event.inputs.limit || '1000' }}"
+          if [ "${{ github.event.inputs.retry_failed }}" = "true" ]; then
+            ARGS="$ARGS --retry-failed"
+          fi
+          python scripts/label_opinions.py $ARGS

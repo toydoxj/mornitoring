@@ -83,6 +83,13 @@ python scripts/backfill_opinion_labels.py    # 규칙 라벨 백필 (--all 로 �
 python scripts/label_opinions.py             # LLM 보완 라벨링 (--dry-run 으로 대기 건수만)
 ```
 
+LLM 보완은 `.github/workflows/opinion-labeling.yml` 이 매일 KST 04:00 에 자동 실행한다
+(수동 실행 가능, 대기 건이 없으면 즉시 종료). `OPENAI_API_KEY` Secret 이 없으면 건너뛴다.
+
+사전을 고칠 때는 `RULESET_VERSION`(정규식) 또는 `TAXONOMY_VERSION`(대상·유형·세부항목
+목록)을 올리고 `--all` 로 재계산한다. LLM·수기 라벨이 붙은 의견은 규칙 라벨을 만들지
+않으므로, 그 건들까지 다시 분류하려면 해당 라벨을 먼저 지운다.
+
 ## 코딩 규칙
 
 - 응답/주석/커밋 메시지/문서: 한국어
