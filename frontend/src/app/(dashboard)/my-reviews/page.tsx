@@ -106,8 +106,12 @@ export default function MyReviewsPage() {
   const [resubmitSubmitting, setResubmitSubmitting] = useState(false)
   // 내가 올린 대기중 재제출 요청의 building_id 집합
   const [pendingResubmitIds, setPendingResubmitIds] = useState<Set<number>>(new Set())
+  // 재제출 요청 접수 가능 여부(서버 설정). 접수를 닫아도 이미 올린 '요청중' 표시는 남긴다.
+  const [resubmitEnabled, setResubmitEnabled] = useState(false)
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
+  // 접수를 닫았더라도 아직 처리되지 않은 내 요청이 있으면 상태를 볼 수 있게 컬럼을 남긴다.
+  const showResubmitColumn = resubmitEnabled || pendingResubmitIds.size > 0
   const isInappropriateReviewLocked = Boolean(uploadTarget?.latest_inappropriate)
 
   const fetchPendingResubmissions = useCallback(async () => {
@@ -124,6 +128,18 @@ export default function MyReviewsPage() {
       )
     } catch (err) {
       console.error("재제출 요청 조회 실패:", err)
+    }
+  }, [])
+
+  const fetchResubmitEnabled = useCallback(async () => {
+    try {
+      const { data: res } = await apiClient.get<{ enabled: boolean }>(
+        "/api/resubmissions/status"
+      )
+      setResubmitEnabled(res.enabled)
+    } catch (err) {
+      console.error("재제출 요청 설정 조회 실패:", err)
+      setResubmitEnabled(false)
     }
   }, [])
 
@@ -150,6 +166,10 @@ export default function MyReviewsPage() {
   useEffect(() => {
     fetchPendingResubmissions()
   }, [fetchPendingResubmissions])
+
+  useEffect(() => {
+    fetchResubmitEnabled()
+  }, [fetchResubmitEnabled])
 
   const handleResubmitSubmit = async () => {
     if (!resubmitTarget || !resubmitReason.trim()) return
@@ -392,7 +412,9 @@ export default function MyReviewsPage() {
               <TableHead className="w-[90px] text-center">최근판정</TableHead>
               <SortableHead field="report_due_date" className="w-[110px] text-center">제출 예정일</SortableHead>
               <TableHead className="w-[100px] text-center">검토서</TableHead>
-              <TableHead className="w-[110px] text-center">재제출요청</TableHead>
+              {showResubmitColumn ? (
+                <TableHead className="w-[110px] text-center">재제출요청</TableHead>
+              ) : null}
               <TableHead className="w-[80px] text-center">문의</TableHead>
             </TableRow>
           </TableHeader>
@@ -491,28 +513,32 @@ export default function MyReviewsPage() {
                       업로드
                     </Button>
                   </TableCell>
-                  <TableCell className="text-center">
-                    {pendingResubmitIds.has(b.id) ? (
-                      <Badge variant="secondary">요청중</Badge>
-                    ) : (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        disabled={!RECEIVED_PHASES.has(b.current_phase ?? "")}
-                        title={
-                          RECEIVED_PHASES.has(b.current_phase ?? "")
-                            ? undefined
-                            : "도서 접수 상태에서만 요청할 수 있습니다"
-                        }
-                        onClick={() => {
-                          setResubmitTarget(b)
-                          setResubmitReason("")
-                        }}
-                      >
-                        재제출요청
-                      </Button>
-                    )}
-                  </TableCell>
+                  {showResubmitColumn ? (
+                    <TableCell className="text-center">
+                      {pendingResubmitIds.has(b.id) ? (
+                        <Badge variant="secondary">요청중</Badge>
+                      ) : resubmitEnabled ? (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={!RECEIVED_PHASES.has(b.current_phase ?? "")}
+                          title={
+                            RECEIVED_PHASES.has(b.current_phase ?? "")
+                              ? undefined
+                              : "도서 접수 상태에서만 요청할 수 있습니다"
+                          }
+                          onClick={() => {
+                            setResubmitTarget(b)
+                            setResubmitReason("")
+                          }}
+                        >
+                          재제출요청
+                        </Button>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">-</span>
+                      )}
+                    </TableCell>
+                  ) : null}
                   <TableCell className="text-center">
                     <Button
                       size="sm"

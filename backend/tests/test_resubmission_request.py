@@ -11,12 +11,26 @@ from datetime import date
 
 import pytest
 
+from config import settings
 from models.audit_log import AuditLog
 from models.phase_transition_log import PhaseTransitionLog
 from models.resubmission_request import ResubmissionRequest, ResubmissionStatus
 from models.review_stage import PhaseType, ReviewStage
 from models.user import UserRole
 from services.phase_transition import InvalidPhaseTransition, next_phase_for, transition_phase
+
+
+@pytest.fixture(autouse=True)
+def enable_resubmission_request():
+    """재제출 요청 접수는 운영에서 기본 비활성이다.
+
+    이 파일은 접수가 열려 있을 때의 동작을 검증하므로 테스트 동안만 켠다.
+    닫혀 있을 때의 동작은 test_resubmission_request_disabled 가 확인한다.
+    """
+    original = settings.resubmission_request_enabled
+    settings.resubmission_request_enabled = True
+    yield
+    settings.resubmission_request_enabled = original
 
 
 # ===== 매트릭스 단위 =====

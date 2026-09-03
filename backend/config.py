@@ -86,6 +86,12 @@ class Settings(BaseSettings):
     # 사용자별 분당 질문 수 상한
     stats_chat_rate_limit_per_minute: int = 10
 
+    # --- 재제출 요청 ---
+    # 검토위원이 배포받은 설계도서의 재제출을 요청하는 기능.
+    # 운영상 더 필요하지 않아 기본 비활성. 다시 열려면 RESUBMISSION_REQUEST_ENABLED=true.
+    # 끄면 신규 요청만 막고, 이미 접수된 요청의 조회·처리는 그대로 할 수 있다.
+    resubmission_request_enabled: bool = False
+
     # --- 검토의견 조합 라벨 LLM 보완 (scripts/label_opinions.py) ---
     # 규칙 사전으로 분류되지 않은 의견만 LLM에 보낸다. 비용이 무한정 늘지 않도록
     # 한 번 실행에서 처리할 의견 수와 재시도 횟수에 상한을 둔다.

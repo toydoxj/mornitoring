@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
+from config import settings
 from database import get_db
 from models.building import Building
 from models.resubmission_request import ResubmissionRequest, ResubmissionStatus
@@ -210,6 +211,18 @@ def _to_item(
 
 # --- 엔드포인트 ---
 
+@router.get("/status")
+def get_resubmission_status(
+    current_user: User = Depends(get_current_user),
+):
+    """재제출 요청 기능 사용 가능 여부.
+
+    검토위원 화면이 이 값으로 요청 버튼 노출을 정한다. 기능을 꺼도 이미 접수된
+    요청의 조회·처리는 계속 되므로 목록 API 는 막지 않는다.
+    """
+    return {"enabled": settings.resubmission_request_enabled}
+
+
 @router.post("", status_code=201)
 def create_resubmission_request(
     body: ResubmissionCreateRequest,
@@ -225,6 +238,12 @@ def create_resubmission_request(
     검토서 요청 예정일 삭제는 사유를 확인한 간사가 요청 화면에서 실행한다
     (PATCH /{id} 의 rollback_phase / clear_due_date).
     """
+    if not settings.resubmission_request_enabled:
+        raise HTTPException(
+            status_code=403,
+            detail="재제출 요청 접수가 종료되었습니다. 간사에게 문의해주세요",
+        )
+
     reason = body.reason.strip()
     if not reason:
         raise HTTPException(status_code=400, detail="재제출 사유를 입력해주세요")
