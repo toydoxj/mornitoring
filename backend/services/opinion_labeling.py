@@ -33,7 +33,7 @@ from models.opinion_label import (
 from models.review_opinion_detail import ReviewOpinionDetail
 
 # LLM 프롬프트·응답 스키마 계약 버전. 프롬프트나 출력 스키마를 바꾸면 올린다.
-LLM_CONTRACT_VERSION = "2"
+LLM_CONTRACT_VERSION = "3"
 
 
 def compute_input_hash(
@@ -60,7 +60,7 @@ def compute_input_hash(
 
 def _label_rows_for(detail: ReviewOpinionDetail) -> list[dict]:
     """상세의견 한 건의 규칙 라벨을 INSERT 용 dict 목록으로 만든다."""
-    combos = match_keyword_combos(detail.content or "")
+    combos = match_keyword_combos(detail.content or "", detail.category)
     return [
         {
             "detail_id": detail.id,
@@ -97,6 +97,10 @@ def sync_rule_labels(
     # LLM·수기 라벨이 이미 붙은 의견은 규칙이 여전히 못 풀어도 다시 LLM에 보내지 않는다.
     # 사전을 고칠 때마다 전량 재호출되는 것을 막기 위함이다. 이 건들을 다시 분류하려면
     # 해당 라벨을 지우면 된다(그러면 라벨이 없어져 pending 으로 다시 등록된다).
+    # LLM·수기 라벨이 붙은 의견은 그 라벨을 그대로 둔다.
+    # 규칙 라벨을 덧붙이면 같은 지적이 두 조합으로 세지고, 규칙으로 덮으면
+    # 문맥을 읽어 붙인 결과를 버리게 된다. 둘 중 사람·모델이 판단한 쪽을 남긴다.
+    # 이 건들을 규칙으로 다시 분류하려면 해당 라벨을 지우면 된다.
     externally_labeled: set[int] = set()
     if detail_ids:
         externally_labeled = {
@@ -118,16 +122,17 @@ def sync_rule_labels(
         if detail.id is None:
             continue
         result["details"] += 1
+        if detail.id in externally_labeled:
+            result["labeled_details"] += 1
+            continue
+
         rows = _label_rows_for(detail)
         if rows:
             new_labels.extend(rows)
             result["labeled_details"] += 1
             continue
 
-        if detail.id in externally_labeled:
-            continue
-
-        reason = analyze_unmatched(detail.content or "")
+        reason = analyze_unmatched(detail.content or "", detail.category)
         if reason in (None, "empty"):
             # 빈 내용은 라벨링 대상이 아니다.
             continue

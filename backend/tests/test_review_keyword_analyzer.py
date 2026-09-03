@@ -4,7 +4,9 @@ from engines.review_keyword_analyzer import (
     ASPECT_NAMES,
     ISSUE_NAMES,
     TARGET_NAMES,
+    KeywordCombo,
     analyze_unmatched,
+    category_target_hint,
     match_keyword_combos,
     split_clauses,
 )
@@ -12,6 +14,10 @@ from engines.review_keyword_analyzer import (
 
 def labels(content: str) -> set[str]:
     return {combo.label for combo in match_keyword_combos(content)}
+
+
+def labels_with(content: str, category: str) -> set[str]:
+    return {combo.label for combo in match_keyword_combos(content, category)}
 
 
 def test_단순_조합을_대상과_유형으로_만든다():
@@ -122,8 +128,34 @@ def test_하중_종류가_더_세분된다():
     assert "설하중 누락" not in labels("제2종 근린생활시설 하중이 누락됨")
 
 
+def test_검토서_분류를_대상_폴백으로_쓴다():
+    # 본문에 대상이 없어도 검토서 분류 열이 무엇에 대한 지적인지 말해 준다.
+    assert match_keyword_combos("추가바람", "구조도면 작성의 적정성 - 구조일반사항") == {
+        KeywordCombo("구조일반사항", None, "추가·보완제출", None)
+    }
+    assert labels_with("산정 근거가 누락되었습니다", "하중의 적정성 - 풍하중") == {
+        "풍하중 근거미제시"
+    }
+    # 본문에 대상이 있으면 본문이 우선이다.
+    assert labels_with("구조도면에 부재 치수 누락", "하중의 적정성 - 풍하중") == {
+        "구조도면 > 수량·치수 누락"
+    }
+    # 모르는 분류는 힌트를 주지 않는다.
+    assert category_target_hint("기타의견") is None
+    assert category_target_hint(None) is None
+    assert labels_with("추가바람", "기타의견") == set()
+
+
+def test_부재를_특정할_수_없으면_상위_부재설계로_남는다():
+    assert labels_with("응력 검토 재확인 요망", "부재설계의 적정성 - 구조설계 요소") == {
+        "부재설계 > 단면·응력 재검토요망"
+    }
+    # 부재가 드러나면 그 부재로 센다.
+    assert "부재설계 누락" not in labels("슬래브 배근 누락")
+
+
 def test_사전_구성():
-    assert len(TARGET_NAMES) == 26
+    assert len(TARGET_NAMES) == 27
     assert len(ISSUE_NAMES) == 7
     assert len(ASPECT_NAMES) == 11
     assert len(set(ASPECT_NAMES)) == len(ASPECT_NAMES)

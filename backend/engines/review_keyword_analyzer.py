@@ -24,11 +24,11 @@ import re
 from dataclasses import dataclass
 
 # 규칙 사전(정규식) 버전. 정규식만 고치면 이것만 올린다 — 규칙 라벨만 재계산된다.
-RULESET_VERSION = "2026.09.03c"
+RULESET_VERSION = "2026.09.03d"
 
 # 분류 체계(대상·유형 목록) 버전. 항목을 추가·삭제·개명하면 올린다.
 # 규칙 라벨과 LLM 라벨 양쪽 모두 무효화 대상이므로 RULESET_VERSION과 분리한다.
-TAXONOMY_VERSION = "2026.09.03c"
+TAXONOMY_VERSION = "2026.09.03d"
 
 # 절이 이 길이를 넘으면 한 문장 안이라도 대상과 유형이 서로 멀 수 있으므로
 # 문자 거리로 한 번 더 거른다.
@@ -92,7 +92,7 @@ class KeywordCombo:
         return f"{head} {self.issue}"
 
 
-# 대상 사전 26종(하중 8종 세분 포함).
+# 대상 사전 27종(하중 8종·부재 7종 세분 포함).
 # 한글은 정규식 \b가 동작하지 않으므로 단독 토큰은 (?<![가-힣])X(?![가-힣])로 잡는다.
 # 예: "보"를 \b로 잡으면 "확보", "보완"에 오탐이 난다.
 TARGET_RULES: tuple[TargetRule, ...] = (
@@ -171,15 +171,24 @@ TARGET_RULES: tuple[TargetRule, ...] = (
         r"시공\s*(상세|계획|순서|단계|중|시)|가설\s*(계획|구조)|거푸집|동바리|양중|캠버|camber",
     ),
     # --- 부재별 ---
-    TargetRule("기둥", "부재", r"기둥|(?<![가-힣])칼럼|column"),
+    # 부재를 특정할 수 없는 지적은 상위 항목인 "부재설계"에 남는다.
+    TargetRule("기둥", "부재", r"기둥|(?<![가-힣])칼럼|column", parent="부재설계"),
     TargetRule(
         "보", "부재",
         r"전이보|철골보|합성보|큰보|작은보|거더|girder|(?<![가-힣])보(?![가-힣])",
+        parent="부재설계",
     ),
-    TargetRule("슬래브", "부재", r"슬래브|슬라브|slab|바닥판"),
-    TargetRule("벽체", "부재", r"전단벽|내력벽|옹벽|벽체|(?<![가-힣])벽(?![가-힣])"),
-    TargetRule("기초·파일", "부재", r"기초|파일|말뚝|매트\s*기초|footing|pile"),
-    TargetRule("접합부", "부재", r"접합부|용접|볼트|이음부|정착부"),
+    TargetRule("슬래브", "부재", r"슬래브|슬라브|slab|바닥판", parent="부재설계"),
+    TargetRule(
+        "벽체", "부재",
+        r"전단벽|내력벽|옹벽|벽체|(?<![가-힣])벽(?![가-힣])", parent="부재설계",
+    ),
+    TargetRule(
+        "기초·파일", "부재",
+        r"기초|파일|말뚝|매트\s*기초|footing|pile", parent="부재설계",
+    ),
+    TargetRule("접합부", "부재", r"접합부|용접|볼트|이음부|정착부", parent="부재설계"),
+    TargetRule("부재설계", "부재", r"부재\s*(설계|검토|성능)|부재의"),
     # --- 기타 ---
     TargetRule(
         "작성자·날인", "기타",
@@ -213,12 +222,19 @@ ISSUE_RULES: tuple[IssueRule, ...] = (
     ),
     IssueRule(
         "재검토요망", 6,
-        r"재검토|재\s*확인|재산정|검토\s*(요망|요함|필요|바|하시|할\s*것)"
-        r"|확인\s*(요망|요함|필요|바|하시|할\s*것)",
+        r"재검토|재\s*확인|재산정|재계산|재작성|재제출"
+        r"|검토\s*(요망|요함|필요|바|하시|할\s*것)"
+        r"|확인\s*(요망|요함|필요|바|하시|할\s*것)"
+        # "…입력 확인", "…적용확인"처럼 문장 끝에서 확인만 요구하는 표현.
+        r"|확인(?=$|[\s.,)])",
     ),
+    # 마지막 폴백. 앞의 어느 유형에도 안 걸리지만 무언가를 요구하는 문장은
+    # 대개 보완 요구다. 지적 대상은 있는데 유형만 못 찾는 건이 많아서 둔다.
     IssueRule(
         "추가·보완제출", 7,
-        r"추가|보완|수정|제출|기입|반영|작성.{0,4}(필요|바|할\s*것)",
+        r"추가|보완|수정|정정|제출|첨부|기입|표기|명기|반영|제시|적용|명확히|표현"
+        r"|작성.{0,4}(필요|바|할\s*것)"
+        r"|(필요함?|바랍니다|바람|요망|요함|할\s*것|하시기\s*바|해\s*주시|주시기\s*바)",
     ),
 )
 
@@ -281,6 +297,52 @@ _ISSUE_RES = tuple((rule, re.compile(rule.pattern, re.IGNORECASE)) for rule in I
 # 절 구분자: 줄바꿈, 세미콜론, 한글/닫는괄호 뒤의 마침표, 슬래시 구분.
 # "1. 항목"처럼 번호 뒤 마침표는 자르지 않도록 숫자 뒤 마침표는 제외한다.
 _CLAUSE_SPLIT_RE = re.compile(r"[\n;]+|(?<=[가-힣\)])\.\s+|\s+/\s+")
+
+# 검토서 원본 분류(category) -> 대상 힌트.
+# 상세의견 본문에 대상이 안 적혀 있어도 검토서의 분류 열이 무엇에 대한 지적인지
+# 이미 말해 준다. 본문에서 대상을 못 찾은 절에만 폴백으로 쓴다.
+# 키는 category 에서 공백을 지운 문자열로 맞춘다(표기 흔들림 흡수).
+CATEGORY_TARGET_HINTS: dict[str, str] = {
+    # 하중
+    "하중의적정성-고정하중": "고정하중",
+    "하중의적정성-활하중": "활하중",
+    "하중의적정성-풍하중": "풍하중",
+    "하중의적정성-설하중": "설하중",
+    "하중의적정성-지진하중": "지진하중",
+    "하중의적정성-토압및수압": "토압·수압",
+    "하중의적정성-기타": "하중산정",
+    "하중적정성": "하중산정",
+    # 구조도면
+    "구조도면작성의적정성-구조일반사항": "구조일반사항",
+    "구조도면작성의적정성-작성자기입": "작성자·날인",
+    "구조도면작성의적정성-구조평면도": "구조도면",
+    "구조도면작성의적정성-주요상세": "주요상세",
+    "구조도면작성의적정성-부재일람표": "부재일람표",
+    "구조도면작성의적정성-도면완성도": "구조도면",
+    "구조도면작성의적정성-기타": "구조도면",
+    "구조도면작성적정성": "구조도면",
+    # 확인서
+    "구조안전및내진설계확인서-내진설계": "내진설계",
+    "구조안전및내진설계확인서-내풍설계": "풍하중",
+    "구조안전및내진설계확인서-일반사항": "구조안전확인서",
+    "구조안전및내진설계확인서-기타": "구조안전확인서",
+    "구조안전및내진설계확인서": "구조안전확인서",
+    # 부재설계
+    "부재설계의적정성-구조설계요소": "부재설계",
+    "부재설계의적정성-기타": "부재설계",
+    "부재설계의적정성-내진설계대상": "내진설계",
+    "부재설계적정성": "부재설계",
+    "부재설계적정성-기타": "부재설계",
+}
+
+
+def category_target_hint(category: str | None) -> str | None:
+    """검토서 분류에서 대상 힌트를 얻는다. 모르는 분류면 None."""
+    if not category:
+        return None
+    key = re.sub(r"\s+", "", category)
+    return CATEGORY_TARGET_HINTS.get(key)
+
 
 # 대상 자체가 그 세부항목을 뜻하는 경우. "접합부 > 접합·정착"처럼 같은 말을
 # 두 번 쓰는 라벨이 되므로 세부항목을 비운다.
@@ -356,13 +418,21 @@ def _match_issue(clause: str) -> tuple[str, int] | None:
     return best[1], best[2]
 
 
-def match_keyword_combos(content: str) -> set[KeywordCombo]:
+def match_keyword_combos(
+    content: str,
+    category: str | None = None,
+) -> set[KeywordCombo]:
     """상세의견 한 건에서 조합 라벨 집합을 만든다.
 
     같은 조합이 한 건 안에서 여러 번 등장해도 1건으로 센다. 반복 표현보다
     "몇 개 의견에서 그 조합이 지적됐는가"가 통계로서 안정적이기 때문이다.
+
+    본문에 대상이 안 적힌 절은 검토서 분류(category)를 폴백으로 쓴다.
+    "구조일반사항 추가바람"처럼 짧은 지적은 본문만으로 대상을 알 수 없지만
+    분류 열이 이미 무엇에 대한 검토인지 말해 준다.
     """
     combos: set[KeywordCombo] = set()
+    hint = category_target_hint(category)
 
     for clause in split_clauses(content):
         issue_hit = _match_issue(clause)
@@ -371,6 +441,9 @@ def match_keyword_combos(content: str) -> set[KeywordCombo]:
         issue, issue_pos = issue_hit
 
         targets = _match_targets(clause)
+        if not targets and hint:
+            # 분류에서 온 대상은 절 안에 위치가 없으므로 유형 위치를 기준으로 둔다.
+            targets = [(hint, issue_pos)]
         if not targets:
             continue
 
@@ -405,7 +478,7 @@ def match_keyword_combos(content: str) -> set[KeywordCombo]:
     return combos
 
 
-def analyze_unmatched(content: str) -> str | None:
+def analyze_unmatched(content: str, category: str | None = None) -> str | None:
     """조합이 하나도 안 나온 이유를 돌려준다(미분류 사유 집계용).
 
     'no_target' 대상 없음 / 'no_issue' 유형 없음 / 'no_link' 둘 다 있으나 연결 실패.
@@ -414,10 +487,10 @@ def analyze_unmatched(content: str) -> str | None:
     clauses = split_clauses(content)
     if not clauses:
         return "empty"
-    if match_keyword_combos(content):
+    if match_keyword_combos(content, category):
         return None
 
-    has_target = False
+    has_target = category_target_hint(category) is not None
     has_issue = False
     for clause in clauses:
         if _match_targets(clause):

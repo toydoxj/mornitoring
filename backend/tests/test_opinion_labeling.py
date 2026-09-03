@@ -81,7 +81,8 @@ def test_다시_동기화해도_라벨과_대기가_중복되지_않는다(db_se
     assert db_session.query(OpinionLabelRun).count() == 1
 
 
-def test_LLM_라벨은_규칙_동기화로_지워지지_않는다(db_session, make_building):
+def test_LLM_라벨이_있으면_규칙_라벨을_덧붙이지_않는다(db_session, make_building):
+    """같은 지적이 두 조합으로 세지지 않도록 LLM·수기 라벨을 우선한다."""
     details = _make_details(db_session, make_building, ["구조일반사항 누락"])
     db_session.add(OpinionCombinationLabel(
         detail_id=details[0].id,
@@ -92,11 +93,20 @@ def test_LLM_라벨은_규칙_동기화로_지워지지_않는다(db_session, ma
     ))
     db_session.commit()
 
-    sync_rule_labels(db_session, details)
+    result = sync_rule_labels(db_session, details)
     db_session.commit()
 
+    rows = db_session.query(OpinionCombinationLabel).all()
+    assert [row.source for row in rows] == [LABEL_SOURCE_LLM]
+    assert result["labeled_details"] == 1
+    assert result["labels"] == 0
+    # LLM 라벨을 지우면 다음 동기화에서 규칙이 다시 분류한다.
+    db_session.query(OpinionCombinationLabel).delete()
+    db_session.commit()
+    sync_rule_labels(db_session, details)
+    db_session.commit()
     sources = {row.source for row in db_session.query(OpinionCombinationLabel).all()}
-    assert sources == {LABEL_SOURCE_RULE, LABEL_SOURCE_LLM}
+    assert sources == {LABEL_SOURCE_RULE}
 
 
 def test_입력_해시는_내용과_사유에_따라_달라진다():
