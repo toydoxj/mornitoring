@@ -24,10 +24,11 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from database import Base
 
-# secondary_target 이 없을 때 쓰는 값.
+# secondary_target / aspect 가 없을 때 쓰는 값.
 # NULL 로 두면 PostgreSQL·SQLite 모두 유니크 제약에서 NULL 을 서로 다른 값으로 봐서
 # 같은 조합이 중복 저장된다. 빈 문자열로 통일해 유니크 제약이 실제로 걸리게 한다.
 NO_SECONDARY_TARGET = ""
+NO_ASPECT = ""
 
 # 라벨 출처.
 LABEL_SOURCE_RULE = "rule"      # 정규식 규칙 사전
@@ -46,6 +47,9 @@ class OpinionCombinationLabel(Base):
 
     `A↔B 불일치`처럼 두 대상 사이의 관계인 라벨은 secondary_target 에 상대 대상을
     담는다. 단일 대상 라벨은 NO_SECONDARY_TARGET("")을 넣는다.
+
+    aspect 는 대상의 어느 국면인지를 담는다(예: 내진설계 > 저항시스템).
+    잡히지 않으면 NO_ASPECT("")다.
     """
 
     __tablename__ = "opinion_combination_labels"
@@ -54,6 +58,7 @@ class OpinionCombinationLabel(Base):
             "detail_id",
             "primary_target",
             "secondary_target",
+            "aspect",
             "issue_type",
             name="uq_opinion_combination_label",
         ),
@@ -70,6 +75,15 @@ class OpinionCombinationLabel(Base):
         String(40),
         nullable=False,
         default=NO_SECONDARY_TARGET,
+        server_default="",
+    )
+    # 세부항목 — 대상의 어느 국면이 문제인지. 없으면 빈 문자열.
+    # "내진설계 재검토요망"만으로는 무엇을 다시 보라는 것인지 알 수 없어서 둔다.
+    aspect: Mapped[str] = mapped_column(
+        String(30),
+        index=True,
+        nullable=False,
+        default=NO_ASPECT,
         server_default="",
     )
     issue_type: Mapped[str] = mapped_column(String(20), index=True, nullable=False)

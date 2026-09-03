@@ -17,8 +17,13 @@ from dataclasses import dataclass
 from openai import OpenAI, OpenAIError
 
 from config import settings
-from engines.review_keyword_analyzer import ISSUE_NAMES, TARGET_NAMES
-from models.opinion_label import NO_SECONDARY_TARGET
+from engines.review_keyword_analyzer import (
+    ASPECT_NAMES,
+    ISSUE_NAMES,
+    REDUNDANT_ASPECTS,
+    TARGET_NAMES,
+)
+from models.opinion_label import NO_ASPECT, NO_SECONDARY_TARGET
 
 logger = logging.getLogger(__name__)
 
@@ -35,8 +40,11 @@ SYSTEM_PROMPT = """너는 건축구조 검토서의 지적사항을 분류하는
    그 외에는 secondary_target 을 빈 문자열로 둔다.
 4. 실제로 지적하지 않은 조합을 만들지 마라. 대상 목록과 유형 목록을 임의로
    교차 조합하면 안 된다.
-5. 분류할 수 없으면 labels 를 빈 배열로 둔다. 억지로 채우지 마라.
-6. "적합", "해당없음"처럼 지적이 아닌 내용은 labels 를 빈 배열로 둔다."""
+5. aspect(세부항목)에는 대상의 어느 국면이 문제인지 넣는다. 예를 들어
+   "지진력저항시스템 재검토 필요"는 대상 "내진설계", 세부항목 "저항시스템"이다.
+   문장에서 국면을 특정할 수 없으면 빈 문자열로 둔다. 추측해서 채우지 마라.
+6. 분류할 수 없으면 labels 를 빈 배열로 둔다. 억지로 채우지 마라.
+7. "적합", "해당없음"처럼 지적이 아닌 내용은 labels 를 빈 배열로 둔다."""
 
 
 @dataclass(frozen=True)
@@ -45,6 +53,7 @@ class LabelResult:
 
     primary_target: str
     secondary_target: str
+    aspect: str
     issue_type: str
 
 
@@ -85,6 +94,7 @@ def build_json_schema() -> dict:
                                 "required": [
                                     "primary_target",
                                     "secondary_target",
+                                    "aspect",
                                     "issue_type",
                                 ],
                                 "properties": {
@@ -92,6 +102,7 @@ def build_json_schema() -> dict:
                                     "secondary_target": {
                                         "enum": [NO_SECONDARY_TARGET, *TARGET_NAMES]
                                     },
+                                    "aspect": {"enum": [NO_ASPECT, *ASPECT_NAMES]},
                                     "issue_type": {"enum": list(ISSUE_NAMES)},
                                 },
                             },
@@ -107,6 +118,7 @@ def build_user_message(items: list[tuple[int, str, str | None]]) -> str:
     """(index, content, category) 목록을 프롬프트 본문으로 만든다."""
     lines = [
         "대상 목록: " + ", ".join(TARGET_NAMES),
+        "세부항목 목록: " + ", ".join(ASPECT_NAMES),
         "문제유형 목록: " + ", ".join(ISSUE_NAMES),
         "",
         "다음 검토의견을 분류하라.",
@@ -122,19 +134,25 @@ def _validate(raw_labels: list[dict]) -> list[LabelResult]:
     """모델 출력이 허용 목록 안에 있는지 다시 확인한다."""
     valid_targets = set(TARGET_NAMES)
     valid_issues = set(ISSUE_NAMES)
+    valid_aspects = set(ASPECT_NAMES)
     results: list[LabelResult] = []
-    seen: set[tuple[str, str, str]] = set()
+    seen: set[tuple[str, str, str, str]] = set()
 
     for item in raw_labels:
         if not isinstance(item, dict):
             continue
         primary = str(item.get("primary_target") or "")
         secondary = str(item.get("secondary_target") or NO_SECONDARY_TARGET)
+        aspect = str(item.get("aspect") or NO_ASPECT)
         issue = str(item.get("issue_type") or "")
         if primary not in valid_targets or issue not in valid_issues:
             continue
         if secondary and secondary not in valid_targets:
             continue
+        if aspect and aspect not in valid_aspects:
+            aspect = NO_ASPECT
+        if aspect in REDUNDANT_ASPECTS.get(primary, frozenset()):
+            aspect = NO_ASPECT
         if secondary == primary:
             secondary = NO_SECONDARY_TARGET
         # 관계형 라벨은 불일치에만 허용한다.
@@ -143,11 +161,11 @@ def _validate(raw_labels: list[dict]) -> list[LabelResult]:
         # 쌍은 순서를 고정해 같은 관계가 두 방향으로 저장되지 않게 한다.
         if secondary and primary > secondary:
             primary, secondary = secondary, primary
-        key = (primary, secondary, issue)
+        key = (primary, secondary, aspect, issue)
         if key in seen:
             continue
         seen.add(key)
-        results.append(LabelResult(primary, secondary, issue))
+        results.append(LabelResult(primary, secondary, aspect, issue))
     return results
 
 

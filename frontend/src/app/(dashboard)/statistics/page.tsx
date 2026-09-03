@@ -197,6 +197,7 @@ interface KeywordComboStat extends KeywordCountFields {
   combo: string
   primary_target: string
   secondary_target: string | null
+  aspect: string | null
   issue: string
 }
 
@@ -207,6 +208,11 @@ interface KeywordTargetStat extends KeywordCountFields {
 
 interface KeywordIssueStat extends KeywordCountFields {
   issue: string
+}
+
+/** 세부항목 — 대상의 어느 국면이 문제인지(예: 내진설계 > 저항시스템). */
+interface KeywordAspectStat extends KeywordCountFields {
+  aspect: string
 }
 
 interface KeywordUnmatched {
@@ -234,6 +240,7 @@ interface KeywordStats {
   by_combo: KeywordComboStat[]
   by_target: KeywordTargetStat[]
   by_issue: KeywordIssueStat[]
+  by_aspect: KeywordAspectStat[]
   unmatched: KeywordUnmatched
   labeling: KeywordLabeling
   ruleset_version: string
@@ -1562,7 +1569,8 @@ function KeywordStatsView({
 
       <p className="text-xs text-muted-foreground">
         상세의견을 절 단위로 나눈 뒤 <strong>대상</strong>(무엇을) ×{" "}
-        <strong>문제유형</strong>(무엇이 잘못)으로 조합해 집계함. 한 의견에서 같은
+        <strong>세부항목</strong>(어느 국면이) × <strong>문제유형</strong>(무엇이
+        잘못)으로 조합해 집계함. 세부항목은 문장에서 특정되는 경우에만 붙음. 한 의견에서 같은
         조합이 여러 번 나와도 1건으로 셈. 미분류{" "}
         {stats.unmatched.total.toLocaleString()}건(대상 없음{" "}
         {(stats.unmatched.no_target + stats.unmatched.no_target_issue).toLocaleString()}
@@ -1583,7 +1591,7 @@ function KeywordStatsView({
         ) : null}
       </p>
 
-      <div className="grid gap-5 md:grid-cols-2">
+      <div className="grid gap-5 md:grid-cols-3">
         <section className="space-y-2">
           <h2 className="text-sm font-semibold">대상별 지적 건수</h2>
           <CountTable
@@ -1593,6 +1601,17 @@ function KeywordStatsView({
               count: row.total,
             }))}
             emptyText="분류된 대상이 없습니다."
+          />
+        </section>
+        <section className="space-y-2">
+          <h2 className="text-sm font-semibold">세부항목별 지적 건수</h2>
+          <CountTable
+            labelHeader="세부항목"
+            rows={stats.by_aspect.map((row) => ({
+              label: row.aspect,
+              count: row.total,
+            }))}
+            emptyText="분류된 세부항목이 없습니다."
           />
         </section>
         <section className="space-y-2">

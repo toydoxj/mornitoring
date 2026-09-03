@@ -162,6 +162,7 @@ def store_labels(
                 OpinionCombinationLabel.detail_id == detail_id,
                 OpinionCombinationLabel.primary_target == label.primary_target,
                 OpinionCombinationLabel.secondary_target == label.secondary_target,
+                OpinionCombinationLabel.aspect == label.aspect,
                 OpinionCombinationLabel.issue_type == label.issue_type,
             )
         ).first()
@@ -171,6 +172,7 @@ def store_labels(
             detail_id=detail_id,
             primary_target=label.primary_target,
             secondary_target=label.secondary_target,
+            aspect=label.aspect,
             issue_type=label.issue_type,
             source=LABEL_SOURCE_LLM,
             ruleset_version=RULESET_VERSION,

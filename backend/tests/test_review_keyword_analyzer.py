@@ -1,6 +1,7 @@
 """조합 키워드 분석 엔진 테스트."""
 
 from engines.review_keyword_analyzer import (
+    ASPECT_NAMES,
     ISSUE_NAMES,
     TARGET_NAMES,
     analyze_unmatched,
@@ -30,14 +31,16 @@ def test_절이_다르면_각각_조합된다():
     # 카테시안 곱이면 "구조도면 불일치", "구조계산서 누락"까지 생기지만
     # 절 단위로 끊으므로 실제 지적만 남는다.
     result = labels("구조계산서 값이 상이함\n구조도면에 부재 치수 누락")
-    assert result == {"구조계산서 불일치", "구조도면 누락"}
+    assert result == {"구조계산서 불일치", "구조도면 > 수량·치수 누락"}
 
 
 def test_한_절에서_유형은_우선순위가_높은_하나만_쓴다():
     # "누락 → 추가 필요"는 같은 지적이므로 누락 하나로만 센다.
     assert labels("구조일반사항이 누락되었으므로 추가 필요") == {"구조일반사항 누락"}
     # 불일치가 누락보다 우선한다.
-    assert labels("배근도와 값이 상이하고 일부 표기가 없음") == {"구조도면 불일치"}
+    assert labels("배근도와 값이 상이하고 일부 표기가 없음") == {
+        "구조도면 > 배근·상세 불일치"
+    }
 
 
 def test_부재_보는_확보나_보완에_오탐되지_않는다():
@@ -89,12 +92,40 @@ def test_하중은_종류별로_세분되고_상위는_빠진다():
 
 
 def test_내진설계와_지진하중을_구분한다():
-    assert labels("내진등급 최신화 수정 요망") == {"내진설계 추가·보완제출"}
+    assert labels("내진등급 최신화 수정 요망") == {"내진설계 > 내진등급 추가·보완제출"}
     assert "내진설계 재검토요망" not in labels("밑면전단력 재산정 필요")
 
 
+def test_세부항목이_붙어_무엇을_지적했는지_드러난다():
+    # 대상·유형만으로는 "무엇을 재검토하라는지" 알 수 없던 것이 드러난다.
+    assert labels("지진력저항시스템에 대한 재검토가 필요합니다") == {
+        "내진설계 > 저항시스템 재검토요망"
+    }
+    assert labels("구조계산서와 구조도면의 배근 상이") == {
+        "구조계산서↔구조도면 > 배근·상세 불일치"
+    }
+    # 세부 국면이 문장에 없으면 붙이지 않는다.
+    assert labels("구조일반사항이 누락되었습니다") == {"구조일반사항 누락"}
+
+
+def test_대상과_같은_뜻인_세부항목은_붙이지_않는다():
+    # "접합부 > 접합·정착"은 같은 말을 두 번 쓰는 라벨이다.
+    assert "접합부 > 접합·정착 누락" not in labels("철골 접합부 상세 누락")
+    assert "접합부 누락" in labels("철골 접합부 상세 누락")
+
+
+def test_하중_종류가_더_세분된다():
+    assert labels("크레인 하중 조합 누락") == {"크레인하중 누락", "하중조합 누락"}
+    assert labels("편토압에 대한 하중 검토가 누락됐습니다") == {"토압·수압 누락"}
+    assert labels("지붕층 하중 중 각파이프 하중 누락") == {"고정하중 누락"}
+    # "시설 하중"이 설하중으로 오탐되지 않아야 한다.
+    assert "설하중 누락" not in labels("제2종 근린생활시설 하중이 누락됨")
+
+
 def test_사전_구성():
-    assert len(TARGET_NAMES) == 23
+    assert len(TARGET_NAMES) == 26
     assert len(ISSUE_NAMES) == 7
+    assert len(ASPECT_NAMES) == 11
+    assert len(set(ASPECT_NAMES)) == len(ASPECT_NAMES)
     assert len(set(TARGET_NAMES)) == len(TARGET_NAMES)
     assert len(set(ISSUE_NAMES)) == len(ISSUE_NAMES)

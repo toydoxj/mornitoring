@@ -587,6 +587,7 @@ def get_stats(
     from sqlalchemy import union
     from engines.review_keyword_analyzer import RULESET_VERSION, TARGET_GROUPS
     from models.opinion_label import (
+        NO_ASPECT,
         NO_SECONDARY_TARGET,
         OpinionCombinationLabel,
         OpinionLabelRun,
@@ -1462,6 +1463,7 @@ def get_stats(
         db.query(
             OpinionCombinationLabel.primary_target,
             OpinionCombinationLabel.secondary_target,
+            OpinionCombinationLabel.aspect,
             OpinionCombinationLabel.issue_type,
             ReviewOpinionDetail.phase_group,
             ReviewOpinionDetail.severity,
@@ -1473,6 +1475,7 @@ def get_stats(
     ).group_by(
         OpinionCombinationLabel.primary_target,
         OpinionCombinationLabel.secondary_target,
+        OpinionCombinationLabel.aspect,
         OpinionCombinationLabel.issue_type,
         ReviewOpinionDetail.phase_group,
         ReviewOpinionDetail.severity,
@@ -1523,6 +1526,23 @@ def get_stats(
         ReviewOpinionDetail.severity,
     ).all()
 
+    aspect_count_rows = _scoped_by_building_id(
+        db.query(
+            OpinionCombinationLabel.aspect,
+            ReviewOpinionDetail.phase_group,
+            ReviewOpinionDetail.severity,
+            sa_func.count(sa_func.distinct(ReviewOpinionDetail.id)).label("cnt"),
+        )
+        .join(ReviewOpinionDetail, OpinionCombinationLabel.detail_id == ReviewOpinionDetail.id)
+        .join(ReviewStage, ReviewOpinionDetail.stage_id == ReviewStage.id)
+        .filter(OpinionCombinationLabel.aspect != NO_ASPECT),
+        ReviewStage.building_id,
+    ).group_by(
+        OpinionCombinationLabel.aspect,
+        ReviewOpinionDetail.phase_group,
+        ReviewOpinionDetail.severity,
+    ).all()
+
     # 라벨이 하나도 없는 의견 = 미분류. 사유는 라벨링 작업 이력에서 가져온다.
     labeled_detail_exists = (
         select(OpinionCombinationLabel.id)
@@ -1556,6 +1576,7 @@ def get_stats(
     combo_map: dict[str, dict[str, int | str | None]] = {}
     target_map: dict[str, dict[str, int | str]] = {}
     issue_map: dict[str, dict[str, int | str]] = {}
+    aspect_map: dict[str, dict[str, int | str]] = {}
     unmatched_counts = {
         "total": 0,
         "no_target": 0,
@@ -1578,19 +1599,29 @@ def get_stats(
         if severity in SEVERITY_LABELS:
             row[severity] = int(row[severity]) + count
 
-    for primary, secondary, issue_type, phase_group, severity, cnt in combo_count_rows:
-        label = (
-            f"{primary}↔{secondary} {issue_type}"
+    for primary, secondary, aspect, issue_type, phase_group, severity, cnt in combo_count_rows:
+        head = (
+            f"{primary}↔{secondary}"
             if secondary and secondary != NO_SECONDARY_TARGET
-            else f"{primary} {issue_type}"
+            else primary
         )
+        label = f"{head} > {aspect} {issue_type}" if aspect else f"{head} {issue_type}"
         _bump(
             combo_map.setdefault(label, _new_counter(
                 combo=label,
                 primary_target=primary,
                 secondary_target=secondary or None,
+                aspect=aspect or None,
                 issue=issue_type,
             )),
+            phase_group,
+            severity,
+            cnt,
+        )
+
+    for aspect_name, phase_group, severity, cnt in aspect_count_rows:
+        _bump(
+            aspect_map.setdefault(aspect_name, _new_counter(aspect=aspect_name)),
             phase_group,
             severity,
             cnt,
@@ -1698,6 +1729,10 @@ def get_stats(
         issue_map.values(),
         key=lambda row: (-int(row["total"]), str(row["issue"])),
     )
+    aspect_rows = sorted(
+        aspect_map.values(),
+        key=lambda row: (-int(row["total"]), str(row["aspect"])),
+    )
     quality_term_rows = sorted(
         quality_term_map.values(),
         key=lambda row: (-int(row["count"]), str(row["term"])),
@@ -1767,6 +1802,7 @@ def get_stats(
             "by_combo": combo_rows,
             "by_target": target_rows,
             "by_issue": issue_rows,
+            "by_aspect": aspect_rows,
             "unmatched": unmatched_counts,
             "labeling": labeling_counts,
             "ruleset_version": RULESET_VERSION,

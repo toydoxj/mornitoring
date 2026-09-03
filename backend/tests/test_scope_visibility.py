@@ -680,8 +680,8 @@ def test_stats_returns_keyword_summary_from_opinion_details(
     assert keyword_stats["total_details"] == 2
     assert keyword_stats["detail_counts"] == {"preliminary": 1, "supplement": 1}
     # "전이보 스트럽 간격 보완할 것." → 대상=보, 유형=추가·보완제출
-    assert by_combo["보 추가·보완제출"]["preliminary"] == 1
-    assert by_combo["보 추가·보완제출"]["L3"] == 1
+    assert by_combo["보 > 배근·상세 추가·보완제출"]["preliminary"] == 1
+    assert by_combo["보 > 배근·상세 추가·보완제출"]["L3"] == 1
     # "지반조사서 누락" → 대상=지반조사서, 유형=누락
     assert by_combo["지반조사서 누락"]["supplement"] == 1
     assert by_target["보"]["total"] == 1

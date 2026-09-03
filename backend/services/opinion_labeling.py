@@ -24,6 +24,7 @@ from engines.review_keyword_analyzer import (
 )
 from models.opinion_label import (
     LABEL_SOURCE_RULE,
+    NO_ASPECT,
     NO_SECONDARY_TARGET,
     RUN_STATUS_PENDING,
     OpinionCombinationLabel,
@@ -32,7 +33,7 @@ from models.opinion_label import (
 from models.review_opinion_detail import ReviewOpinionDetail
 
 # LLM 프롬프트·응답 스키마 계약 버전. 프롬프트나 출력 스키마를 바꾸면 올린다.
-LLM_CONTRACT_VERSION = "1"
+LLM_CONTRACT_VERSION = "2"
 
 
 def compute_input_hash(
@@ -65,6 +66,7 @@ def _label_rows_for(detail: ReviewOpinionDetail) -> list[dict]:
             "detail_id": detail.id,
             "primary_target": combo.primary_target,
             "secondary_target": combo.secondary_target or NO_SECONDARY_TARGET,
+            "aspect": combo.aspect or NO_ASPECT,
             "issue_type": combo.issue,
             "source": LABEL_SOURCE_RULE,
             "ruleset_version": RULESET_VERSION,
