@@ -86,6 +86,15 @@ class Settings(BaseSettings):
     # 사용자별 분당 질문 수 상한
     stats_chat_rate_limit_per_minute: int = 10
 
+    # --- 검토의견 조합 라벨 LLM 보완 (scripts/label_opinions.py) ---
+    # 규칙 사전으로 분류되지 않은 의견만 LLM에 보낸다. 비용이 무한정 늘지 않도록
+    # 한 번 실행에서 처리할 의견 수와 재시도 횟수에 상한을 둔다.
+    opinion_label_batch_size: int = 20          # LLM 1회 호출에 묶는 의견 수
+    opinion_label_max_runs_per_execution: int = 1000  # 스크립트 1회 실행 처리 상한
+    opinion_label_max_attempts: int = 3         # 같은 건 재시도 상한
+    opinion_label_max_output_tokens: int = 4000
+    opinion_label_max_content_chars: int = 1200  # 의견 1건당 전송 길이 상한
+
     # 배포된 커밋 SHA. Render가 배포 시 RENDER_GIT_COMMIT으로 자동 주입한다.
     # 헬스체크로 노출해 "지금 운영에 어떤 코드가 떠 있는지"를 밖에서 확인할 수 있게 한다.
     # 로컬 실행 시에는 비어 있다.

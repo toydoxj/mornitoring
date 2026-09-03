@@ -38,7 +38,7 @@ type OpinionQualityDecision = "suitable" | "unsuitable"
 type SeverityTableSortKey<TLabel extends string> = "label" | "total" | TLabel
 type RegionalSortKey<T extends string> = "region" | "total" | T
 type KeywordSortKey =
-  | "keyword"
+  | "combo"
   | "total"
   | "preliminary"
   | "supplement"
@@ -180,8 +180,8 @@ interface SeverityStats {
   by_report_max: SeverityReportMaxStats
 }
 
-interface KeywordStat {
-  keyword: string
+/** 조합 키워드 표의 공통 집계 필드. */
+interface KeywordCountFields {
   total: number
   preliminary: number
   supplement: number
@@ -192,13 +192,51 @@ interface KeywordStat {
   L4: number
 }
 
+/** 대상 x 문제유형 조합. secondary_target이 있으면 "A↔B 불일치" 형태다. */
+interface KeywordComboStat extends KeywordCountFields {
+  combo: string
+  primary_target: string
+  secondary_target: string | null
+  issue: string
+}
+
+interface KeywordTargetStat extends KeywordCountFields {
+  target: string
+  group: string
+}
+
+interface KeywordIssueStat extends KeywordCountFields {
+  issue: string
+}
+
+interface KeywordUnmatched {
+  total: number
+  no_target: number
+  no_issue: number
+  no_target_issue: number
+  no_link: number
+  empty: number
+}
+
+interface KeywordLabeling {
+  pending: number
+  running: number
+  completed: number
+  failed: number
+}
+
 interface KeywordStats {
   total_details: number
   detail_counts: {
     preliminary: number
     supplement: number
   }
-  by_keyword: KeywordStat[]
+  by_combo: KeywordComboStat[]
+  by_target: KeywordTargetStat[]
+  by_issue: KeywordIssueStat[]
+  unmatched: KeywordUnmatched
+  labeling: KeywordLabeling
+  ruleset_version: string
 }
 
 interface OpinionQualityCategoryStat {
@@ -1478,6 +1516,7 @@ function KeywordStatsView({
   const { sortState, handleSort } = useTableSort<KeywordSortKey>({
     numericKeys: ["total", "preliminary", "supplement", ...SEVERITY_LABELS],
   })
+  const [issueFilter, setIssueFilter] = useState<string>("all")
 
   if (isLoading) {
     return <LoadingMessage />
@@ -1486,13 +1525,19 @@ function KeywordStatsView({
     return <EmptyMessage>상세검토 내용 분석 자료가 없습니다.</EmptyMessage>
   }
 
-  const sortedKeywords = sortRowsBy(stats.by_keyword, sortState, (row, key) =>
-    key === "keyword" ? row.keyword : row[key] ?? 0,
+  const matchedDetails = stats.total_details - stats.unmatched.total
+  const filteredCombos =
+    issueFilter === "all"
+      ? stats.by_combo
+      : stats.by_combo.filter((row) => row.issue === issueFilter)
+  const sortedCombos = sortRowsBy(filteredCombos, sortState, (row, key) =>
+    key === "combo" ? row.combo : row[key] ?? 0,
   )
+  const issueOptions = stats.by_issue.map((row) => row.issue)
 
   return (
     <div className="space-y-5">
-      <div className="grid gap-3 md:grid-cols-3">
+      <div className="grid gap-3 md:grid-cols-4">
         <KeywordSummaryCard
           label="상세내용 총합"
           value={stats.total_details}
@@ -1508,24 +1553,100 @@ function KeywordStatsView({
           value={stats.detail_counts.supplement}
           tone="amber"
         />
+        <KeywordSummaryCard
+          label="조합 분류 완료"
+          value={matchedDetails}
+          tone="emerald"
+        />
+      </div>
+
+      <p className="text-xs text-muted-foreground">
+        상세의견을 절 단위로 나눈 뒤 <strong>대상</strong>(무엇을) ×{" "}
+        <strong>문제유형</strong>(무엇이 잘못)으로 조합해 집계함. 한 의견에서 같은
+        조합이 여러 번 나와도 1건으로 셈. 미분류{" "}
+        {stats.unmatched.total.toLocaleString()}건(대상 없음{" "}
+        {(stats.unmatched.no_target + stats.unmatched.no_target_issue).toLocaleString()}
+        , 유형 없음 {stats.unmatched.no_issue.toLocaleString()}, 연결 실패{" "}
+        {stats.unmatched.no_link.toLocaleString()}). 규칙 사전{" "}
+        {stats.ruleset_version}.
+        {stats.labeling.pending > 0 || stats.labeling.failed > 0 ? (
+          <>
+            {" "}
+            <strong className="text-amber-700">
+              AI 보완 분류 대기 {stats.labeling.pending.toLocaleString()}건
+              {stats.labeling.failed > 0
+                ? `, 실패 ${stats.labeling.failed.toLocaleString()}건`
+                : ""}
+            </strong>
+            {" "}— 처리 후 수치가 늘어남.
+          </>
+        ) : null}
+      </p>
+
+      <div className="grid gap-5 md:grid-cols-2">
+        <section className="space-y-2">
+          <h2 className="text-sm font-semibold">대상별 지적 건수</h2>
+          <CountTable
+            labelHeader="대상"
+            rows={stats.by_target.map((row) => ({
+              label: row.target,
+              count: row.total,
+            }))}
+            emptyText="분류된 대상이 없습니다."
+          />
+        </section>
+        <section className="space-y-2">
+          <h2 className="text-sm font-semibold">문제유형별 지적 건수</h2>
+          <CountTable
+            labelHeader="문제유형"
+            rows={stats.by_issue.map((row) => ({
+              label: row.issue,
+              count: row.total,
+            }))}
+            emptyText="분류된 문제유형이 없습니다."
+          />
+        </section>
       </div>
 
       <section className="space-y-2">
-        <h2 className="text-sm font-semibold">키워드별 발생 현황</h2>
-        {stats.by_keyword.length === 0 ? (
-          <EmptyMessage>매칭된 키워드가 없습니다.</EmptyMessage>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-sm font-semibold">조합 키워드별 발생 현황</h2>
+          <div className="flex flex-wrap gap-1">
+            <Button
+              type="button"
+              size="sm"
+              variant={issueFilter === "all" ? "default" : "outline"}
+              onClick={() => setIssueFilter("all")}
+            >
+              전체
+            </Button>
+            {issueOptions.map((issue) => (
+              <Button
+                key={issue}
+                type="button"
+                size="sm"
+                variant={issueFilter === issue ? "default" : "outline"}
+                onClick={() => setIssueFilter(issue)}
+              >
+                {issue}
+              </Button>
+            ))}
+          </div>
+        </div>
+        {sortedCombos.length === 0 ? (
+          <EmptyMessage>매칭된 조합 키워드가 없습니다.</EmptyMessage>
         ) : (
           <div className="overflow-x-auto rounded-md border">
             <Table>
               <TableHeader>
                 <TableRow>
                   <SortableTableHead
-                    sortKey="keyword"
+                    sortKey="combo"
                     sortState={sortState}
                     onSort={handleSort}
                     align="left"
                   >
-                    키워드
+                    조합 키워드
                   </SortableTableHead>
                   <SortableTableHead
                     sortKey="total"
@@ -1565,9 +1686,16 @@ function KeywordStatsView({
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {sortedKeywords.map((row) => (
-                  <TableRow key={row.keyword}>
-                    <TableCell className="font-medium">{row.keyword}</TableCell>
+                {sortedCombos.map((row) => (
+                  <TableRow key={row.combo}>
+                    <TableCell className="font-medium">
+                      {row.combo}
+                      {row.secondary_target ? (
+                        <Badge variant="outline" className="ml-2">
+                          대상 간
+                        </Badge>
+                      ) : null}
+                    </TableCell>
                     <TableCell className="text-center font-semibold">
                       {row.total}
                     </TableCell>
@@ -1603,7 +1731,6 @@ function KeywordStatsView({
     </div>
   )
 }
-
 function KeywordSummaryCard({
   label,
   value,

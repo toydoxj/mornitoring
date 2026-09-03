@@ -29,6 +29,7 @@ from engines.review_extractor import extract_review_data
 from engines.opinion_text import clean_opinion_detail_content
 from engines.opinion_quality_analyzer import match_opinion_quality
 from services.business_date import business_today
+from services.opinion_labeling import sync_rule_labels_for_stage
 from logging_config import log_event
 
 logger = logging.getLogger(__name__)
@@ -820,6 +821,12 @@ def _apply_opinion_details(
             severity=severity,
             content=content,
         ))
+
+    # 조합 키워드 라벨은 저장과 같은 트랜잭션에서 규칙으로 즉시 계산한다.
+    # 규칙으로 분류되지 않은 건은 pending 으로만 등록하고, 외부 LLM 호출은
+    # 업로드 응답을 지연시키지 않도록 별도 배치(scripts/label_opinions.py)가 처리한다.
+    db.flush()
+    sync_rule_labels_for_stage(db, stage.id)
 
 
 def _normalize_editable_severity(value: str | None) -> str:

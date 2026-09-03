@@ -14,6 +14,7 @@ from models.review_opinion_detail import ReviewOpinionDetail
 from models.review_severity_summary import ReviewSeveritySummary
 from models.review_stage import InappropriateDecision, PhaseType, ResultType, ReviewStage
 from models.user import UserRole
+from services.opinion_labeling import sync_rule_labels
 
 
 def _make_two_groups(make_user, make_reviewer, make_building, db_session):
@@ -665,19 +666,29 @@ def test_stats_returns_keyword_summary_from_opinion_details(
         ),
     ])
     db_session.commit()
+    # 실제 업로드 경로(_apply_opinion_details)와 같게 규칙 라벨을 만들어 둔다.
+    sync_rule_labels(db_session, db_session.query(ReviewOpinionDetail).all())
+    db_session.commit()
 
     res = client.get("/api/buildings/stats", headers=headers)
     assert res.status_code == 200
     keyword_stats = res.json()["keyword_stats"]
-    by_keyword = {row["keyword"]: row for row in keyword_stats["by_keyword"]}
+    by_combo = {row["combo"]: row for row in keyword_stats["by_combo"]}
+    by_target = {row["target"]: row for row in keyword_stats["by_target"]}
+    by_issue = {row["issue"]: row for row in keyword_stats["by_issue"]}
 
     assert keyword_stats["total_details"] == 2
     assert keyword_stats["detail_counts"] == {"preliminary": 1, "supplement": 1}
-    assert by_keyword["전이보"]["preliminary"] == 1
-    assert by_keyword["스트럽"]["preliminary"] == 1
-    assert by_keyword["보완"]["preliminary"] == 1
-    assert by_keyword["지반조사서"]["supplement"] == 1
-    assert by_keyword["누락"]["supplement"] == 1
+    # "전이보 스트럽 간격 보완할 것." → 대상=보, 유형=추가·보완제출
+    assert by_combo["보 추가·보완제출"]["preliminary"] == 1
+    assert by_combo["보 추가·보완제출"]["L3"] == 1
+    # "지반조사서 누락" → 대상=지반조사서, 유형=누락
+    assert by_combo["지반조사서 누락"]["supplement"] == 1
+    assert by_target["보"]["total"] == 1
+    assert by_target["지반조사서"]["total"] == 1
+    assert by_issue["추가·보완제출"]["total"] == 1
+    assert by_issue["누락"]["total"] == 1
+    assert keyword_stats["unmatched"]["total"] == 0
 
 
 def test_stats_returns_opinion_quality_summary_and_details(
@@ -963,14 +974,16 @@ def test_secretary_stats_keyword_excludes_other_group(
         ),
     ])
     db_session.commit()
+    sync_rule_labels(db_session, db_session.query(ReviewOpinionDetail).all())
+    db_session.commit()
 
     res = client.get("/api/buildings/stats", headers=sec_h)
     assert res.status_code == 200
     keyword_stats = res.json()["keyword_stats"]
-    keywords = {row["keyword"] for row in keyword_stats["by_keyword"]}
+    combos = {row["combo"] for row in keyword_stats["by_combo"]}
     assert keyword_stats["total_details"] == 1
-    assert "지반조사서" in keywords
-    assert "전이보" not in keywords
+    assert "지반조사서 누락" in combos
+    assert "보 추가·보완제출" not in combos
 
     quality_stats = res.json()["opinion_quality_stats"]
     terms = {row["term"] for row in quality_stats["by_term"]}

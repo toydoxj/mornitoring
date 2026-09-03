@@ -17,6 +17,7 @@ from models.phase_transition_log import PhaseTransitionLog
 from models.deploy_batch_stage import DeployBatchStage
 from models.resubmission_request import ResubmissionRequest
 from models.stats_chat import StatsChatConversation, StatsChatMessage
+from models.opinion_label import OpinionCombinationLabel, OpinionLabelRun
 
 __all__ = [
     "User",
@@ -43,4 +44,6 @@ __all__ = [
     "ResubmissionRequest",
     "StatsChatConversation",
     "StatsChatMessage",
+    "OpinionCombinationLabel",
+    "OpinionLabelRun",
 ]

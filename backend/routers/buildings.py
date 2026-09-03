@@ -584,7 +584,13 @@ def get_stats(
         raise HTTPException(status_code=400, detail="허용되지 않는 배포차수입니다")
     from sqlalchemy import and_, case, func as sa_func, or_
     from engines.opinion_quality_analyzer import match_opinion_quality
-    from engines.review_keyword_analyzer import match_keywords
+    from sqlalchemy import union
+    from engines.review_keyword_analyzer import RULESET_VERSION, TARGET_GROUPS
+    from models.opinion_label import (
+        NO_SECONDARY_TARGET,
+        OpinionCombinationLabel,
+        OpinionLabelRun,
+    )
     from models.inquiry import Inquiry, InquiryStatus
     from models.review_opinion_detail import ReviewOpinionDetail
     from models.review_severity_summary import ReviewSeveritySummary
@@ -1449,9 +1455,176 @@ def get_stats(
         )
         .all()
     )
+    # 6-1) 조합 키워드(대상 x 문제유형) 집계.
+    # 라벨은 검토서 업로드 시점에 미리 계산해 두므로 여기서는 SQL 집계만 한다.
+    # 한 의견에서 같은 조합이 여러 번 나와도 1건이어야 하므로 detail 단위로 distinct 한다.
+    combo_count_rows = _scoped_by_building_id(
+        db.query(
+            OpinionCombinationLabel.primary_target,
+            OpinionCombinationLabel.secondary_target,
+            OpinionCombinationLabel.issue_type,
+            ReviewOpinionDetail.phase_group,
+            ReviewOpinionDetail.severity,
+            sa_func.count(sa_func.distinct(ReviewOpinionDetail.id)).label("cnt"),
+        )
+        .join(ReviewOpinionDetail, OpinionCombinationLabel.detail_id == ReviewOpinionDetail.id)
+        .join(ReviewStage, ReviewOpinionDetail.stage_id == ReviewStage.id),
+        ReviewStage.building_id,
+    ).group_by(
+        OpinionCombinationLabel.primary_target,
+        OpinionCombinationLabel.secondary_target,
+        OpinionCombinationLabel.issue_type,
+        ReviewOpinionDetail.phase_group,
+        ReviewOpinionDetail.severity,
+    ).all()
+
+    # 대상별 요약은 primary/secondary 를 합쳐 펼친 뒤 의견 단위로 중복을 없앤다.
+    # (A↔B 불일치 한 건은 A에도 B에도 1건씩 잡혀야 한다)
+    target_pairs = union(
+        select(
+            OpinionCombinationLabel.detail_id.label("detail_id"),
+            OpinionCombinationLabel.primary_target.label("target"),
+        ),
+        select(
+            OpinionCombinationLabel.detail_id.label("detail_id"),
+            OpinionCombinationLabel.secondary_target.label("target"),
+        ).where(OpinionCombinationLabel.secondary_target != NO_SECONDARY_TARGET),
+    ).subquery()
+
+    target_count_rows = _scoped_by_building_id(
+        db.query(
+            target_pairs.c.target,
+            ReviewOpinionDetail.phase_group,
+            ReviewOpinionDetail.severity,
+            sa_func.count(sa_func.distinct(ReviewOpinionDetail.id)).label("cnt"),
+        )
+        .join(ReviewOpinionDetail, target_pairs.c.detail_id == ReviewOpinionDetail.id)
+        .join(ReviewStage, ReviewOpinionDetail.stage_id == ReviewStage.id),
+        ReviewStage.building_id,
+    ).group_by(
+        target_pairs.c.target,
+        ReviewOpinionDetail.phase_group,
+        ReviewOpinionDetail.severity,
+    ).all()
+
+    issue_count_rows = _scoped_by_building_id(
+        db.query(
+            OpinionCombinationLabel.issue_type,
+            ReviewOpinionDetail.phase_group,
+            ReviewOpinionDetail.severity,
+            sa_func.count(sa_func.distinct(ReviewOpinionDetail.id)).label("cnt"),
+        )
+        .join(ReviewOpinionDetail, OpinionCombinationLabel.detail_id == ReviewOpinionDetail.id)
+        .join(ReviewStage, ReviewOpinionDetail.stage_id == ReviewStage.id),
+        ReviewStage.building_id,
+    ).group_by(
+        OpinionCombinationLabel.issue_type,
+        ReviewOpinionDetail.phase_group,
+        ReviewOpinionDetail.severity,
+    ).all()
+
+    # 라벨이 하나도 없는 의견 = 미분류. 사유는 라벨링 작업 이력에서 가져온다.
+    labeled_detail_exists = (
+        select(OpinionCombinationLabel.id)
+        .where(OpinionCombinationLabel.detail_id == ReviewOpinionDetail.id)
+        .exists()
+    )
+    unmatched_rows = _scoped_by_building_id(
+        db.query(
+            OpinionLabelRun.unmatched_reason,
+            sa_func.count(sa_func.distinct(ReviewOpinionDetail.id)).label("cnt"),
+        )
+        .join(ReviewOpinionDetail, OpinionLabelRun.detail_id == ReviewOpinionDetail.id)
+        .join(ReviewStage, ReviewOpinionDetail.stage_id == ReviewStage.id)
+        .filter(~labeled_detail_exists),
+        ReviewStage.building_id,
+    ).group_by(OpinionLabelRun.unmatched_reason).all()
+
+    # 라벨링 작업 진행 상태 — 통계가 완성본인지 판단할 수 있어야 한다.
+    label_status_rows = _scoped_by_building_id(
+        db.query(
+            OpinionLabelRun.status,
+            sa_func.count(sa_func.distinct(ReviewOpinionDetail.id)).label("cnt"),
+        )
+        .join(ReviewOpinionDetail, OpinionLabelRun.detail_id == ReviewOpinionDetail.id)
+        .join(ReviewStage, ReviewOpinionDetail.stage_id == ReviewStage.id),
+        ReviewStage.building_id,
+    ).group_by(OpinionLabelRun.status).all()
+
     _release_read_connection(db)
     detail_counts = {"preliminary": 0, "supplement": 0}
-    keyword_map: dict[str, dict[str, int | str]] = {}
+    combo_map: dict[str, dict[str, int | str | None]] = {}
+    target_map: dict[str, dict[str, int | str]] = {}
+    issue_map: dict[str, dict[str, int | str]] = {}
+    unmatched_counts = {
+        "total": 0,
+        "no_target": 0,
+        "no_issue": 0,
+        "no_target_issue": 0,
+        "no_link": 0,
+        "empty": 0,
+    }
+
+    def _new_counter(**fixed: object) -> dict:
+        row = dict(fixed)
+        row.update({"total": 0, "preliminary": 0, "supplement": 0})
+        row.update({label: 0 for label in SEVERITY_LABELS})
+        return row
+
+    def _bump(row: dict, phase_group: str, severity: str, count: int = 1) -> None:
+        row["total"] = int(row["total"]) + count
+        if phase_group in ("preliminary", "supplement"):
+            row[phase_group] = int(row[phase_group]) + count
+        if severity in SEVERITY_LABELS:
+            row[severity] = int(row[severity]) + count
+
+    for primary, secondary, issue_type, phase_group, severity, cnt in combo_count_rows:
+        label = (
+            f"{primary}↔{secondary} {issue_type}"
+            if secondary and secondary != NO_SECONDARY_TARGET
+            else f"{primary} {issue_type}"
+        )
+        _bump(
+            combo_map.setdefault(label, _new_counter(
+                combo=label,
+                primary_target=primary,
+                secondary_target=secondary or None,
+                issue=issue_type,
+            )),
+            phase_group,
+            severity,
+            cnt,
+        )
+
+    for target_name, phase_group, severity, cnt in target_count_rows:
+        _bump(
+            target_map.setdefault(target_name, _new_counter(
+                target=target_name,
+                group=TARGET_GROUPS.get(target_name, "기타"),
+            )),
+            phase_group,
+            severity,
+            cnt,
+        )
+
+    for issue_name, phase_group, severity, cnt in issue_count_rows:
+        _bump(
+            issue_map.setdefault(issue_name, _new_counter(issue=issue_name)),
+            phase_group,
+            severity,
+            cnt,
+        )
+
+    for reason, cnt in unmatched_rows:
+        unmatched_counts["total"] += cnt
+        if reason in unmatched_counts:
+            unmatched_counts[reason] += cnt
+
+    labeling_counts = {"pending": 0, "running": 0, "completed": 0, "failed": 0}
+    for status, cnt in label_status_rows:
+        if status in labeling_counts:
+            labeling_counts[status] = cnt
+
     quality_term_map: dict[str, dict[str, int | str]] = {}
     quality_category_map: dict[str, dict[str, int | str]] = {}
     quality_tag_map: dict[str, dict[str, int | str]] = {}
@@ -1464,23 +1637,6 @@ def get_stats(
         content = row.content or ""
         if phase_group in detail_counts:
             detail_counts[phase_group] += 1
-        for keyword in match_keywords(content):
-            item = keyword_map.setdefault(keyword, {
-                "keyword": keyword,
-                "total": 0,
-                "preliminary": 0,
-                "supplement": 0,
-                "L0": 0,
-                "L1": 0,
-                "L2": 0,
-                "L3": 0,
-                "L4": 0,
-            })
-            item["total"] = int(item["total"]) + 1
-            if phase_group in ("preliminary", "supplement"):
-                item[phase_group] = int(item[phase_group]) + 1
-            if severity in SEVERITY_LABELS:
-                item[severity] = int(item[severity]) + 1
 
         if row.quality_decision == "suitable":
             continue
@@ -1530,9 +1686,17 @@ def get_stats(
             "recommended_replacements": recommended_replacements,
             "quality_decision": row.quality_decision or "unsuitable",
         })
-    keyword_rows = sorted(
-        keyword_map.values(),
-        key=lambda row: (-int(row["total"]), str(row["keyword"])),
+    combo_rows = sorted(
+        combo_map.values(),
+        key=lambda row: (-int(row["total"]), str(row["combo"])),
+    )
+    target_rows = sorted(
+        target_map.values(),
+        key=lambda row: (-int(row["total"]), str(row["target"])),
+    )
+    issue_rows = sorted(
+        issue_map.values(),
+        key=lambda row: (-int(row["total"]), str(row["issue"])),
     )
     quality_term_rows = sorted(
         quality_term_map.values(),
@@ -1600,7 +1764,12 @@ def get_stats(
         "keyword_stats": {
             "total_details": len(opinion_detail_rows),
             "detail_counts": detail_counts,
-            "by_keyword": keyword_rows,
+            "by_combo": combo_rows,
+            "by_target": target_rows,
+            "by_issue": issue_rows,
+            "unmatched": unmatched_counts,
+            "labeling": labeling_counts,
+            "ruleset_version": RULESET_VERSION,
         },
         "opinion_quality_stats": {
             "total_details": quality_total_details,

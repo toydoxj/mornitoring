@@ -52,7 +52,9 @@ frontend/ (Next.js)  ──HTTP/JSON──→  backend/ (FastAPI)
 - `engines/` — 비즈니스 로직 엔진. `column_mapping.py`에 엑셀 열↔DB 필드 매핑 정의, `ledger_import.py`/`ledger_export.py`로 엑셀 import/export
 - `services/` — 도메인 서비스. 통계 분석 챗봇은 `stats_chat.py`(OpenAI 호출 루프),
   `stats_chat_sql.py`(LLM이 만든 SELECT의 AST 검증·읽기전용 실행),
-  `stats_chat_schema.py`(LLM에 주는 스키마 사전) 3개로 나뉜다
+  `stats_chat_schema.py`(LLM에 주는 스키마 사전) 3개로 나뉜다.
+  검토의견 조합 라벨은 `opinion_labeling.py`(규칙 라벨 저장·LLM 대기 등록)와
+  `opinion_labeler.py`(LLM 보완 라벨링) 2개로 나뉜다
 - `config.py` — Pydantic BaseSettings 기반 설정 (`.env` 파일 로드)
 
 ### 핵심 도메인 모델
@@ -62,6 +64,24 @@ frontend/ (Next.js)  ──HTTP/JSON──→  backend/ (FastAPI)
 
 ### 엑셀 열 매핑
 `engines/column_mapping.py`에 정의. 엑셀 양식 변경 시 이 파일만 수정하면 import/export 모두 반영됨.
+
+### 검토의견 조합 키워드 분석
+상세의견을 절 단위로 나눠 `대상(18종) x 문제유형(7종)` 조합 라벨로 집계한다.
+"구조계산서↔구조도면 불일치"처럼 두 대상 사이의 관계도 하나의 라벨이다.
+
+- `engines/review_keyword_analyzer.py` — 정규식 사전과 조합 규칙. 사전을 고치면
+  `RULESET_VERSION`(정규식 변경) 또는 `TAXONOMY_VERSION`(대상·유형 목록 변경)을 올린다
+- `services/opinion_labeling.py` — 규칙 라벨을 `opinion_combination_labels`에 저장하고,
+  분류되지 않은 건은 `opinion_label_runs`에 pending으로 등록. 검토서 업로드 시 자동 실행
+- `services/opinion_labeler.py` — pending 건을 OpenAI Structured Outputs로 보완 분류.
+  모델 출력은 저장 전에 허용 목록으로 다시 검증한다
+- `GET /buildings/stats`의 `keyword_stats`는 저장된 라벨을 SQL로 집계한다
+
+관련 명령:
+```bash
+python scripts/backfill_opinion_labels.py    # 규칙 라벨 백필 (--all 로 전체 재계산)
+python scripts/label_opinions.py             # LLM 보완 라벨링 (--dry-run 으로 대기 건수만)
+```
 
 ## 코딩 규칙
 
