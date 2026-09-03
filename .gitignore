@@ -34,5 +34,10 @@ shrimp_data/
 # 로컬 DB 덤프 — 운영 데이터(PII) 포함, 저장소 업로드 금지 (.doc/backup-recovery.md §8)
 backend/db_backups/
 
+# 로컬 개발 서버 로그
+backend/uvicorn.log
+frontend/nextdev.log
+*.log
+
 # Codex CLI 상의 결과 (임시)
 .codex-last.md
