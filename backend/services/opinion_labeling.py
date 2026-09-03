@@ -92,7 +92,20 @@ def sync_rule_labels(
         return result
 
     detail_ids = [detail.id for detail in details if detail.id is not None]
+    # LLM·수기 라벨이 이미 붙은 의견은 규칙이 여전히 못 풀어도 다시 LLM에 보내지 않는다.
+    # 사전을 고칠 때마다 전량 재호출되는 것을 막기 위함이다. 이 건들을 다시 분류하려면
+    # 해당 라벨을 지우면 된다(그러면 라벨이 없어져 pending 으로 다시 등록된다).
+    externally_labeled: set[int] = set()
     if detail_ids:
+        externally_labeled = {
+            row[0]
+            for row in db.execute(
+                select(OpinionCombinationLabel.detail_id).where(
+                    OpinionCombinationLabel.detail_id.in_(detail_ids),
+                    OpinionCombinationLabel.source != LABEL_SOURCE_RULE,
+                )
+            ).all()
+        }
         db.query(OpinionCombinationLabel).filter(
             OpinionCombinationLabel.detail_id.in_(detail_ids),
             OpinionCombinationLabel.source == LABEL_SOURCE_RULE,
@@ -107,6 +120,9 @@ def sync_rule_labels(
         if rows:
             new_labels.extend(rows)
             result["labeled_details"] += 1
+            continue
+
+        if detail.id in externally_labeled:
             continue
 
         reason = analyze_unmatched(detail.content or "")

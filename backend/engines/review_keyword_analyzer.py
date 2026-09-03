@@ -22,11 +22,11 @@ import re
 from dataclasses import dataclass
 
 # 규칙 사전(정규식) 버전. 정규식만 고치면 이것만 올린다 — 규칙 라벨만 재계산된다.
-RULESET_VERSION = "2026.09.03"
+RULESET_VERSION = "2026.09.03b"
 
 # 분류 체계(대상·유형 목록) 버전. 항목을 추가·삭제·개명하면 올린다.
 # 규칙 라벨과 LLM 라벨 양쪽 모두 무효화 대상이므로 RULESET_VERSION과 분리한다.
-TAXONOMY_VERSION = "2026.09.03"
+TAXONOMY_VERSION = "2026.09.03b"
 
 # 절이 이 길이를 넘으면 한 문장 안이라도 대상과 유형이 서로 멀 수 있으므로
 # 문자 거리로 한 번 더 거른다.
@@ -36,11 +36,16 @@ PROXIMITY_LEN = 45
 
 @dataclass(frozen=True)
 class TargetRule:
-    """지적 대상(무엇에 대한 지적인가)."""
+    """지적 대상(무엇에 대한 지적인가).
+
+    parent 가 있으면 그 대상의 하위 항목이다. 하위가 잡히면 상위는 빼서
+    "풍하중 누락"과 "하중산정 누락"이 같이 세지지 않게 한다.
+    """
 
     name: str
     group: str
     pattern: str
+    parent: str | None = None
 
 
 @dataclass(frozen=True)
@@ -67,7 +72,7 @@ class KeywordCombo:
         return f"{self.primary_target} {self.issue}"
 
 
-# 대상 사전 18종.
+# 대상 사전 23종(하중 5종 세분 포함).
 # 한글은 정규식 \b가 동작하지 않으므로 단독 토큰은 (?<![가-힣])X(?![가-힣])로 잡는다.
 # 예: "보"를 \b로 잡으면 "확보", "보완"에 오탐이 난다.
 TARGET_RULES: tuple[TargetRule, ...] = (
@@ -99,10 +104,21 @@ TARGET_RULES: tuple[TargetRule, ...] = (
         r"주요\s*상세|상세도|접합\s*상세|정착\s*상세|이음\s*상세|배근\s*상세|철근\s*상세|단면\s*상세",
     ),
     # --- 설계 요소 ---
+    # 하중은 종류를 알 수 있으면 종류별로 센다. 종류를 특정할 수 없는 지적만
+    # 상위 항목인 "하중산정"에 남는다.
+    TargetRule("고정하중", "하중", r"고정\s*하중|사\s*하중|자중|마감\s*하중", parent="하중산정"),
+    TargetRule("활하중", "하중", r"활\s*하중|적재\s*하중|사용\s*하중", parent="하중산정"),
+    TargetRule("풍하중", "하중", r"풍\s*하중|풍압|기본\s*풍속|풍\s*변위|내풍", parent="하중산정"),
+    TargetRule("설하중", "하중", r"설\s*하중|적설\s*하중|눈\s*하중|적설", parent="하중산정"),
+    TargetRule(
+        "지진하중", "하중",
+        r"지진\s*하중|지진력(?!\s*저항)|밑면\s*전단력|응답\s*스펙트럼|등가정적|특별\s*지진\s*하중|층간\s*변위",
+        parent="하중산정",
+    ),
     TargetRule("하중산정", "설계", r"하중"),
     TargetRule(
         "내진설계", "설계",
-        r"내진|지진력\s*저항\s*시스템|횡력\s*(저항)?\s*시스템|비정형|밑면\s*전단력|고유\s*주기|응답\s*스펙트럼",
+        r"내진|지진력\s*저항\s*시스템|횡력\s*(저항)?\s*시스템|비정형|고유\s*주기|내진\s*등급|내진\s*상세",
     ),
     TargetRule(
         "시공상세·시공계획", "설계",
@@ -160,6 +176,10 @@ ISSUE_RULES: tuple[IssueRule, ...] = (
 )
 
 TARGET_NAMES: tuple[str, ...] = tuple(rule.name for rule in TARGET_RULES)
+# 하위 대상 -> 상위 대상. 하위가 잡히면 상위를 뺀다.
+TARGET_PARENTS: dict[str, str] = {
+    rule.name: rule.parent for rule in TARGET_RULES if rule.parent
+}
 ISSUE_NAMES: tuple[str, ...] = tuple(rule.name for rule in ISSUE_RULES)
 TARGET_GROUPS: dict[str, str] = {rule.name: rule.group for rule in TARGET_RULES}
 
@@ -185,12 +205,22 @@ def split_clauses(content: str) -> list[str]:
 
 
 def _match_targets(clause: str) -> list[tuple[str, int]]:
-    """절에서 대상과 그 등장 위치를 찾는다."""
+    """절에서 대상과 그 등장 위치를 찾는다.
+
+    하위 대상(예: 풍하중)이 잡히면 그 상위(하중산정)는 뺀다. 둘 다 두면
+    같은 지적이 "풍하중 누락"과 "하중산정 누락" 두 건으로 세진다.
+    """
     found: list[tuple[str, int]] = []
     for rule, regex in _TARGET_RES:
         match = regex.search(clause)
         if match:
             found.append((rule.name, match.start()))
+
+    matched_parents = {
+        TARGET_PARENTS[name] for name, _ in found if name in TARGET_PARENTS
+    }
+    if matched_parents:
+        found = [(name, pos) for name, pos in found if name not in matched_parents]
     return found
 
 

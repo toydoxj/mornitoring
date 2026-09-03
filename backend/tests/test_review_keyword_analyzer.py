@@ -73,8 +73,28 @@ def test_절_분할은_번호목록을_자르지_않는다():
     assert any("기둥" in clause for clause in clauses)
 
 
+def test_하중은_종류별로_세분되고_상위는_빠진다():
+    # 종류를 알 수 있으면 종류별로 센다.
+    assert labels("지상1층 사하중 및 활하중이 누락되어 있음") == {
+        "고정하중 누락",
+        "활하중 누락",
+    }
+    assert labels("경사지붕에 대한 적설하중이 누락되었습니다") == {"설하중 누락"}
+    assert labels("풍하중 산정 근거 미제시") == {"풍하중 근거미제시"}
+    assert labels("지진하중 검토 필요") == {"지진하중 재검토요망"}
+    # 상위 항목은 함께 세지 않는다.
+    assert "하중산정 누락" not in labels("적설하중 누락")
+    # 종류를 특정할 수 없으면 상위 항목에 남는다.
+    assert labels("하중 산정 근거 확인 필요") == {"하중산정 재검토요망"}
+
+
+def test_내진설계와_지진하중을_구분한다():
+    assert labels("내진등급 최신화 수정 요망") == {"내진설계 추가·보완제출"}
+    assert "내진설계 재검토요망" not in labels("밑면전단력 재산정 필요")
+
+
 def test_사전_구성():
-    assert len(TARGET_NAMES) == 18
+    assert len(TARGET_NAMES) == 23
     assert len(ISSUE_NAMES) == 7
     assert len(set(TARGET_NAMES)) == len(TARGET_NAMES)
     assert len(set(ISSUE_NAMES)) == len(ISSUE_NAMES)
