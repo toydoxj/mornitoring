@@ -201,15 +201,25 @@ class BatchStageUpdateRequest(BaseModel):
 
 
 class FolderDistributionRequest(BaseModel):
-    source_dir: str
+    # 접수 폴더는 여러 개를 지정할 수 있다. 구버전 클라이언트 호환을 위해
+    # 단수 source_dir 도 계속 받는다 (둘 다 오면 합쳐서 처리).
+    source_dir: str | None = None
+    source_dirs: list[str] | None = None
     target_dir: str
     dry_run: bool = True
     operation: Literal["move", "copy"] = "move"
     overwrite: bool = False
 
+    def resolved_source_dirs(self) -> list[str]:
+        merged = list(self.source_dirs or [])
+        if self.source_dir and self.source_dir not in merged:
+            merged.append(self.source_dir)
+        return merged
+
 
 class FolderDistributionDetail(BaseModel):
     status: str
+    source_dir_name: str | None = None
     item_name: str
     mgmt_no: str | None
     reviewer_name: str | None
@@ -224,6 +234,7 @@ class FolderDistributionResponse(BaseModel):
     dry_run: bool
     operation: str
     overwrite: bool
+    source_dir_names: list[str] = []
     assignment_count: int
     unassigned_building_count: int
     classified_mgmt_nos: list[str]
@@ -506,9 +517,13 @@ def distribute_folders(
         for mgmt_no, item in assignment_items.items()
     }
 
+    source_dirs = body.resolved_source_dirs()
+    if not source_dirs:
+        raise HTTPException(status_code=400, detail="접수 폴더를 1개 이상 지정해야 합니다")
+
     try:
         result = distribute_by_folder_name(
-            body.source_dir,
+            source_dirs,
             body.target_dir,
             assignment,
             dry_run=body.dry_run,

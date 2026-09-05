@@ -1,7 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useState } from "react"
-import { ClipboardList, Copy, FolderInput, FolderOpen, FolderOutput, MoveRight, Play, Search } from "lucide-react"
+import { ClipboardList, Copy, FolderInput, FolderOpen, FolderOutput, MoveRight, Play, Search, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -170,6 +170,8 @@ interface LocalDirectoryHandle {
   ) => Promise<LocalFileHandle>
   removeEntry: (name: string, options?: { recursive?: boolean }) => Promise<void>
   isSameEntry?: (other: LocalHandle) => Promise<boolean>
+  /** 하위 항목이면 상대 경로 조각, 아니면 null — 접수 폴더 간 포함 관계 판정에 쓴다 */
+  resolve?: (possibleDescendant: LocalHandle) => Promise<string[] | null>
   /** 브라우저에 따라 디렉터리 이동은 미지원 — 실패하면 복사로 폴백한다 */
   move?: (destination: LocalDirectoryHandle, name?: string) => Promise<void>
 }
@@ -190,6 +192,8 @@ type WindowWithDirectoryPicker = Window & {
 
 interface FolderDistributionDetail {
   status: string
+  /** 어느 접수 폴더에서 온 항목인지 — 접수 폴더를 여러 개 고를 수 있어 구분이 필요하다 */
+  source_dir_name: string
   item_name: string
   mgmt_no: string | null
   reviewer_name: string | null
@@ -204,6 +208,7 @@ interface FolderDistributionResult {
   dry_run: boolean
   operation: string
   overwrite: boolean
+  source_dir_names: string[]
   assignment_count: number
   unassigned_building_count: number
   classified_mgmt_nos: string[]
@@ -245,12 +250,12 @@ function buildFolderLogLines(details: FolderDistributionDetail[]): {
     .filter((item) => item.status !== "skipped")
     .map((item) => {
       const action = getFolderStatusLabel(item.status)
-      return `[성공] ${action} | ${item.mgmt_no ?? "-"} | ${item.item_name} -> ${item.destination ?? "-"}`
+      return `[성공] ${action} | ${item.mgmt_no ?? "-"} | ${item.source_dir_name}/${item.item_name} -> ${item.destination ?? "-"}`
     })
   const failed = details
     .filter((item) => item.status === "skipped")
     .map((item) => (
-      `[실패] ${item.mgmt_no ?? "-"} | ${item.item_name} | ${item.reason ?? "사유 없음"}`
+      `[실패] ${item.mgmt_no ?? "-"} | ${item.source_dir_name}/${item.item_name} | ${item.reason ?? "사유 없음"}`
     ))
   return { success, failed, all: [...success, ...failed] }
 }
@@ -270,6 +275,20 @@ async function isSameEntry(
 ): Promise<boolean> {
   if (!left.isSameEntry) return false
   return left.isSameEntry(right)
+}
+
+/** `parent` 안에 `child` 가 들어 있는지 (자기 자신은 제외) 판정한다.
+ *
+ * 접수 폴더끼리 겹치면 앞선 폴더에서 옮긴 항목을 뒤에서 다시 열게 되어
+ * 처리 도중 깨지므로, 선택 시점에 미리 막는다.
+ */
+async function isDescendantOf(
+  parent: LocalDirectoryHandle,
+  child: LocalDirectoryHandle
+): Promise<boolean> {
+  if (!parent.resolve) return false
+  const path = await parent.resolve(child)
+  return path !== null && path.length > 0
 }
 
 async function getDirectoryIfExists(
@@ -361,7 +380,7 @@ async function moveEntry(
 }
 
 async function distributeLocalFolders({
-  sourceHandle,
+  sourceHandles,
   targetHandle,
   assignment,
   dryRun,
@@ -370,7 +389,7 @@ async function distributeLocalFolders({
   unassignedBuildingCount,
   onProgress,
 }: {
-  sourceHandle: LocalDirectoryHandle
+  sourceHandles: LocalDirectoryHandle[]
   targetHandle: LocalDirectoryHandle
   assignment: Record<string, FolderAssignmentItem>
   dryRun: boolean
@@ -379,30 +398,53 @@ async function distributeLocalFolders({
   unassignedBuildingCount: number
   onProgress?: (done: number, total: number) => void
 }): Promise<FolderDistributionResult> {
-  if (await isSameEntry(sourceHandle, targetHandle)) {
-    throw new Error("접수 폴더와 배포 폴더는 같을 수 없습니다")
+  if (sourceHandles.length === 0) {
+    throw new Error("접수 폴더를 1개 이상 선택해주세요")
+  }
+  for (const sourceHandle of sourceHandles) {
+    if (await isSameEntry(sourceHandle, targetHandle)) {
+      throw new Error("접수 폴더와 배포 폴더는 같을 수 없습니다")
+    }
+    for (const other of sourceHandles) {
+      if (other === sourceHandle) continue
+      if (await isDescendantOf(sourceHandle, other)) {
+        throw new Error(
+          `접수 폴더끼리 겹칩니다 (상위: ${sourceHandle.name}, 하위: ${other.name})`
+        )
+      }
+    }
   }
 
   const details: FolderDistributionDetail[] = []
   const reviewerCounts: Record<string, number> = {}
   const classifiedMgmtNos: string[] = []
-  const entries: LocalHandle[] = []
 
-  for await (const entry of sourceHandle.values()) {
-    entries.push(entry)
+  // 접수 폴더 순서를 유지하되, 폴더 안에서는 이름순으로 처리한다
+  const queue: { entry: LocalHandle; source: LocalDirectoryHandle }[] = []
+  for (const sourceHandle of sourceHandles) {
+    const entries: LocalHandle[] = []
+    for await (const entry of sourceHandle.values()) {
+      entries.push(entry)
+    }
+    entries.sort((a, b) => a.name.localeCompare(b.name))
+    for (const entry of entries) {
+      queue.push({ entry, source: sourceHandle })
+    }
   }
 
   let classified = 0
   let skipped = 0
   let nativeMoved = 0
+  // 이번 실행에서 이미 배정된 목적지 — 접수 폴더가 여러 개면 같은 이름이
+  // 겹칠 수 있어 미리보기에서도 뒤 항목을 충돌로 잡아야 한다
+  const claimedDestinations = new Set<string>()
   // 검토위원 폴더 핸들 캐시 — 항목마다 다시 여는 왕복을 없앤다
   const reviewerDirCache = new Map<string, LocalDirectoryHandle | null>()
 
-  const sorted = entries.sort((a, b) => a.name.localeCompare(b.name))
-  const total = sorted.length
+  const total = queue.length
   let processed = 0
 
-  for (const entry of sorted) {
+  for (const { entry, source } of queue) {
     processed += 1
     onProgress?.(processed, total)
     try {
@@ -410,6 +452,7 @@ async function distributeLocalFolders({
         skipped += 1
         details.push({
           status: "skipped",
+          source_dir_name: source.name,
           item_name: entry.name,
           mgmt_no: null,
           reviewer_name: null,
@@ -425,6 +468,7 @@ async function distributeLocalFolders({
         skipped += 1
         details.push({
           status: "skipped",
+          source_dir_name: source.name,
           item_name: entry.name,
           mgmt_no: null,
           reviewer_name: null,
@@ -440,6 +484,7 @@ async function distributeLocalFolders({
         skipped += 1
         details.push({
           status: "skipped",
+          source_dir_name: source.name,
           item_name: entry.name,
           mgmt_no: mgmtNo,
           reviewer_name: null,
@@ -459,12 +504,18 @@ async function distributeLocalFolders({
           : await targetHandle.getDirectoryHandle(reviewerDirName, { create: true })
         reviewerDirCache.set(reviewerDirName, reviewerDir)
       }
-      const exists = reviewerDir ? await entryExists(reviewerDir, entry.name) : false
+      const destinationKey = `${reviewerDirName}/${entry.name}`
+      // 실제 파일 유무에 더해 이번 실행에서 이미 차지한 자리도 충돌로 본다.
+      // (미리보기는 파일을 만들지 않으므로 이 기록이 없으면 실제보다 낙관적으로 나온다)
+      const exists =
+        claimedDestinations.has(destinationKey) ||
+        (reviewerDir ? await entryExists(reviewerDir, entry.name) : false)
 
       if (exists && !overwrite) {
         skipped += 1
         details.push({
           status: "skipped",
+          source_dir_name: source.name,
           item_name: entry.name,
           mgmt_no: mgmtNo,
           reviewer_name: reviewerName,
@@ -481,7 +532,7 @@ async function distributeLocalFolders({
         }
         if (operation === "move") {
           // 같은 드라이브면 rename 한 번으로 끝난다 (미지원 시 복사 폴백)
-          if (await moveEntry(entry, sourceHandle, reviewerDir)) {
+          if (await moveEntry(entry, source, reviewerDir)) {
             nativeMoved += 1
           }
         } else {
@@ -489,6 +540,7 @@ async function distributeLocalFolders({
         }
       }
 
+      claimedDestinations.add(destinationKey)
       classified += 1
       reviewerCounts[reviewerDirName] = (reviewerCounts[reviewerDirName] ?? 0) + 1
       if (!classifiedMgmtNos.includes(mgmtNo)) {
@@ -496,6 +548,7 @@ async function distributeLocalFolders({
       }
       details.push({
         status: exists ? "overwritten" : operation,
+        source_dir_name: source.name,
         item_name: entry.name,
         mgmt_no: mgmtNo,
         reviewer_name: reviewerName,
@@ -507,6 +560,7 @@ async function distributeLocalFolders({
       skipped += 1
       details.push({
         status: "skipped",
+        source_dir_name: source.name,
         item_name: entry.name,
         mgmt_no: extractMgmtNo(entry.name),
         reviewer_name: null,
@@ -523,6 +577,7 @@ async function distributeLocalFolders({
     dry_run: dryRun,
     operation,
     overwrite,
+    source_dir_names: sourceHandles.map((handle) => handle.name),
     assignment_count: Object.keys(assignment).length,
     unassigned_building_count: unassignedBuildingCount,
     classified_mgmt_nos: classifiedMgmtNos,
@@ -549,9 +604,9 @@ function getFolderStatusVariant(status: string): "default" | "secondary" | "outl
 }
 
 export default function DistributionPage() {
-  const [sourceDir, setSourceDir] = useState("")
   const [targetDir, setTargetDir] = useState("")
-  const [sourceHandle, setSourceHandle] = useState<LocalDirectoryHandle | null>(null)
+  // 접수 폴더는 여러 개를 누적 선택할 수 있다 (브라우저 폴더 선택창은 한 번에 1개만 지원)
+  const [sourceHandles, setSourceHandles] = useState<LocalDirectoryHandle[]>([])
   const [targetHandle, setTargetHandle] = useState<LocalDirectoryHandle | null>(null)
   const [folderOperation, setFolderOperation] = useState<FolderOperation>("move")
   const [folderOverwrite, setFolderOverwrite] = useState(false)
@@ -612,6 +667,11 @@ export default function DistributionPage() {
     }
   }
 
+  const removeSourceFolder = (index: number) => {
+    setSourceHandles((prev) => prev.filter((_, i) => i !== index))
+    setFolderError(null)
+  }
+
   const pickFolder = async (kind: "source" | "target") => {
     const picker = (window as WindowWithDirectoryPicker).showDirectoryPicker
     if (!picker) {
@@ -625,8 +685,23 @@ export default function DistributionPage() {
         mode: "readwrite",
       })
       if (kind === "source") {
-        setSourceHandle(handle)
-        setSourceDir(handle.name)
+        // 같은 폴더를 두 번 고르면 항목이 중복 처리되므로 걸러낸다
+        for (const existing of sourceHandles) {
+          if (await isSameEntry(existing, handle)) {
+            setFolderError(`이미 추가된 접수 폴더입니다: ${handle.name}`)
+            return
+          }
+          if (
+            await isDescendantOf(existing, handle) ||
+            await isDescendantOf(handle, existing)
+          ) {
+            setFolderError(
+              `이미 추가된 "${existing.name}" 와(과) 겹치는 폴더입니다: ${handle.name}`
+            )
+            return
+          }
+        }
+        setSourceHandles((prev) => [...prev, handle])
       } else {
         setTargetHandle(handle)
         setTargetDir(handle.name)
@@ -639,7 +714,7 @@ export default function DistributionPage() {
   }
 
   const runFolderDistribution = async (dryRun: boolean) => {
-    if (!sourceHandle) {
+    if (sourceHandles.length === 0) {
       alert("접수 폴더를 선택해주세요")
       return
     }
@@ -665,7 +740,7 @@ export default function DistributionPage() {
       }
 
       const distributionResult = await distributeLocalFolders({
-        sourceHandle,
+        sourceHandles,
         targetHandle,
         assignment: data.assignment,
         dryRun,
@@ -910,19 +985,51 @@ export default function DistributionPage() {
         <CardContent className="space-y-4">
           <div className="grid gap-4 lg:grid-cols-2">
             <div className="space-y-2">
-              <Label>접수 폴더</Label>
+              <div className="flex items-center justify-between">
+                <Label>접수 폴더</Label>
+                {sourceHandles.length > 0 && (
+                  <span className="text-xs text-muted-foreground">
+                    {sourceHandles.length}개 선택됨
+                  </span>
+                )}
+              </div>
               <div className="flex items-center gap-2">
                 <FolderInput className="h-4 w-4 text-muted-foreground" />
                 <Input
-                  value={sourceDir}
+                  value={
+                    sourceHandles.length === 0
+                      ? ""
+                      : sourceHandles.map((handle) => handle.name).join(", ")
+                  }
                   readOnly
-                  placeholder="폴더를 선택해주세요"
+                  placeholder="폴더를 선택해주세요 (여러 개 추가 가능)"
                 />
                 <Button variant="outline" onClick={() => pickFolder("source")}>
                   <FolderOpen />
-                  선택
+                  추가
                 </Button>
               </div>
+              {sourceHandles.length > 0 && (
+                <div className="flex flex-wrap gap-1.5">
+                  {sourceHandles.map((handle, index) => (
+                    <Badge
+                      key={`${handle.name}-${index}`}
+                      variant="secondary"
+                      className="gap-1 pr-1"
+                    >
+                      {handle.name}
+                      <button
+                        type="button"
+                        aria-label={`${handle.name} 제외`}
+                        onClick={() => removeSourceFolder(index)}
+                        className="rounded-sm p-0.5 hover:bg-muted-foreground/20"
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </Badge>
+                  ))}
+                </div>
+              )}
             </div>
             <div className="space-y-2">
               <Label>배포 폴더</Label>
@@ -1139,6 +1246,9 @@ export default function DistributionPage() {
                   <TableHeader>
                     <TableRow>
                       <TableHead className="w-[90px]">상태</TableHead>
+                      {folderResult.source_dir_names.length > 1 && (
+                        <TableHead className="w-[140px]">접수 폴더</TableHead>
+                      )}
                       <TableHead>폴더/파일명</TableHead>
                       <TableHead className="w-[110px]">관리번호</TableHead>
                       <TableHead className="w-[120px]">검토위원</TableHead>
@@ -1147,12 +1257,17 @@ export default function DistributionPage() {
                   </TableHeader>
                   <TableBody>
                     {folderResult.details.map((item, i) => (
-                      <TableRow key={`${item.item_name}-${i}`}>
+                      <TableRow key={`${item.source_dir_name}-${item.item_name}-${i}`}>
                         <TableCell>
                           <Badge variant={getFolderStatusVariant(item.status)}>
                             {getFolderStatusLabel(item.status)}
                           </Badge>
                         </TableCell>
+                        {folderResult.source_dir_names.length > 1 && (
+                          <TableCell className="text-xs text-muted-foreground">
+                            {item.source_dir_name}
+                          </TableCell>
+                        )}
                         <TableCell className="font-medium">{item.item_name}</TableCell>
                         <TableCell className="font-mono text-xs">
                           {item.mgmt_no ?? "-"}
