@@ -955,7 +955,22 @@ def get_stats(
     )
     preliminary_phase_filter = ReviewStage.phase == PhaseType.PRELIMINARY
     supplement_phase_filter = ReviewStage.phase.in_(supplement_phases)
-    submitted_filter = ReviewStage.report_submitted_at.isnot(None)
+    # 검토서를 냈다고 볼 수 있는 조건.
+    #
+    # report_submitted_at 은 웹에서 검토위원이 검토서를 업로드할 때만 기록된다.
+    # 엑셀 관리대장 import(ledger_import_technical)로 들어온 검토 이력은 양식에
+    # 제출일 열이 없어 이 값이 비는데, 판정(result)과 상세의견은 함께 들어온다.
+    # 제출일시만 보면 그 이력이 통째로 빠지므로 판정·상세의견도 함께 인정한다.
+    #
+    # 반대로 검토의견(review_opinion)과 상세의견(ReviewOpinionDetail)은 근거로
+    # 쓰지 않는다. "기초자료 미제출로 1차(예비)검토 미실시" 처럼 검토를 하지
+    # 않았다는 메모가 대부분인데, importer 가 분류 없는 본문도 [기타의견]
+    # 상세의견 1건으로 변환하므로(ledger_import_technical._parse_ledger_opinion_entries)
+    # 상세의견 유무로는 검토 여부를 가릴 수 없다.
+    submitted_filter = or_(
+        ReviewStage.report_submitted_at.isnot(None),
+        ReviewStage.result.isnot(None),
+    )
     reviewer_stage_stats_raw = (
         _scoped_by_building_id(
             db.query(

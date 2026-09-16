@@ -201,3 +201,170 @@ def test_reviewed_is_split_per_reviewer(
     assert rows["위원B"]["reviewed"] == 1
     # 합계행은 프론트에서 단순 합산한다 — 건물 3개 중 검토서가 있는 건 3개
     assert sum(row["reviewed"] for row in rows.values()) == 3
+
+
+# ===== 엑셀 import 경로: 제출일시 없이 판정·상세의견만 들어온 검토 이력 =====
+#
+# ledger_import_technical 로 들어온 검토 이력은 양식에 제출일 열이 없어
+# report_submitted_at 이 비어 있다. 제출일시만 보면 실제 검토한 건이 통계에서
+# 통째로 빠지므로 판정(result)도 검토 흔적으로 인정한다. 상세의견은 '미실시'
+# 메모에서도 생성되므로 근거로 쓰지 않는다.
+
+
+def _add_imported_stage(
+    db_session, building, phase, *, result=None, opinion=None, detail_count=0
+):
+    """엑셀 import 로 들어온 모양의 단계 (report_submitted_at 없음)."""
+    from models.review_opinion_detail import ReviewOpinionDetail
+    from models.review_stage import ResultType
+
+    stage = ReviewStage(
+        building_id=building.id,
+        phase=phase,
+        phase_order=PHASE_ORDER[phase],
+        report_submitted_at=None,
+        result=ResultType(result) if result else None,
+        review_opinion=opinion,
+    )
+    db_session.add(stage)
+    db_session.commit()
+    db_session.refresh(stage)
+
+    for i in range(detail_count):
+        db_session.add(
+            ReviewOpinionDetail(
+                stage_id=stage.id,
+                phase=phase.value,
+                phase_group="preliminary" if phase == PhaseType.PRELIMINARY else "supplement",
+                row_number=i + 1,
+                category="하중 적정성",
+                severity="L1",
+                content=f"상세의견 {i + 1}",
+            )
+        )
+    db_session.commit()
+    return stage
+
+
+def test_imported_stage_with_result_counts_as_reviewed(
+    client, db_session, make_user, make_reviewer, make_building
+):
+    """제출일시가 없어도 판정이 있으면 검토완료로 센다."""
+    _, headers = make_user(UserRole.CHIEF_SECRETARY)
+    rev_user, reviewer, _ = make_reviewer(group_no=1)
+    rev_user.name = "검토위원1"
+    db_session.commit()
+
+    building = make_building(mgmt_no="RVW-0020", reviewer_id=reviewer.id)
+    _add_imported_stage(
+        db_session, building, PhaseType.PRELIMINARY,
+        result="recalculate", opinion="[하중 적정성] 1. 조적하중 추가 필요",
+    )
+
+    row = _reviewer_row(client, headers, "검토위원1")
+    assert row["reviewed"] == 1
+    # 기존 예비검토서 열도 같은 기준을 쓴다
+    assert row["preliminary"]["report_submitted"] == 1
+    assert row["preliminary"]["results"]["recalculate"] == 1
+
+
+def test_detail_only_stage_is_not_counted(
+    client, db_session, make_user, make_reviewer, make_building
+):
+    """판정 없이 상세의견만 있는 건은 검토완료로 세지 않는다.
+
+    importer 가 분류 없는 본문도 [기타의견] 상세의견 1건으로 변환하므로
+    (_parse_ledger_opinion_entries), 상세의견 유무로는 '미실시' 메모와
+    실제 검토를 구분할 수 없다.
+    """
+    _, headers = make_user(UserRole.CHIEF_SECRETARY)
+    rev_user, reviewer, _ = make_reviewer(group_no=1)
+    rev_user.name = "검토위원1"
+    db_session.commit()
+
+    building = make_building(mgmt_no="RVW-0021", reviewer_id=reviewer.id)
+    _add_imported_stage(
+        db_session, building, PhaseType.PRELIMINARY,
+        opinion="기초자료 미제출로 1차(예비)검토 미실시", detail_count=1,
+    )
+
+    assert _reviewer_row(client, headers, "검토위원1")["reviewed"] == 0
+
+
+def test_not_reviewed_memo_through_real_importer_is_excluded(
+    client, db_session, make_user, make_reviewer, make_building
+):
+    """실제 importer 경로로 들어온 '미실시' 메모도 검토완료에서 제외된다.
+
+    _replace_ledger_opinion_details 는 대괄호 분류가 없는 본문을 [기타의견]
+    상세의견으로 변환한다. 그 산출물이 집계에 섞이지 않는지 확인한다.
+    """
+    from engines.ledger_import_technical import _replace_ledger_opinion_details
+    from models.review_opinion_detail import ReviewOpinionDetail
+
+    _, headers = make_user(UserRole.CHIEF_SECRETARY)
+    rev_user, reviewer, _ = make_reviewer(group_no=1)
+    rev_user.name = "검토위원1"
+    db_session.commit()
+
+    building = make_building(mgmt_no="RVW-0023", reviewer_id=reviewer.id)
+    stage = ReviewStage(
+        building_id=building.id,
+        phase=PhaseType.PRELIMINARY,
+        phase_order=PHASE_ORDER[PhaseType.PRELIMINARY],
+        review_opinion="기초자료 미제출로 1차(예비)검토 미실시",
+    )
+    db_session.add(stage)
+    db_session.commit()
+
+    _replace_ledger_opinion_details(
+        db_session,
+        stage,
+        phase=PhaseType.PRELIMINARY,
+        opinion_text="기초자료 미제출로 1차(예비)검토 미실시",
+    )
+    db_session.commit()
+
+    # importer 가 실제로 상세의견을 만들었는지 먼저 확인 (전제가 깨지면 테스트 무의미)
+    created = (
+        db_session.query(ReviewOpinionDetail)
+        .filter(ReviewOpinionDetail.stage_id == stage.id)
+        .count()
+    )
+    assert created >= 1, "importer 가 상세의견을 만들지 않으면 이 회귀 테스트는 의미가 없다"
+
+    row = _reviewer_row(client, headers, "검토위원1")
+    assert row["reviewed"] == 0
+    assert row["preliminary"]["report_submitted"] == 0
+
+
+def test_mixed_reviewer_matches_operational_pattern(
+    client, db_session, make_user, make_reviewer, make_building
+):
+    """운영 데이터 형태 재현: 업로드 2건 + import 검토 1건 + 미실시 2건 = 3건."""
+    _, headers = make_user(UserRole.CHIEF_SECRETARY)
+    rev_user, reviewer, _ = make_reviewer(group_no=1)
+    rev_user.name = "혼합위원"
+    db_session.commit()
+
+    uploaded_a = make_building(mgmt_no="RVW-0030", reviewer_id=reviewer.id)
+    uploaded_b = make_building(mgmt_no="RVW-0031", reviewer_id=reviewer.id)
+    imported = make_building(mgmt_no="RVW-0032", reviewer_id=reviewer.id)
+    skipped_a = make_building(mgmt_no="RVW-0033", reviewer_id=reviewer.id)
+    skipped_b = make_building(mgmt_no="RVW-0034", reviewer_id=reviewer.id)
+
+    _add_stage(db_session, uploaded_a, PhaseType.PRELIMINARY, submitted=True)
+    _add_stage(db_session, uploaded_b, PhaseType.PRELIMINARY, submitted=True)
+    _add_imported_stage(
+        db_session, imported, PhaseType.PRELIMINARY,
+        result="recalculate", opinion="[하중 적정성] 1. 확인 바랍니다", detail_count=16,
+    )
+    for b in (skipped_a, skipped_b):
+        _add_imported_stage(
+            db_session, b, PhaseType.PRELIMINARY,
+            opinion="기초자료 미제출로 1차(예비)검토 미실시",
+        )
+
+    row = _reviewer_row(client, headers, "혼합위원")
+    assert row["total"] == 5
+    assert row["reviewed"] == 3

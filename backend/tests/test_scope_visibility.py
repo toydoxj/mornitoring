@@ -443,10 +443,12 @@ def test_stats_reviewer_status_counts_documents_reports_and_results(
         "report_submitted": 1,
         "results": {"pass": 1, "simple_error": 0, "recalculate": 0},
     }
+    # SUPPLEMENT_2 는 제출일시 없이 result=PASS 만 있다. 엑셀 관리대장 import 로
+    # 들어온 검토 이력과 같은 모양이라, 판정이 있으면 검토한 것으로 센다.
     assert row["supplement"] == {
         "doc_received": 3,
-        "report_submitted": 2,
-        "results": {"pass": 0, "simple_error": 1, "recalculate": 1},
+        "report_submitted": 3,
+        "results": {"pass": 1, "simple_error": 1, "recalculate": 1},
     }
 
 
