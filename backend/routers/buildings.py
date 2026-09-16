@@ -960,6 +960,11 @@ def get_stats(
         _scoped_by_building_id(
             db.query(
                 reviewer_name_expr.label("name"),
+                # 검토서를 한 장이라도 낸 건물 수. 한 건물에서 예비·1차·2차를
+                # 여러 장 내도 1로 센다 (검토서 장수는 *_report_submitted 가 센다)
+                sa_func.count(sa_func.distinct(ReviewStage.building_id))
+                .filter(submitted_filter)
+                .label("reviewed"),
                 sa_func.count(ReviewStage.id).filter(
                     and_(
                         preliminary_phase_filter,
@@ -1035,6 +1040,7 @@ def get_stats(
         if not row.name:
             continue
         reviewer_stage_stats_by_name[row.name] = {
+            "reviewed": row.reviewed or 0,
             "preliminary": {
                 "doc_received": row.preliminary_doc_received or 0,
                 "report_submitted": row.preliminary_report_submitted or 0,
@@ -1090,6 +1096,7 @@ def get_stats(
 
     reviewer_stats = []
     empty_reviewer_stage_stats = {
+        "reviewed": 0,
         "preliminary": {
             "doc_received": 0,
             "report_submitted": 0,
@@ -1118,6 +1125,7 @@ def get_stats(
             "area_over_1000": row.area_over_1000 or 0,
             "high_risk": row.high_risk or 0,
             "doc_received": row.doc_received or 0,
+            "reviewed": stage_stats["reviewed"],
             "submitted": submitted_count,
             "not_submitted": not_submitted_count,
             "completed": row.completed or 0,

@@ -57,6 +57,7 @@ type OpinionDetailSortKey =
 type ReviewerSortKey =
   | "group_no"
   | "name"
+  | "reviewed"
   | "assigned"
   | "preliminary_doc_received"
   | "preliminary_report_submitted"
@@ -105,6 +106,8 @@ interface ReviewerStat {
   area_over_1000: number
   high_risk: number
   doc_received: number
+  /** 검토서를 한 장이라도 제출한 건물 수 — 한 건물에서 여러 장을 내도 1로 센다 */
+  reviewed: number
   submitted: number
   not_submitted: number
   completed: number
@@ -121,6 +124,7 @@ interface ReviewerPhaseStat {
 interface ReviewerTotals {
   reviewerCount: number
   total: number
+  reviewed: number
   assigned: number
   total_area: number
   area_over_1000: number
@@ -422,6 +426,7 @@ const REVIEWER_RESULT_SORT_KEYS: Record<"preliminary" | "supplement", Record<Res
 }
 // 첫 클릭에서 큰 값부터 보여 줄 숫자 열 (조·이름은 오름차순이 자연스럽다)
 const REVIEWER_NUMERIC_SORT_KEYS: ReviewerSortKey[] = [
+  "reviewed",
   "assigned",
   "preliminary_doc_received",
   "preliminary_report_submitted",
@@ -701,7 +706,7 @@ function ReviewerStatsTable({
 
   return (
     <div className="max-h-[70vh] overflow-auto rounded-md border">
-      <Table className="min-w-[1280px]">
+      <Table className="min-w-[1360px]">
         <TableHeader>
           <TableRow>
             <SortableTableHead
@@ -731,6 +736,15 @@ function ReviewerStatsTable({
               className="border-l text-center"
             >
               배정
+            </SortableTableHead>
+            <SortableTableHead
+              rowSpan={2}
+              sortKey="reviewed"
+              sortState={sortState}
+              onSort={handleSort}
+              className="text-center"
+            >
+              검토완료
             </SortableTableHead>
             <SortableTableHead
               rowSpan={2}
@@ -844,6 +858,7 @@ function ReviewerStatsTable({
               </TableCell>
               <TableCell className="font-medium">{row.name}</TableCell>
               <TableCell className="border-l text-center">{row.total}</TableCell>
+              <TableCell className="text-center">{row.reviewed}</TableCell>
               <TableCell className="text-center">{row.assigned}</TableCell>
               <TableCell className="border-l text-center">
                 {row.preliminary.doc_received}
@@ -912,6 +927,7 @@ function ReviewerTotalRow({ totals }: { totals: ReviewerTotals }) {
         </span>
       </TableCell>
       <TableCell className="border-l text-center">{totals.total}</TableCell>
+      <TableCell className="text-center">{totals.reviewed}</TableCell>
       <TableCell className="text-center">{totals.assigned}</TableCell>
       <TableCell className="border-l text-center">{totals.preliminary.doc_received}</TableCell>
       <TableCell className="text-center">
@@ -1018,6 +1034,8 @@ function getReviewerSortValue(row: ReviewerStat, key: ReviewerSortKey) {
       return resultRate(row.supplement.results.recalculate, row.supplement.report_submitted)
     case "total":
       return row.total
+    case "reviewed":
+      return row.reviewed
     case "assigned":
       return row.assigned
     case "total_area":
@@ -1047,6 +1065,7 @@ function buildReviewerTotals(rows: ReviewerStat[]): ReviewerTotals {
     (totals, row) => {
       totals.reviewerCount += 1
       totals.total += row.total
+      totals.reviewed += row.reviewed
       totals.assigned += row.assigned
       totals.total_area += row.total_area
       totals.area_over_1000 += row.area_over_1000
@@ -1059,6 +1078,7 @@ function buildReviewerTotals(rows: ReviewerStat[]): ReviewerTotals {
     {
       reviewerCount: 0,
       total: 0,
+      reviewed: 0,
       assigned: 0,
       total_area: 0,
       area_over_1000: 0,
