@@ -126,15 +126,38 @@ NEUTRAL_ALLOWED_TERMS: tuple[str, ...] = (
 )
 
 
+def _join_patterns(patterns) -> str:
+    return "|".join(f"(?:{pattern})" for pattern in patterns)
+
+
+# 통계 화면은 요청마다 상세의견 전체(수만 건)를 이 함수에 넣는다.
+# 규칙마다 re.search(문자열)을 부르면 요청 한 번에 수백만 번 패턴 캐시를 조회하므로,
+# 규칙별 패턴을 미리 하나의 정규식으로 묶어 두고, 전체 규칙을 합친 정규식으로
+# 걸리는 표현이 전혀 없는 본문(대부분)은 바로 건너뛴다.
+#
+# 패턴을 이어 붙이므로 규칙을 추가할 때 다음을 지킨다 (테스트로 검사함).
+# - 캡처 그룹·이름 그룹·역참조 금지 — 묶으면 그룹 번호가 어긋난다. 필요하면 (?:...)
+# - 전역 인라인 플래그 (?i) 금지 — 범위 플래그 (?i:...) 는 가능
+# - 빈 패턴 목록·빈 패턴 금지
+_COMPILED_RULES: tuple[tuple[OpinionQualityRule, re.Pattern[str]], ...] = tuple(
+    (rule, re.compile(_join_patterns(rule.patterns), re.IGNORECASE))
+    for rule in OPINION_QUALITY_RULES
+)
+_ANY_RULE_PATTERN = re.compile(
+    _join_patterns(pattern for rule in OPINION_QUALITY_RULES for pattern in rule.patterns),
+    re.IGNORECASE,
+)
+
+
 def match_opinion_quality(content: str) -> list[OpinionQualityMatch]:
     """의견 본문에서 주관적/감정적 표현 점검 후보를 찾는다."""
     text = content.strip()
-    if not text:
+    if not text or not _ANY_RULE_PATTERN.search(text):
         return []
 
     matched: dict[tuple[str, str], OpinionQualityMatch] = {}
-    for rule in OPINION_QUALITY_RULES:
-        if any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in rule.patterns):
+    for rule, pattern in _COMPILED_RULES:
+        if pattern.search(text):
             matched[(rule.tag, rule.term)] = OpinionQualityMatch(
                 category=rule.category,
                 tag=rule.tag,
