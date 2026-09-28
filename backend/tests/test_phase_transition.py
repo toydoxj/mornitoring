@@ -410,25 +410,43 @@ def test_import_ledger_unified_guards_and_logs(db_session, tmp_path):
     ws["A6"] = "2026-0002"
     ws["BV6"] = "적합"
     ws["A7"] = "2026-0003"
+    ws["A8"] = "2026-0004"
+    ws["BV8"] = "검토중"     # 판정 없이 메모만 있는 행
+    ws["A9"] = "2026-0005"
+    ws["BQ9"] = "홍길동"     # 판정 없는 과거 검토 이력 — 전이해야 이력이 보존된다
+    ws["BW9"] = "검토의견"
     path = tmp_path / "ledger.xlsx"
     wb.save(path)
 
     result = import_ledger_unified(path, db_session, actor_user_id=None)
-    assert result["imported"] == 3 and not result["errors"]
+    assert result["imported"] == 5 and not result["errors"]
 
     from models.building import Building
+    from models.review_stage import PhaseType, ReviewStage
 
     phases = {
         b.mgmt_no: b.current_phase
         for b in db_session.query(Building).filter(
-            Building.mgmt_no.in_(["2026-0001", "2026-0002", "2026-0003"])
+            Building.mgmt_no.in_(
+                ["2026-0001", "2026-0002", "2026-0003", "2026-0004", "2026-0005"]
+            )
         )
     }
     assert phases == {
         "2026-0001": "supplement_1",
         "2026-0002": "preliminary",
         "2026-0003": None,
+        "2026-0004": None,
+        "2026-0005": "preliminary",
     }
+    memo_stage = (
+        db_session.query(ReviewStage)
+        .join(Building, ReviewStage.building_id == Building.id)
+        .filter(Building.mgmt_no == "2026-0004")
+        .one()
+    )
+    assert memo_stage.phase == PhaseType.PRELIMINARY
+    assert memo_stage.stage_remarks == "관리원 입력 예비판정 결과: 검토중"
 
     logs = (
         db_session.query(PhaseTransitionLog)
@@ -440,6 +458,7 @@ def test_import_ledger_unified_guards_and_logs(db_session, tmp_path):
         ("2026-0001", None, "preliminary"),
         ("2026-0001", "preliminary", "supplement_1"),
         ("2026-0002", None, "preliminary"),
+        ("2026-0005", None, "preliminary"),
     ]
     assert all(l.trigger == "import" for l in logs)
     assert all(l.reason == "ledger_import_unified" for l in logs)

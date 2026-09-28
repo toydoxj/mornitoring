@@ -851,12 +851,21 @@ def import_ledger_unified(
                     stage_map[(building.id, PhaseType.PRELIMINARY)] = stage
                 else:
                     _apply_data(stage, prelim_data)
-                _transition_import_forward(
-                    db,
-                    building,
-                    to_phase="preliminary",
-                    actor_user_id=actor_user_id,
-                )
+                # BR/BV 에 "검토중" 같은 판정 메모만 있는 행은 검토서가 없으므로
+                # 예비 단계 행만 남기고 단계는 제출(preliminary)로 올리지 않는다.
+                # 검토자·부적합유형·검토의견이 있으면 과거 검토 이력이므로 전이한다
+                # (전이하지 않으면 다음 도서접수가 그 이력을 초기화한다).
+                if any(
+                    v is not None
+                    for k, v in prelim_data.items()
+                    if k != "stage_remarks"
+                ):
+                    _transition_import_forward(
+                        db,
+                        building,
+                        to_phase="preliminary",
+                        actor_user_id=actor_user_id,
+                    )
 
         # 1차 보완
         supp1_data = {}
