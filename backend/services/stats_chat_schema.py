@@ -99,8 +99,9 @@ quality_decision 은 일반 문자열 컬럼이며 소문자다.
 2. **완료 건수**는 buildings.final_result IS NOT NULL 로 센다.
 3. **미제출**은 doc_received_at IS NOT NULL AND report_submitted_at IS NULL 이다.
 4. **예비/보완 구분**은 phase_order = 0 이면 예비검토, 1 이상이면 보완검토다.
-5. **고위험 건물**은 is_special_structure / is_high_rise / is_multi_use 중 하나라도
-   true 인 건이다. NULL 은 false 로 취급한다.
+5. **고위험 건물**은 is_special_structure / is_high_rise / is_multi_use /
+   is_quasi_multi_use 중 하나라도 true 인 건이다. NULL 은 false 로 취급한다.
+   high_risk_type 열은 참고용이며 고위험 판정 기준으로 쓰지 않는다.
 6. **연면적 1000㎡ 초과**는 gross_area > 1000 이다.
 7. **조(組)** 기준 집계는 reviewers.group_no 를 쓴다. users.group_no 는 간사용이며
    검토위원 조 정보의 기준이 아니다.

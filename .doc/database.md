@@ -222,6 +222,21 @@ Supabase PostgreSQL 17 (Seoul) | 마지막 갱신: 2026-04-19
 | ip_address | varchar(45) | |
 | created_at | timestamp | |
 
+`change_reviewer` — 건물의 담당 검토위원(`reviewer_id`·`assigned_reviewer_name`) 변경. 값이 바뀐 경우에만 건물당 1건 기록한다.
+
+| 필드 | 값 |
+|---|---|
+| `target_type` / `target_id` | `building` / 건물 ID |
+| `before_data` | `mgmt_no`, `reviewer_id`, `assigned_reviewer_name` (변경 전) |
+| `after_data` | `mgmt_no`, `reviewer_id`, `assigned_reviewer_name`, `source` (변경 후) |
+| `after_data.source` | `assign_api`(배정 API) / `unassign_api`(배정 해제 API) / `assignment_excel`(배정 엑셀 적용) / `building_patch`(건축물 수정 화면) |
+| `after_data.batch_id` | `assignment_excel`만. 엑셀 1회 적용분을 묶는 식별자 |
+| `after_data.reviewer_name` | `building_patch`만. 2026-11 이전 로그와 같은 키 |
+
+2026-11 이전 `change_reviewer` 기록은 `building_patch` 경로만 있고 `source`·`before_data`가 없다.
+
+`ledger_opinion_only_no_transition` — 통합 관리대장 import에서 검토의견(BW·CN)만 있고 검토자·판정·부적합유형이 없어 예비·1차 보완 제출 단계로 올리지 않은 행. `after_data`에 `mgmt_no`, `row`, `sheet`, `current_phase`, `to_phase`, `review_opinion`을 담는다. 미리보기(dry_run)에서는 기록하지 않는다.
+
 ### kakao_link_sessions — 카카오 OAuth 1회성 link 세션
 
 카카오 토큰이 DB에 저장되기 전 단계. sha256 해시된 세션키 + 10분 TTL.

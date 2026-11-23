@@ -20,7 +20,7 @@ from models.building import Building
 from models.reviewer import Reviewer
 from models.user import User, UserRole
 from routers.auth import get_current_user, require_roles
-from services.audit import log_action
+from services.audit import log_action, log_reviewer_change
 from services.business_date import business_today
 from services.related_tech import related_tech_coop_filter, related_tech_target_filter
 from services.scope import (
@@ -2762,6 +2762,8 @@ def update_building(
     update_data = body.model_dump(exclude_unset=True)
     reviewer_id_provided = "reviewer_id" in update_data
     new_reviewer: Reviewer | None = None
+    before_reviewer_id = building.reviewer_id
+    before_reviewer_name = building.assigned_reviewer_name
     if reviewer_id_provided:
         new_reviewer_id = update_data.pop("reviewer_id")
         if new_reviewer_id is None:
@@ -2792,15 +2794,15 @@ def update_building(
 
     if reviewer_id_provided:
         clear_stats_cache()
-        log_action(
+        log_reviewer_change(
             db,
             current_user.id,
-            "change_reviewer",
-            "building",
-            building.id,
-            after_data={
-                "mgmt_no": building.mgmt_no,
-                "reviewer_id": building.reviewer_id,
+            building,
+            before_reviewer_id=before_reviewer_id,
+            before_reviewer_name=before_reviewer_name,
+            source="building_patch",
+            # 2026-11 이전 로그와 같은 키를 유지한다
+            extra_after={
                 "reviewer_name": new_reviewer.user.name if new_reviewer else None,
             },
         )
