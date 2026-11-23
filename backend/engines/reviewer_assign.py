@@ -5,6 +5,7 @@
 - B열: 검토위원 이름
 """
 
+import uuid
 from pathlib import Path
 
 from openpyxl import load_workbook
@@ -13,6 +14,7 @@ from sqlalchemy.orm import Session
 from models.building import Building
 from models.reviewer import Reviewer
 from models.user import User, UserRole
+from services.audit import log_reviewer_change
 
 
 def preview_assignment(file_path: str | Path, db: Session) -> dict:
@@ -81,8 +83,16 @@ def preview_assignment(file_path: str | Path, db: Session) -> dict:
     return {"changes": changes, "summary": summary}
 
 
-def apply_assignment(file_path: str | Path, db: Session) -> dict:
-    """배정 엑셀을 실제 적용 - 일괄 쿼리 최적화"""
+def apply_assignment(
+    file_path: str | Path, db: Session, actor_user_id: int | None = None
+) -> dict:
+    """배정 엑셀을 실제 적용 - 일괄 쿼리 최적화
+
+    담당이 바뀐 건물마다 change_reviewer 감사 로그를 1건 남긴다. 같은 관리번호가
+    여러 행이면 업로드 전 값 → 최종 값으로 1건만 쓴다. 1회 적용분은 batch_id 로 묶는다.
+    반환 dict 에 batch_id 와 audit_logged(기록 건수)를 포함한다.
+    """
+    batch_id = uuid.uuid4().hex
     wb = load_workbook(str(file_path), data_only=True, read_only=True)
     ws = wb.active
 
@@ -96,7 +106,7 @@ def apply_assignment(file_path: str | Path, db: Session) -> dict:
     wb.close()
 
     if not rows_data:
-        return {"applied": 0, "skipped": 0, "errors": []}
+        return {"applied": 0, "skipped": 0, "errors": [], "batch_id": batch_id, "audit_logged": 0}
 
     # DB 일괄 조회
     mgmt_nos = [r[0] for r in rows_data]
@@ -122,6 +132,9 @@ def apply_assignment(file_path: str | Path, db: Session) -> dict:
     applied = 0
     skipped = 0
     errors = []
+    # 건물별 업로드 전 담당 (최초 1회만 기록)
+    before_by_building: dict[int, tuple[int | None, str | None]] = {}
+    touched: list[Building] = []
 
     for mgmt_no, reviewer_name in rows_data:
         building = building_map.get(mgmt_no)
@@ -129,6 +142,12 @@ def apply_assignment(file_path: str | Path, db: Session) -> dict:
             errors.append(f"{mgmt_no}: 관리번호를 찾을 수 없습니다")
             skipped += 1
             continue
+
+        if building.id not in before_by_building:
+            before_by_building[building.id] = (
+                building.reviewer_id, building.assigned_reviewer_name,
+            )
+            touched.append(building)
 
         # 이름은 항상 저장
         building.assigned_reviewer_name = reviewer_name
@@ -141,9 +160,27 @@ def apply_assignment(file_path: str | Path, db: Session) -> dict:
         # 단계 미설정 건물은 배정완료 단계로 설정 (매트릭스 #1: INITIAL)
         if not building.current_phase:
             from services.phase_transition import transition_phase
-            transition_phase(db, building, to_phase="assigned", trigger="initial")
+            transition_phase(
+                db, building, to_phase="assigned", trigger="initial",
+                actor_user_id=actor_user_id,
+            )
 
         applied += 1
 
+    audit_logged = 0
+    for building in touched:
+        before_reviewer_id, before_reviewer_name = before_by_building[building.id]
+        if log_reviewer_change(
+            db, actor_user_id, building,
+            before_reviewer_id=before_reviewer_id,
+            before_reviewer_name=before_reviewer_name,
+            source="assignment_excel",
+            batch_id=batch_id,
+        ):
+            audit_logged += 1
+
     db.commit()
-    return {"applied": applied, "skipped": skipped, "errors": errors}
+    return {
+        "applied": applied, "skipped": skipped, "errors": errors,
+        "batch_id": batch_id, "audit_logged": audit_logged,
+    }

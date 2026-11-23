@@ -12,6 +12,7 @@ from models.building import Building
 from models.reviewer import Reviewer
 from models.user import User, UserRole
 from routers.auth import require_roles
+from services.audit import log_reviewer_change
 from engines.reviewer_assign import preview_assignment, apply_assignment
 
 router = APIRouter()
@@ -70,8 +71,16 @@ def assign_reviewer(
     if not reviewer.user:
         raise HTTPException(status_code=400, detail="검토위원 사용자 정보가 없습니다")
 
+    before_reviewer_id = building.reviewer_id
+    before_reviewer_name = building.assigned_reviewer_name
     building.reviewer_id = reviewer.id
     building.assigned_reviewer_name = reviewer.user.name
+    log_reviewer_change(
+        db, current_user.id, building,
+        before_reviewer_id=before_reviewer_id,
+        before_reviewer_name=before_reviewer_name,
+        source="assign_api",
+    )
     if not building.current_phase:
         # 매트릭스 #1: 신규 배정 시 INITIAL → "assigned"
         from services.phase_transition import transition_phase
@@ -98,7 +107,15 @@ def unassign_reviewer(
     if not building:
         raise HTTPException(status_code=404, detail="건축물을 찾을 수 없습니다")
 
+    before_reviewer_id = building.reviewer_id
+    before_reviewer_name = building.assigned_reviewer_name
     building.reviewer_id = None
+    log_reviewer_change(
+        db, current_user.id, building,
+        before_reviewer_id=before_reviewer_id,
+        before_reviewer_name=before_reviewer_name,
+        source="unassign_api",
+    )
     db.commit()
     return {"message": "검토위원 배정이 해제되었습니다"}
 
@@ -138,6 +155,6 @@ async def apply_assignment_excel(
     tmp_path = await stream_upload_to_tempfile(file, max_mb=10, suffix=".xlsx")
 
     try:
-        return apply_assignment(tmp_path, db)
+        return apply_assignment(tmp_path, db, actor_user_id=current_user.id)
     finally:
         tmp_path.unlink(missing_ok=True)
