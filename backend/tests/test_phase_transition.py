@@ -462,3 +462,116 @@ def test_import_ledger_unified_guards_and_logs(db_session, tmp_path):
     ]
     assert all(l.trigger == "import" for l in logs)
     assert all(l.reason == "ledger_import_unified" for l in logs)
+
+
+def _unified_ledger(tmp_path, cells: dict[str, str]):
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "통합 관리대장"
+    for ref, value in cells.items():
+        ws[ref] = value
+    path = tmp_path / "ledger.xlsx"
+    wb.save(path)
+    return path
+
+
+BW_MEMO = "기초자료 미제출로 1차(예비)검토 미실시"
+
+
+def test_import_unified_bw_memo_only_does_not_transition(db_session, tmp_path):
+    """BW 메모(review_opinion)만 있는 행은 단계 행만 남기고 preliminary 로 올리지 않는다."""
+    from engines.ledger_import_unified import import_ledger_unified
+    from models.building import Building
+    from models.review_stage import PhaseType, ReviewStage
+
+    path = _unified_ledger(tmp_path, {"A5": "2026-0101", "BW5": BW_MEMO, "BV5": "미제출"})
+    result = import_ledger_unified(path, db_session, actor_user_id=None)
+    assert result["imported"] == 1 and not result["errors"]
+    assert result["warning_count"] == 1
+    assert result["warnings"] == ["2026-0101: 검토의견만 있어 예비 검토서 제출 단계로 올리지 않았습니다"]
+
+    b = db_session.query(Building).filter_by(mgmt_no="2026-0101").one()
+    assert b.current_phase is None
+    stage = db_session.query(ReviewStage).filter_by(building_id=b.id).one()
+    assert stage.phase == PhaseType.PRELIMINARY and stage.review_opinion == BW_MEMO
+    assert db_session.query(PhaseTransitionLog).filter_by(mgmt_no="2026-0101").count() == 0
+
+
+@pytest.mark.parametrize("existing_phase", ["assigned", "doc_received"])
+def test_import_unified_bw_memo_keeps_existing_phase(
+    db_session, make_building, tmp_path, existing_phase
+):
+    """Review Focus 4: 이미 배정·접수된 건물에 메모 행을 다시 올려도 단계가 그대로다."""
+    from engines.ledger_import_unified import import_ledger_unified
+
+    b = make_building(mgmt_no="2026-0102")
+    b.current_phase = existing_phase
+    db_session.commit()
+
+    path = _unified_ledger(tmp_path, {"A5": "2026-0102", "BW5": BW_MEMO})
+    import_ledger_unified(path, db_session, actor_user_id=None)
+
+    db_session.refresh(b)
+    assert b.current_phase == existing_phase
+    assert db_session.query(PhaseTransitionLog).filter_by(mgmt_no="2026-0102").count() == 0
+
+
+def test_import_unified_supp1_opinion_only_does_not_transition(db_session, tmp_path):
+    """1차 보완 CN(검토의견)만 있는 행은 supplement_1 로 올리지 않는다 (issues #7)."""
+    from engines.ledger_import_unified import import_ledger_unified
+    from models.building import Building
+    from models.review_stage import PhaseType, ReviewStage
+
+    path = _unified_ledger(tmp_path, {
+        "A5": "2026-0103", "BQ5": "홍길동", "BV5": "재계산",
+        "CN5": "검증위원회 후 대상제외 판정 예정",
+    })
+    import_ledger_unified(path, db_session, actor_user_id=None)
+
+    b = db_session.query(Building).filter_by(mgmt_no="2026-0103").one()
+    assert b.current_phase == "preliminary"
+    supp = (db_session.query(ReviewStage)
+            .filter_by(building_id=b.id, phase=PhaseType.SUPPLEMENT_1).one())
+    assert supp.review_opinion == "검증위원회 후 대상제외 판정 예정"
+    logs = db_session.query(PhaseTransitionLog).filter_by(mgmt_no="2026-0103").all()
+    assert [(l.from_phase, l.to_phase) for l in logs] == [(None, "preliminary")]
+
+
+def test_import_unified_supp1_reviewer_without_result_still_transitions(db_session, tmp_path):
+    """검토자(CI)가 있으면 판정이 없어도 과거 이력으로 보고 전이한다 (이력 보존)."""
+    from engines.ledger_import_unified import import_ledger_unified
+    from models.building import Building
+
+    path = _unified_ledger(tmp_path, {
+        "A5": "2026-0104", "BQ5": "홍길동", "BV5": "재계산",
+        "CI5": "홍길동", "CN5": "구조계산서 누락",
+    })
+    import_ledger_unified(path, db_session, actor_user_id=None)
+    assert db_session.query(Building).filter_by(mgmt_no="2026-0104").one().current_phase == "supplement_1"
+
+
+def test_has_review_evidence_ignores_opinion_and_remarks():
+    from engines.ledger_import_unified import _has_review_evidence
+
+    assert _has_review_evidence({"review_opinion": "메모", "stage_remarks": "메모"}) is False
+    assert _has_review_evidence({"review_opinion": None, "defect_type_2": "배근"}) is True
+    assert _has_review_evidence({"reviewer_name": "   "}) is False
+    assert _has_review_evidence({}) is False
+
+
+def test_import_unified_memo_warning_skipped_when_phase_already_passed(
+    db_session, make_building, tmp_path
+):
+    """이미 예비 제출 이후 단계인 건물은 메모 행을 다시 올려도 경고하지 않는다."""
+    from engines.ledger_import_unified import import_ledger_unified
+
+    b = make_building(mgmt_no="2026-0105")
+    b.current_phase = "supplement_1_received"
+    db_session.commit()
+
+    result = import_ledger_unified(
+        _unified_ledger(tmp_path, {"A5": "2026-0105", "BW5": BW_MEMO}), db_session, actor_user_id=None
+    )
+    assert result["warning_count"] == 0

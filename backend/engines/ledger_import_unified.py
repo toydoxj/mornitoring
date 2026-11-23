@@ -98,6 +98,33 @@ SUPPLEMENT_1_MAP = {
     "CN": "review_opinion",      # 검토의견
 }
 
+# 단계를 올리는 근거로 인정하는 필드. review_opinion(BW·CN)과 stage_remarks(BR·BV 메모)는
+# 메모만 들어오는 경우가 있어 근거로 쓰지 않는다.
+TRANSITION_EVIDENCE_FIELDS: tuple[str, ...] = (
+    "reviewer_name", "result", "defect_type_1", "defect_type_2", "defect_type_3",
+)
+
+# 근거 없이 검토의견만 있어 단계를 올리지 않은 행의 경고에 쓰는 단계 이름
+OPINION_ONLY_PHASE_LABELS = {
+    "preliminary": "예비",
+    "supplement_1": "1차 보완",
+}
+
+
+def _has_review_evidence(stage_data: dict) -> bool:
+    """단계 데이터에 검토자·판정·부적합유형 중 하나라도 있으면 True.
+
+    값이 None 이거나 공백 문자열이면 근거로 보지 않는다.
+    """
+    for field in TRANSITION_EVIDENCE_FIELDS:
+        value = stage_data.get(field)
+        if value is None:
+            continue
+        if isinstance(value, str) and not value.strip():
+            continue
+        return True
+    return False
+
 # 검토위원 열
 REVIEWER_COLUMN = "DL"
 
@@ -377,6 +404,30 @@ def _transition_import_forward(
         trigger="import",
         actor_user_id=actor_user_id,
         reason="ledger_import_unified",
+    )
+
+
+def _warn_opinion_only_row(
+    result: dict,
+    building: Building | None,
+    *,
+    mgmt_no: str,
+    stage_data: dict,
+    to_phase: str,
+) -> None:
+    """검토의견만 있어 단계를 올리지 않은 행을 경고로 알린다.
+
+    건물의 현재 단계가 이미 to_phase 이상이면 알리지 않는다. dry_run 에서도 호출한다.
+    """
+    if _has_review_evidence(stage_data) or not stage_data.get("review_opinion"):
+        return
+    current_phase = building.current_phase if building is not None else None
+    if PHASE_INDEX.get(current_phase, -1) >= PHASE_INDEX[to_phase]:
+        return
+    _append_warning(
+        result,
+        f"{mgmt_no}: 검토의견만 있어 {OPINION_ONLY_PHASE_LABELS[to_phase]} "
+        "검토서 제출 단계로 올리지 않았습니다",
     )
 
 
@@ -851,21 +902,21 @@ def import_ledger_unified(
                     stage_map[(building.id, PhaseType.PRELIMINARY)] = stage
                 else:
                     _apply_data(stage, prelim_data)
-                # BR/BV 에 "검토중" 같은 판정 메모만 있는 행은 검토서가 없으므로
-                # 예비 단계 행만 남기고 단계는 제출(preliminary)로 올리지 않는다.
-                # 검토자·부적합유형·검토의견이 있으면 과거 검토 이력이므로 전이한다
+                # BR/BV 판정 메모나 BW 검토의견("기초자료 미제출로 1차(예비)검토 미실시" 등)만
+                # 있는 행은 검토서가 없으므로 예비 단계 행만 남기고 단계는 제출(preliminary)로
+                # 올리지 않는다. 검토자·판정·부적합유형이 있으면 과거 검토 이력이므로 전이한다
                 # (전이하지 않으면 다음 도서접수가 그 이력을 초기화한다).
-                if any(
-                    v is not None
-                    for k, v in prelim_data.items()
-                    if k != "stage_remarks"
-                ):
+                if _has_review_evidence(prelim_data):
                     _transition_import_forward(
                         db,
                         building,
                         to_phase="preliminary",
                         actor_user_id=actor_user_id,
                     )
+            _warn_opinion_only_row(
+                result, building, mgmt_no=mgmt_no,
+                stage_data=prelim_data, to_phase="preliminary",
+            )
 
         # 1차 보완
         supp1_data = {}
@@ -890,12 +941,18 @@ def import_ledger_unified(
                     stage_map[(building.id, PhaseType.SUPPLEMENT_1)] = stage
                 else:
                     _apply_data(stage, supp1_data)
-                _transition_import_forward(
-                    db,
-                    building,
-                    to_phase="supplement_1",
-                    actor_user_id=actor_user_id,
-                )
+                # 예비와 같은 규칙: CN 검토의견만 있는 행은 1차 보완 단계로 올리지 않는다.
+                if _has_review_evidence(supp1_data):
+                    _transition_import_forward(
+                        db,
+                        building,
+                        to_phase="supplement_1",
+                        actor_user_id=actor_user_id,
+                    )
+            _warn_opinion_only_row(
+                result, building, mgmt_no=mgmt_no,
+                stage_data=supp1_data, to_phase="supplement_1",
+            )
 
         _apply_final_result(
             db,
