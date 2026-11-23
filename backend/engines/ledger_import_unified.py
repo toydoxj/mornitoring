@@ -408,16 +408,21 @@ def _transition_import_forward(
 
 
 def _warn_opinion_only_row(
+    db: Session,
     result: dict,
     building: Building | None,
     *,
     mgmt_no: str,
+    row_idx: int,
     stage_data: dict,
     to_phase: str,
+    actor_user_id: int | None,
+    dry_run: bool = False,
 ) -> None:
     """검토의견만 있어 단계를 올리지 않은 행을 경고로 알린다.
 
-    건물의 현재 단계가 이미 to_phase 이상이면 알리지 않는다. dry_run 에서도 호출한다.
+    건물의 현재 단계가 이미 to_phase 이상이면 알리지 않는다. dry_run 에서도 경고는 낸다.
+    경고는 화면에 MAX_INLINE_WARNINGS 건까지만 나가므로, 실제 적용 시 건별 감사 로그를 남긴다.
     """
     if _has_review_evidence(stage_data) or not stage_data.get("review_opinion"):
         return
@@ -428,6 +433,23 @@ def _warn_opinion_only_row(
         result,
         f"{mgmt_no}: 검토의견만 있어 {OPINION_ONLY_PHASE_LABELS[to_phase]} "
         "검토서 제출 단계로 올리지 않았습니다",
+    )
+    if dry_run or building is None:
+        return
+    log_action(
+        db,
+        actor_user_id,
+        "ledger_opinion_only_no_transition",
+        "building",
+        building.id,
+        after_data={
+            "mgmt_no": mgmt_no,
+            "row": row_idx,
+            "sheet": SHEET_NAME,
+            "current_phase": current_phase,
+            "to_phase": to_phase,
+            "review_opinion": stage_data.get("review_opinion"),
+        },
     )
 
 
@@ -914,8 +936,9 @@ def import_ledger_unified(
                         actor_user_id=actor_user_id,
                     )
             _warn_opinion_only_row(
-                result, building, mgmt_no=mgmt_no,
+                db, result, building, mgmt_no=mgmt_no, row_idx=row_idx,
                 stage_data=prelim_data, to_phase="preliminary",
+                actor_user_id=actor_user_id, dry_run=dry_run,
             )
 
         # 1차 보완
@@ -950,8 +973,9 @@ def import_ledger_unified(
                         actor_user_id=actor_user_id,
                     )
             _warn_opinion_only_row(
-                result, building, mgmt_no=mgmt_no,
+                db, result, building, mgmt_no=mgmt_no, row_idx=row_idx,
                 stage_data=supp1_data, to_phase="supplement_1",
+                actor_user_id=actor_user_id, dry_run=dry_run,
             )
 
         _apply_final_result(

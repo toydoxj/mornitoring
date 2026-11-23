@@ -575,3 +575,32 @@ def test_import_unified_memo_warning_skipped_when_phase_already_passed(
         _unified_ledger(tmp_path, {"A5": "2026-0105", "BW5": BW_MEMO}), db_session, actor_user_id=None
     )
     assert result["warning_count"] == 0
+
+
+def test_import_unified_opinion_only_warning_writes_audit_log(db_session, tmp_path):
+    """경고가 200건을 넘어도 대상을 찾을 수 있도록 실제 적용 시 건별 감사 로그를 남긴다."""
+    from engines.ledger_import_unified import import_ledger_unified
+    from models.audit_log import AuditLog
+    from models.building import Building
+
+    path = _unified_ledger(tmp_path, {"A5": "2026-0106", "BW5": BW_MEMO})
+    import_ledger_unified(path, db_session, actor_user_id=None)
+
+    b = db_session.query(Building).filter_by(mgmt_no="2026-0106").one()
+    (log,) = db_session.query(AuditLog).filter_by(
+        action="ledger_opinion_only_no_transition", target_id=b.id
+    ).all()
+    assert log.after_data["mgmt_no"] == "2026-0106"
+    assert log.after_data["to_phase"] == "preliminary"
+    assert log.after_data["review_opinion"] == BW_MEMO
+
+
+def test_import_unified_opinion_only_warning_dry_run_writes_no_audit_log(db_session, tmp_path):
+    from engines.ledger_import_unified import import_ledger_unified
+    from models.audit_log import AuditLog
+
+    path = _unified_ledger(tmp_path, {"A5": "2026-0107", "BW5": BW_MEMO})
+    result = import_ledger_unified(path, db_session, actor_user_id=None, dry_run=True)
+
+    assert result["warning_count"] == 1
+    assert db_session.query(AuditLog).filter_by(action="ledger_opinion_only_no_transition").count() == 0
