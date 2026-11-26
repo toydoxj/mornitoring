@@ -42,7 +42,7 @@ export type KakaoScopesStatus = "ok" | "insufficient" | "unknown"
 export const KAKAO_SCOPES_LABELS: Record<KakaoScopesStatus, string> = {
   ok: "동의 OK",
   insufficient: "동의 부족",
-  unknown: "미확인",
+  unknown: "조회 결과 없음",
 }
 
 export type KakaoTokenStatus =
@@ -61,13 +61,16 @@ export const KAKAO_TOKEN_STATUS_LABELS: Record<KakaoTokenStatus, string> = {
   refresh_needed: "갱신 필요",
   refresh_unavailable: "갱신 불가",
   invalid: "갱신 실패",
-  unknown: "미확인",
+  unknown: "조회 결과 없음",
 }
+
+// API 응답에 상태 필드가 없을 때 표시한다. API가 준 unknown 과 구분한다.
+export const KAKAO_STATUS_MISSING_LABEL = "상태 정보 없음"
 
 export const KAKAO_IDENTITY_STATUS_LABELS: Record<KakaoIdentityStatus, string> = {
   matched: "일치",
   mismatch: "불일치",
-  unknown: "확인불가",
+  unknown: "비교 불가(로그인 UUID 없음)",
   unmatched: "미매칭",
   not_linked: "미완료",
 }

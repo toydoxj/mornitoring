@@ -1000,7 +1000,7 @@ export default function BuildingsPage() {
                         <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 p-3 text-amber-900">
                           <div className="flex items-center gap-2 font-medium">
                             <AlertTriangle className="h-4 w-4" />
-                            <span>확인 필요 {uploadResult.warning_count}건</span>
+                            <span>경고 {uploadResult.warning_count}건</span>
                           </div>
                           {uploadResult.warnings && uploadResult.warnings.length > 0 && (
                             <ul className="mt-2 max-h-52 list-disc space-y-1 overflow-y-auto pl-4">

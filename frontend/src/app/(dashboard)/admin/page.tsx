@@ -33,6 +33,7 @@ import type {
 } from "@/types"
 import {
   KAKAO_IDENTITY_STATUS_LABELS,
+  KAKAO_STATUS_MISSING_LABEL,
   KAKAO_SCOPES_LABELS,
   KAKAO_TOKEN_STATUS_LABELS,
   ROLE_LABELS,
@@ -735,7 +736,14 @@ export default function AdminPage() {
   }
 
   const renderKakaoIdentityBadge = (status?: KakaoIdentityStatus | null) => {
-    const s = status ?? "unknown"
+    if (!status) {
+      return (
+        <Badge variant="outline" className="bg-gray-100 text-gray-700 border-gray-300">
+          {KAKAO_STATUS_MISSING_LABEL}
+        </Badge>
+      )
+    }
+    const s = status
     const cls =
       s === "matched"
         ? "bg-green-100 text-green-700 border-green-300"
@@ -975,7 +983,7 @@ export default function AdminPage() {
               )}
               {bulkResult.errors.length > 0 && (
                 <div className="rounded-md border border-amber-200 bg-amber-50 p-2 text-xs text-amber-800">
-                  <p className="font-medium">확인 필요 {bulkResult.errors.length}건</p>
+                  <p className="font-medium">오류 {bulkResult.errors.length}건</p>
                   <ul className="mt-1 space-y-0.5">
                     {bulkResult.errors.slice(0, 5).map((item) => (
                       <li key={item}>{item}</li>
@@ -1775,7 +1783,7 @@ export default function AdminPage() {
                   <div className="flex items-center gap-2">
                     <span className="text-muted-foreground">전체 동의 상태:</span>
                     {diagnosis.all_agreed === null ? (
-                      <Badge variant="outline">확인 불가</Badge>
+                      <Badge variant="outline">조회 실패</Badge>
                     ) : diagnosis.all_agreed ? (
                       <Badge>모두 동의</Badge>
                     ) : (

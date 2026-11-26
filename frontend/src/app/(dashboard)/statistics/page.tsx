@@ -481,7 +481,7 @@ const RISK_COLUMNS: RegionalColumn<RiskStatKey>[] = [
 const DRAWING_CREATOR_COLUMNS: RegionalColumn<DrawingCreatorStatKey>[] = [
   { key: "drawing_creator_architect", label: "건축사" },
   { key: "drawing_creator_structural_engineer", label: "건축구조기술사" },
-  { key: "drawing_creator_unknown", label: "미확인" },
+  { key: "drawing_creator_unknown", label: "기타·미기재" },
 ]
 
 const TAB_TITLES: Record<ActiveTab, string> = {
