@@ -124,7 +124,7 @@ const STATUS_LABELS: Record<CompareStatus, string> = {
   matched: "일치",
   mismatch: "불일치",
   missing_db: "DB 없음",
-  excel_phase_missing: "판단 불가",
+  excel_phase_missing: "비교 불가(보완대장 제출 기록 없음)",
   not_checked: "-",
 }
 
@@ -494,7 +494,7 @@ export default function LedgerPhaseComparePage() {
                 <SummaryStat label="일치" value={result.phase_compare.matched} tone="green" />
                 <SummaryStat label="불일치" value={result.phase_compare.mismatched} tone="red" />
                 <SummaryStat label="DB 없음" value={result.phase_compare.missing_db} tone="amber" />
-                <SummaryStat label="판단 불가" value={result.phase_compare.excel_phase_missing} tone="slate" />
+                <SummaryStat label="비교 불가(보완대장 제출 기록 없음)" value={result.phase_compare.excel_phase_missing} tone="slate" />
               </div>
             </div>
           </div>

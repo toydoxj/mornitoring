@@ -669,7 +669,7 @@ export default function KakaoMatchPage() {
                   <div className="flex items-center gap-2">
                     <span className="text-muted-foreground">전체 동의 상태:</span>
                     {diagnosis.all_agreed === null ? (
-                      <Badge variant="outline">확인 불가</Badge>
+                      <Badge variant="outline">조회 실패</Badge>
                     ) : diagnosis.all_agreed ? (
                       <Badge>모두 동의</Badge>
                     ) : (
