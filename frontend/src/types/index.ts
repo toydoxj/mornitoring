@@ -64,6 +64,9 @@ export const KAKAO_TOKEN_STATUS_LABELS: Record<KakaoTokenStatus, string> = {
   unknown: "조회 결과 없음",
 }
 
+// API 응답에 상태 필드가 없을 때 표시한다. API가 준 unknown 과 구분한다.
+export const KAKAO_STATUS_MISSING_LABEL = "상태 정보 없음"
+
 export const KAKAO_IDENTITY_STATUS_LABELS: Record<KakaoIdentityStatus, string> = {
   matched: "일치",
   mismatch: "불일치",

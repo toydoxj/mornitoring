@@ -33,6 +33,7 @@ import type {
 } from "@/types"
 import {
   KAKAO_IDENTITY_STATUS_LABELS,
+  KAKAO_STATUS_MISSING_LABEL,
   KAKAO_SCOPES_LABELS,
   KAKAO_TOKEN_STATUS_LABELS,
   ROLE_LABELS,
@@ -735,7 +736,14 @@ export default function AdminPage() {
   }
 
   const renderKakaoIdentityBadge = (status?: KakaoIdentityStatus | null) => {
-    const s = status ?? "unknown"
+    if (!status) {
+      return (
+        <Badge variant="outline" className="bg-gray-100 text-gray-700 border-gray-300">
+          {KAKAO_STATUS_MISSING_LABEL}
+        </Badge>
+      )
+    }
+    const s = status
     const cls =
       s === "matched"
         ? "bg-green-100 text-green-700 border-green-300"

@@ -575,7 +575,7 @@ export const CHECKLIST_ITEMS = [
       },
       {
         "detail": "동결심도 미준수",
-        "action": "지역별 동결심도 적용 여부 점검(계산식을 참고한 동결심도 치수 기재 권장)"
+        "action": "계산식을 참고한 동결심도 치수 기재 권장"
       },
       {
         "detail": "기초 두께의 적정성",
