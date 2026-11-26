@@ -45,7 +45,7 @@ export function KakaoIdentitySyncButton({
   const handleSync = async () => {
     if (
       unknownCount === 0
-      && !confirm("조회 전 사용자가 없습니다. 그래도 전체 동기화를 실행할까요?")
+      && !confirm("로그인 UUID가 없어 비교하지 못한 사용자가 없습니다. 그래도 전체 동기화를 실행할까요?")
     ) {
       return
     }
