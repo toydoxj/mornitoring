@@ -2,6 +2,7 @@
 
 import { Suspense, useEffect, useRef, useState } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
+import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import apiClient from "@/lib/api/client"
 import { useAuthStore } from "@/stores/authStore"
@@ -23,6 +24,7 @@ function KakaoCallbackContent() {
   const [status, setStatus] = useState(
     code ? "카카오 로그인 처리 중..." : "인가 코드가 없습니다"
   )
+  const [failed, setFailed] = useState(!code)
   const fetchMe = useAuthStore((s) => s.fetchMe)
 
   useEffect(() => {
@@ -78,6 +80,7 @@ function KakaoCallbackContent() {
         const axiosErr = err as { response?: { data?: { detail?: string } } }
         const detail = axiosErr.response?.data?.detail || "알 수 없는 오류"
         setStatus(`카카오 로그인 실패: ${detail}`)
+        setFailed(true)
       }
     }
 
@@ -90,7 +93,12 @@ function KakaoCallbackContent() {
         <CardTitle className="text-lg">{status}</CardTitle>
       </CardHeader>
       <CardContent className="text-center text-muted-foreground">
-        <p>잠시만 기다려주세요...</p>
+        {failed ? (
+          // 인가 코드는 한 번만 쓸 수 있다. 새로고침 대신 로그인 화면에서 다시 시작하게 한다.
+          <Button onClick={() => router.replace("/login")}>로그인 화면으로</Button>
+        ) : (
+          <p>잠시만 기다려주세요...</p>
+        )}
       </CardContent>
     </Card>
   )

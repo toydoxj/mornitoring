@@ -4,7 +4,7 @@ import json
 from typing import Annotated
 from urllib.parse import urlsplit, urlunsplit
 
-from pydantic import field_validator
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
@@ -41,6 +41,11 @@ class Settings(BaseSettings):
     kakao_rest_api_key: str = ""
     kakao_client_secret: str = ""
     kakao_redirect_uri: str
+    # 카카오 API 호출 제한 시간(초). 연결 단계와 전체 응답 단계를 따로 둔다.
+    kakao_connect_timeout_seconds: float = Field(default=10.0, gt=0, le=60)
+    kakao_http_timeout_seconds: float = Field(default=10.0, gt=0, le=60)
+    # 연결 단계(요청이 카카오에 도달하기 전)에서 실패했을 때 다시 시도하는 횟수.
+    kakao_connect_retries: int = Field(default=1, ge=0, le=3)
 
     # CORS 허용 origin.
     # 환경변수는 콤마 구분 문자열(https://a.com,https://b.com) 또는

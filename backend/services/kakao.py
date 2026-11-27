@@ -23,6 +23,44 @@ REQUIRED_KAKAO_SCOPES = ("profile_nickname", "friends", "talk_message")
 logger = logging.getLogger(__name__)
 
 
+class KakaoConnectError(Exception):
+    """카카오 서버에 연결하지 못함(요청이 카카오에 도달하기 전의 실패)."""
+
+
+def _kakao_client() -> httpx.AsyncClient:
+    """카카오 호출용 httpx 클라이언트. 제한 시간은 설정값을 쓴다."""
+    return httpx.AsyncClient(
+        timeout=httpx.Timeout(
+            settings.kakao_http_timeout_seconds,
+            connect=settings.kakao_connect_timeout_seconds,
+        )
+    )
+
+
+async def _send_with_connect_retry(
+    client: httpx.AsyncClient, method: str, url: str, *, retries: int, **kwargs
+) -> httpx.Response:
+    """연결 단계에서 실패하면 설정한 횟수만큼 다시 시도한다.
+
+    ConnectError·ConnectTimeout 은 요청이 서버에 도달하기 전의 실패다.
+    그래서 인가 코드처럼 한 번만 쓸 수 있는 값을 담은 요청도 다시 보낼 수 있다.
+    응답을 기다리다 난 실패(ReadTimeout 등)는 다시 시도하지 않는다.
+    """
+    attempts = max(retries, 0) + 1
+    for attempt in range(1, attempts + 1):
+        try:
+            return await client.request(method, url, **kwargs)
+        except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+            logger.warning(
+                "카카오 연결 실패 url=%s attempt=%s/%s error=%s",
+                url, attempt, attempts, type(exc).__name__,
+            )
+            if attempt == attempts:
+                raise KakaoConnectError(f"카카오 서버 연결 실패: {type(exc).__name__}") from exc
+    raise AssertionError("unreachable")  # pragma: no cover
+
+
+
 def _redact_kakao_error_body(value: object) -> object:
     """카카오 오류 본문에서 인가 코드처럼 재사용 가능한 조각을 마스킹한다."""
     if isinstance(value, str):
@@ -340,19 +378,32 @@ async def exchange_code(code: str) -> dict:
     if settings.kakao_client_secret:
         data["client_secret"] = settings.kakao_client_secret
 
-    async with httpx.AsyncClient() as client:
-        response = await client.post(f"{KAKAO_AUTH_URL}/oauth/token", data=data)
+    async with _kakao_client() as client:
+        response = await _send_with_connect_retry(
+            client,
+            "POST",
+            f"{KAKAO_AUTH_URL}/oauth/token",
+            retries=settings.kakao_connect_retries,
+            data=data,
+        )
         if response.is_error:
             _log_kakao_token_error(response, "authorization_code")
         response.raise_for_status()
         return response.json()
 
 
-async def get_user_info(access_token: str) -> dict:
-    """카카오 사용자 정보 조회"""
-    async with httpx.AsyncClient() as client:
-        response = await client.get(
+async def get_user_info(access_token: str, *, retry_connect: bool = False) -> dict:
+    """카카오 사용자 정보 조회.
+
+    retry_connect=True 이면 연결 단계 실패를 설정한 횟수만큼 다시 시도한다.
+    여러 사용자를 차례로 조회하는 호출자는 대기 시간이 쌓이므로 켜지 않는다.
+    """
+    async with _kakao_client() as client:
+        response = await _send_with_connect_retry(
+            client,
+            "GET",
             f"{KAKAO_API_URL}/v2/user/me",
+            retries=settings.kakao_connect_retries if retry_connect else 0,
             headers={"Authorization": f"Bearer {access_token}"},
         )
         response.raise_for_status()
@@ -386,7 +437,7 @@ async def get_user_scopes(access_token: str) -> dict:
     Returns:
         {"id": 1234, "scopes": [{"id": "friends", "display_name": "...", "agreed": true, ...}, ...]}
     """
-    async with httpx.AsyncClient() as client:
+    async with _kakao_client() as client:
         response = await client.get(
             f"{KAKAO_API_URL}/v2/user/scopes",
             headers={"Authorization": f"Bearer {access_token}"},
@@ -405,7 +456,7 @@ async def refresh_token(refresh_token_str: str) -> dict:
     if settings.kakao_client_secret:
         data["client_secret"] = settings.kakao_client_secret
 
-    async with httpx.AsyncClient() as client:
+    async with _kakao_client() as client:
         response = await client.post(
             f"{KAKAO_AUTH_URL}/oauth/token",
             data=data,
@@ -465,7 +516,7 @@ async def get_friends(access_token: str) -> list[dict]:
     offset = 0
     limit = 100
 
-    async with httpx.AsyncClient() as client:
+    async with _kakao_client() as client:
         while True:
             response = await client.get(
                 f"{KAKAO_API_URL}/v1/api/talk/friends",
@@ -506,7 +557,7 @@ async def send_message_to_self(
         },
     }
 
-    async with httpx.AsyncClient() as client:
+    async with _kakao_client() as client:
         response = await client.post(
             f"{KAKAO_API_URL}/v2/api/talk/memo/default/send",
             headers={
@@ -553,7 +604,7 @@ async def send_message_to_friends(
         },
     }
 
-    async with httpx.AsyncClient() as client:
+    async with _kakao_client() as client:
         response = await client.post(
             f"{KAKAO_API_URL}/v1/api/talk/friends/message/default/send",
             headers={

@@ -415,6 +415,7 @@ async def kakao_callback(
         create_link_session,
         decode_oauth_state,
         extract_kakao_login_uuid,
+        KakaoConnectError,
         exchange_code,
         generate_setup_context,
         get_user_info,
@@ -438,6 +439,10 @@ async def kakao_callback(
     # 카카오 토큰 교환
     try:
         kakao_tokens = await exchange_code(code)
+    except KakaoConnectError:
+        logger.exception("카카오 토큰 교환 연결 실패")
+        log_event("error", "kakao_token_exchange_connect_failed")
+        raise HTTPException(status_code=503, detail="카카오 서버 연결이 지연되고 있습니다. 로그인 화면에서 다시 시도해 주세요")
     except Exception:
         logger.exception("카카오 토큰 교환 실패")
         log_event("error", "kakao_token_exchange_failed")
@@ -456,7 +461,11 @@ async def kakao_callback(
 
     # 카카오 사용자 정보
     try:
-        kakao_user = await get_user_info(kakao_access)
+        kakao_user = await get_user_info(kakao_access, retry_connect=True)
+    except KakaoConnectError:
+        logger.exception("카카오 사용자 정보 조회 연결 실패")
+        log_event("error", "kakao_user_info_connect_failed")
+        raise HTTPException(status_code=503, detail="카카오 서버 연결이 지연되고 있습니다. 로그인 화면에서 다시 시도해 주세요")
     except Exception:
         logger.exception("카카오 사용자 정보 조회 실패")
         log_event("error", "kakao_user_info_failed")
